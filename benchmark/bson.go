@@ -11,8 +11,8 @@ import (
 	"io/ioutil"
 	"path/filepath"
 
-	"go.mongodb.org/mongo-driver/bson"
-	"go.mongodb.org/mongo-driver/x/bsonx"
+	"github.com/pritunl/mongo-go-driver/bson"
+	"github.com/pritunl/mongo-go-driver/x/bsonx"
 )
 
 const (

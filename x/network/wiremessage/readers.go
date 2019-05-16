@@ -10,7 +10,7 @@ import (
 	"bytes"
 	"errors"
 
-	"go.mongodb.org/mongo-driver/bson"
+	"github.com/pritunl/mongo-go-driver/bson"
 )
 
 func readInt32(b []byte, pos int32) int32 {

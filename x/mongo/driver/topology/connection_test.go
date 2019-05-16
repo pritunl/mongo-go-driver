@@ -11,10 +11,10 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/require"
-	"go.mongodb.org/mongo-driver/x/network/address"
-	"go.mongodb.org/mongo-driver/x/network/connection"
-	"go.mongodb.org/mongo-driver/x/network/description"
-	"go.mongodb.org/mongo-driver/x/network/wiremessage"
+	"github.com/pritunl/mongo-go-driver/x/network/address"
+	"github.com/pritunl/mongo-go-driver/x/network/connection"
+	"github.com/pritunl/mongo-go-driver/x/network/description"
+	"github.com/pritunl/mongo-go-driver/x/network/wiremessage"
 )
 
 type netErr struct {

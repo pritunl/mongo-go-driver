@@ -4,23 +4,23 @@
 // not use this file except in compliance with the License. You may obtain
 // a copy of the License at http://www.apache.org/licenses/LICENSE-2.0
 
-package testutil // import "go.mongodb.org/mongo-driver/internal/testutil"
+package testutil // import "github.com/pritunl/mongo-go-driver/internal/testutil"
 
 import (
 	"context"
 	"strings"
 	"testing"
 
-	"go.mongodb.org/mongo-driver/bson"
-	"go.mongodb.org/mongo-driver/internal/testutil/helpers"
-	"go.mongodb.org/mongo-driver/mongo/writeconcern"
-	"go.mongodb.org/mongo-driver/x/bsonx"
-	"go.mongodb.org/mongo-driver/x/mongo/driver"
-	"go.mongodb.org/mongo-driver/x/mongo/driver/session"
-	"go.mongodb.org/mongo-driver/x/mongo/driver/topology"
-	"go.mongodb.org/mongo-driver/x/mongo/driver/uuid"
-	"go.mongodb.org/mongo-driver/x/network/command"
-	"go.mongodb.org/mongo-driver/x/network/description"
+	"github.com/pritunl/mongo-go-driver/bson"
+	"github.com/pritunl/mongo-go-driver/internal/testutil/helpers"
+	"github.com/pritunl/mongo-go-driver/mongo/writeconcern"
+	"github.com/pritunl/mongo-go-driver/x/bsonx"
+	"github.com/pritunl/mongo-go-driver/x/mongo/driver"
+	"github.com/pritunl/mongo-go-driver/x/mongo/driver/session"
+	"github.com/pritunl/mongo-go-driver/x/mongo/driver/topology"
+	"github.com/pritunl/mongo-go-driver/x/mongo/driver/uuid"
+	"github.com/pritunl/mongo-go-driver/x/network/command"
+	"github.com/pritunl/mongo-go-driver/x/network/description"
 	"github.com/stretchr/testify/require"
 )
 

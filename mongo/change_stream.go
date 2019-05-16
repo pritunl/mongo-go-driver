@@ -11,17 +11,17 @@ import (
 	"errors"
 	"time"
 
-	"go.mongodb.org/mongo-driver/bson"
-	"go.mongodb.org/mongo-driver/bson/bsoncodec"
-	"go.mongodb.org/mongo-driver/mongo/options"
-	"go.mongodb.org/mongo-driver/mongo/readconcern"
-	"go.mongodb.org/mongo-driver/mongo/readpref"
-	"go.mongodb.org/mongo-driver/x/bsonx"
-	"go.mongodb.org/mongo-driver/x/bsonx/bsoncore"
-	"go.mongodb.org/mongo-driver/x/mongo/driver"
-	"go.mongodb.org/mongo-driver/x/mongo/driver/session"
-	"go.mongodb.org/mongo-driver/x/network/command"
-	"go.mongodb.org/mongo-driver/x/network/description"
+	"github.com/pritunl/mongo-go-driver/bson"
+	"github.com/pritunl/mongo-go-driver/bson/bsoncodec"
+	"github.com/pritunl/mongo-go-driver/mongo/options"
+	"github.com/pritunl/mongo-go-driver/mongo/readconcern"
+	"github.com/pritunl/mongo-go-driver/mongo/readpref"
+	"github.com/pritunl/mongo-go-driver/x/bsonx"
+	"github.com/pritunl/mongo-go-driver/x/bsonx/bsoncore"
+	"github.com/pritunl/mongo-go-driver/x/mongo/driver"
+	"github.com/pritunl/mongo-go-driver/x/mongo/driver/session"
+	"github.com/pritunl/mongo-go-driver/x/network/command"
+	"github.com/pritunl/mongo-go-driver/x/network/description"
 )
 
 const errorInterrupted int32 = 11601

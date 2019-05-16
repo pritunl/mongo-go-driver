@@ -12,10 +12,10 @@ import (
 
 	"strings"
 
-	"go.mongodb.org/mongo-driver/x/network/command"
-	"go.mongodb.org/mongo-driver/x/network/connection"
-	"go.mongodb.org/mongo-driver/x/network/description"
-	"go.mongodb.org/mongo-driver/x/network/wiremessage"
+	"github.com/pritunl/mongo-go-driver/x/network/command"
+	"github.com/pritunl/mongo-go-driver/x/network/connection"
+	"github.com/pritunl/mongo-go-driver/x/network/description"
+	"github.com/pritunl/mongo-go-driver/x/network/wiremessage"
 )
 
 // sconn is a wrapper around a connection.Connection. This type is returned by

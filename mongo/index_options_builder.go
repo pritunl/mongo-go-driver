@@ -7,7 +7,7 @@
 package mongo
 
 import (
-	"go.mongodb.org/mongo-driver/bson"
+	"github.com/pritunl/mongo-go-driver/bson"
 )
 
 // IndexOptionsBuilder constructs a BSON document for index options

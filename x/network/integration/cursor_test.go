@@ -13,17 +13,17 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/assert"
-	"go.mongodb.org/mongo-driver/bson"
-	"go.mongodb.org/mongo-driver/internal/testutil"
-	"go.mongodb.org/mongo-driver/mongo/options"
-	"go.mongodb.org/mongo-driver/mongo/writeconcern"
-	"go.mongodb.org/mongo-driver/x/bsonx"
-	"go.mongodb.org/mongo-driver/x/bsonx/bsoncore"
-	"go.mongodb.org/mongo-driver/x/mongo/driver"
-	"go.mongodb.org/mongo-driver/x/mongo/driver/session"
-	"go.mongodb.org/mongo-driver/x/mongo/driver/uuid"
-	"go.mongodb.org/mongo-driver/x/network/command"
-	"go.mongodb.org/mongo-driver/x/network/description"
+	"github.com/pritunl/mongo-go-driver/bson"
+	"github.com/pritunl/mongo-go-driver/internal/testutil"
+	"github.com/pritunl/mongo-go-driver/mongo/options"
+	"github.com/pritunl/mongo-go-driver/mongo/writeconcern"
+	"github.com/pritunl/mongo-go-driver/x/bsonx"
+	"github.com/pritunl/mongo-go-driver/x/bsonx/bsoncore"
+	"github.com/pritunl/mongo-go-driver/x/mongo/driver"
+	"github.com/pritunl/mongo-go-driver/x/mongo/driver/session"
+	"github.com/pritunl/mongo-go-driver/x/mongo/driver/uuid"
+	"github.com/pritunl/mongo-go-driver/x/network/command"
+	"github.com/pritunl/mongo-go-driver/x/network/description"
 )
 
 func TestTailableCursorLoopsUntilDocsAvailable(t *testing.T) {

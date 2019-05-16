@@ -16,13 +16,13 @@ import (
 	"sync/atomic"
 	"time"
 
-	"go.mongodb.org/mongo-driver/event"
-	"go.mongodb.org/mongo-driver/x/mongo/driver/auth"
-	"go.mongodb.org/mongo-driver/x/network/address"
-	"go.mongodb.org/mongo-driver/x/network/command"
-	"go.mongodb.org/mongo-driver/x/network/connection"
-	"go.mongodb.org/mongo-driver/x/network/description"
-	"go.mongodb.org/mongo-driver/x/network/result"
+	"github.com/pritunl/mongo-go-driver/event"
+	"github.com/pritunl/mongo-go-driver/x/mongo/driver/auth"
+	"github.com/pritunl/mongo-go-driver/x/network/address"
+	"github.com/pritunl/mongo-go-driver/x/network/command"
+	"github.com/pritunl/mongo-go-driver/x/network/connection"
+	"github.com/pritunl/mongo-go-driver/x/network/description"
+	"github.com/pritunl/mongo-go-driver/x/network/result"
 )
 
 const minHeartbeatInterval = 500 * time.Millisecond

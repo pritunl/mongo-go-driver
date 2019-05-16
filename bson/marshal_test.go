@@ -12,8 +12,8 @@ import (
 
 	"github.com/google/go-cmp/cmp"
 	"github.com/stretchr/testify/require"
-	"go.mongodb.org/mongo-driver/bson/bsoncodec"
-	"go.mongodb.org/mongo-driver/bson/primitive"
+	"github.com/pritunl/mongo-go-driver/bson/bsoncodec"
+	"github.com/pritunl/mongo-go-driver/bson/primitive"
 )
 
 func TestMarshalAppendWithRegistry(t *testing.T) {

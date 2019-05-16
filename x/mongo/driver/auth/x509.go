@@ -9,10 +9,10 @@ package auth
 import (
 	"context"
 
-	"go.mongodb.org/mongo-driver/x/bsonx"
-	"go.mongodb.org/mongo-driver/x/network/command"
-	"go.mongodb.org/mongo-driver/x/network/description"
-	"go.mongodb.org/mongo-driver/x/network/wiremessage"
+	"github.com/pritunl/mongo-go-driver/x/bsonx"
+	"github.com/pritunl/mongo-go-driver/x/network/command"
+	"github.com/pritunl/mongo-go-driver/x/network/description"
+	"github.com/pritunl/mongo-go-driver/x/network/wiremessage"
 )
 
 // MongoDBX509 is the mechanism name for MongoDBX509.

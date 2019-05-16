@@ -12,9 +12,9 @@ import (
 	"time"
 
 	"github.com/kr/pretty"
-	"go.mongodb.org/mongo-driver/x/mongo/driver/topology"
-	"go.mongodb.org/mongo-driver/x/network/address"
-	"go.mongodb.org/mongo-driver/x/network/connection"
+	"github.com/pritunl/mongo-go-driver/x/mongo/driver/topology"
+	"github.com/pritunl/mongo-go-driver/x/network/address"
+	"github.com/pritunl/mongo-go-driver/x/network/connection"
 )
 
 func main() {

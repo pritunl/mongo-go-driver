@@ -9,10 +9,10 @@ package driver
 import (
 	"context"
 
-	"go.mongodb.org/mongo-driver/x/mongo/driver/topology"
-	"go.mongodb.org/mongo-driver/x/network/command"
-	"go.mongodb.org/mongo-driver/x/network/description"
-	"go.mongodb.org/mongo-driver/x/network/result"
+	"github.com/pritunl/mongo-go-driver/x/mongo/driver/topology"
+	"github.com/pritunl/mongo-go-driver/x/network/command"
+	"github.com/pritunl/mongo-go-driver/x/network/description"
+	"github.com/pritunl/mongo-go-driver/x/network/result"
 )
 
 // AbortTransaction handles the full cycle dispatch and execution of abortting a transaction

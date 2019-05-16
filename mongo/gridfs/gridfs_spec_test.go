@@ -20,13 +20,13 @@ import (
 
 	"time"
 
-	"go.mongodb.org/mongo-driver/bson"
-	"go.mongodb.org/mongo-driver/bson/primitive"
-	"go.mongodb.org/mongo-driver/internal/testutil"
-	"go.mongodb.org/mongo-driver/internal/testutil/helpers"
-	"go.mongodb.org/mongo-driver/mongo"
-	"go.mongodb.org/mongo-driver/mongo/options"
-	"go.mongodb.org/mongo-driver/x/bsonx"
+	"github.com/pritunl/mongo-go-driver/bson"
+	"github.com/pritunl/mongo-go-driver/bson/primitive"
+	"github.com/pritunl/mongo-go-driver/internal/testutil"
+	"github.com/pritunl/mongo-go-driver/internal/testutil/helpers"
+	"github.com/pritunl/mongo-go-driver/mongo"
+	"github.com/pritunl/mongo-go-driver/mongo/options"
+	"github.com/pritunl/mongo-go-driver/x/bsonx"
 )
 
 type testFile struct {

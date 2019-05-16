@@ -9,8 +9,8 @@ package session
 import (
 	"sync"
 
-	"go.mongodb.org/mongo-driver/x/bsonx"
-	"go.mongodb.org/mongo-driver/x/network/description"
+	"github.com/pritunl/mongo-go-driver/x/bsonx"
+	"github.com/pritunl/mongo-go-driver/x/network/description"
 )
 
 // Node represents a server session in a linked list

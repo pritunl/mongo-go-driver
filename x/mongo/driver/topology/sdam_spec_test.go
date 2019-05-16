@@ -14,11 +14,11 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/require"
-	"go.mongodb.org/mongo-driver/internal/testutil/helpers"
-	"go.mongodb.org/mongo-driver/x/network/address"
-	"go.mongodb.org/mongo-driver/x/network/connstring"
-	"go.mongodb.org/mongo-driver/x/network/description"
-	"go.mongodb.org/mongo-driver/x/network/result"
+	"github.com/pritunl/mongo-go-driver/internal/testutil/helpers"
+	"github.com/pritunl/mongo-go-driver/x/network/address"
+	"github.com/pritunl/mongo-go-driver/x/network/connstring"
+	"github.com/pritunl/mongo-go-driver/x/network/description"
+	"github.com/pritunl/mongo-go-driver/x/network/result"
 )
 
 type response struct {

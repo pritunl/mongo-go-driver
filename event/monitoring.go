@@ -4,12 +4,12 @@
 // not use this file except in compliance with the License. You may obtain
 // a copy of the License at http://www.apache.org/licenses/LICENSE-2.0
 
-package event // import "go.mongodb.org/mongo-driver/event"
+package event // import "github.com/pritunl/mongo-go-driver/event"
 
 import (
 	"context"
 
-	"go.mongodb.org/mongo-driver/bson"
+	"github.com/pritunl/mongo-go-driver/bson"
 )
 
 // CommandStartedEvent represents an event generated when a command is sent to a server.

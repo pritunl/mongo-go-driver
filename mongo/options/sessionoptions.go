@@ -7,9 +7,9 @@
 package options
 
 import (
-	"go.mongodb.org/mongo-driver/mongo/readconcern"
-	"go.mongodb.org/mongo-driver/mongo/readpref"
-	"go.mongodb.org/mongo-driver/mongo/writeconcern"
+	"github.com/pritunl/mongo-go-driver/mongo/readconcern"
+	"github.com/pritunl/mongo-go-driver/mongo/readpref"
+	"github.com/pritunl/mongo-go-driver/mongo/writeconcern"
 )
 
 // DefaultCausalConsistency is the default value for the CausalConsistency option.

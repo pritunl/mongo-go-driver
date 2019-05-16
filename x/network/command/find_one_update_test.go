@@ -3,8 +3,8 @@ package command
 import (
 	"testing"
 
-	"go.mongodb.org/mongo-driver/mongo/writeconcern"
-	"go.mongodb.org/mongo-driver/x/network/description"
+	"github.com/pritunl/mongo-go-driver/mongo/writeconcern"
+	"github.com/pritunl/mongo-go-driver/x/network/description"
 )
 
 func TestFindOneAndUpdate(t *testing.T) {

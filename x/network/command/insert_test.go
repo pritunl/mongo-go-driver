@@ -10,8 +10,8 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
-	"go.mongodb.org/mongo-driver/x/bsonx"
-	"go.mongodb.org/mongo-driver/x/network/description"
+	"github.com/pritunl/mongo-go-driver/x/bsonx"
+	"github.com/pritunl/mongo-go-driver/x/network/description"
 )
 
 func TestInsertCommandSplitting(t *testing.T) {

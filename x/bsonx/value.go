@@ -14,9 +14,9 @@ import (
 	"math"
 	"time"
 
-	"go.mongodb.org/mongo-driver/bson/bsontype"
-	"go.mongodb.org/mongo-driver/bson/primitive"
-	"go.mongodb.org/mongo-driver/x/bsonx/bsoncore"
+	"github.com/pritunl/mongo-go-driver/bson/bsontype"
+	"github.com/pritunl/mongo-go-driver/bson/primitive"
+	"github.com/pritunl/mongo-go-driver/x/bsonx/bsoncore"
 )
 
 // Val represents a BSON value.

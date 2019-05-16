@@ -6,7 +6,7 @@
 
 package options
 
-import "go.mongodb.org/mongo-driver/mongo/readpref"
+import "github.com/pritunl/mongo-go-driver/mongo/readpref"
 
 // RunCmdOptions represents all possible options for a runCommand operation.
 type RunCmdOptions struct {

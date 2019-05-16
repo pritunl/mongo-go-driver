@@ -10,8 +10,8 @@ import (
 	"errors"
 	"fmt"
 
-	"go.mongodb.org/mongo-driver/bson"
-	"go.mongodb.org/mongo-driver/x/bsonx"
+	"github.com/pritunl/mongo-go-driver/bson"
+	"github.com/pritunl/mongo-go-driver/x/bsonx"
 )
 
 // Msg represents the OP_MSG message of the MongoDB wire protocol.

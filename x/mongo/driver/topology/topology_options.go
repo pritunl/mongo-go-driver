@@ -11,10 +11,10 @@ import (
 	"strings"
 	"time"
 
-	"go.mongodb.org/mongo-driver/x/mongo/driver/auth"
-	"go.mongodb.org/mongo-driver/x/network/command"
-	"go.mongodb.org/mongo-driver/x/network/connection"
-	"go.mongodb.org/mongo-driver/x/network/connstring"
+	"github.com/pritunl/mongo-go-driver/x/mongo/driver/auth"
+	"github.com/pritunl/mongo-go-driver/x/network/command"
+	"github.com/pritunl/mongo-go-driver/x/network/connection"
+	"github.com/pritunl/mongo-go-driver/x/network/connstring"
 )
 
 // Option is a configuration option for a topology.
