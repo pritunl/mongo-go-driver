@@ -31,7 +31,7 @@ The MongoDB supported driver for Go.
 The recommended way to get started using the MongoDB Go driver is by using `dep` to install the dependency in your project.
 
 ```bash
-dep ensure -add "github.com/pritunl/mongo-go-driver/mongo@~1.0.2"
+dep ensure -add "github.com/pritunl/mongo-go-driver/mongo@~1.0.3"
 ```
 
 -------------------------
