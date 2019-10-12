@@ -12,18 +12,54 @@ import (
 	"io/ioutil"
 	"path"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
-	"github.com/pritunl/mongo-go-driver/internal/testutil/helpers"
-	"github.com/pritunl/mongo-go-driver/x/network/address"
-	"github.com/pritunl/mongo-go-driver/x/network/connstring"
-	"github.com/pritunl/mongo-go-driver/x/network/description"
-	"github.com/pritunl/mongo-go-driver/x/network/result"
+	"github.com/pritunl/mongo-go-driver/bson"
+	"github.com/pritunl/mongo-go-driver/bson/primitive"
+	testhelpers "github.com/pritunl/mongo-go-driver/internal/testutil/helpers"
+	"github.com/pritunl/mongo-go-driver/x/bsonx/bsoncore"
+	"github.com/pritunl/mongo-go-driver/x/mongo/driver/address"
+	"github.com/pritunl/mongo-go-driver/x/mongo/driver/connstring"
+	"github.com/pritunl/mongo-go-driver/x/mongo/driver/description"
 )
 
 type response struct {
 	Host     string
-	IsMaster result.IsMaster
+	IsMaster IsMaster
+}
+
+type IsMaster struct {
+	Arbiters                     []string           `bson:"arbiters,omitempty"`
+	ArbiterOnly                  bool               `bson:"arbiterOnly,omitempty"`
+	ClusterTime                  bson.Raw           `bson:"$clusterTime,omitempty"`
+	Compression                  []string           `bson:"compression,omitempty"`
+	ElectionID                   primitive.ObjectID `bson:"electionId,omitempty"`
+	Hidden                       bool               `bson:"hidden,omitempty"`
+	Hosts                        []string           `bson:"hosts,omitempty"`
+	IsMaster                     bool               `bson:"ismaster,omitempty"`
+	IsReplicaSet                 bool               `bson:"isreplicaset,omitempty"`
+	LastWrite                    *lastWriteDate     `bson:"lastWrite,omitempty"`
+	LogicalSessionTimeoutMinutes uint32             `bson:"logicalSessionTimeoutMinutes,omitempty"`
+	MaxBSONObjectSize            uint32             `bson:"maxBsonObjectSize,omitempty"`
+	MaxMessageSizeBytes          uint32             `bson:"maxMessageSizeBytes,omitempty"`
+	MaxWriteBatchSize            uint32             `bson:"maxWriteBatchSize,omitempty"`
+	Me                           string             `bson:"me,omitempty"`
+	MaxWireVersion               int32              `bson:"maxWireVersion,omitempty"`
+	MinWireVersion               int32              `bson:"minWireVersion,omitempty"`
+	Msg                          string             `bson:"msg,omitempty"`
+	OK                           int32              `bson:"ok"`
+	Passives                     []string           `bson:"passives,omitempty"`
+	ReadOnly                     bool               `bson:"readOnly,omitempty"`
+	SaslSupportedMechs           []string           `bson:"saslSupportedMechs,omitempty"`
+	Secondary                    bool               `bson:"secondary,omitempty"`
+	SetName                      string             `bson:"setName,omitempty"`
+	SetVersion                   uint32             `bson:"setVersion,omitempty"`
+	Tags                         map[string]string  `bson:"tags,omitempty"`
+}
+
+type lastWriteDate struct {
+	LastWriteDate time.Time `bson:"lastWriteDate"`
 }
 
 type server struct {
@@ -86,8 +122,12 @@ func setUpFSM(t *testing.T, uri string) *fsm {
 
 func applyResponses(f *fsm, responses []response) error {
 	for _, response := range responses {
-		server := description.NewServer(address.Address(response.Host), response.IsMaster)
-		_, err := f.apply(server)
+		doc, err := bson.Marshal(response.IsMaster)
+		if err != nil {
+			return err
+		}
+		server := description.NewServer(address.Address(response.Host), bsoncore.Document(doc))
+		_, err = f.apply(server)
 
 		if err != nil {
 			return err

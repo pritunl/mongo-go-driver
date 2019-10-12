@@ -8,6 +8,7 @@ package mongo
 
 import (
 	"bytes"
+	"errors"
 	"testing"
 
 	"github.com/pritunl/mongo-go-driver/bson"
@@ -44,5 +45,25 @@ func TestSingleResult(t *testing.T) {
 					"returned %v", firstDecode, decodeBytes)
 			}
 		})
+	})
+
+	t.Run("TestErr", func(t *testing.T) {
+		sr := &SingleResult{}
+		err := sr.Err()
+		if err != ErrNoDocuments {
+			t.Fatalf("Error returned by SingleResult.Err() was %v when ErrNoDocuments was expected", err)
+		}
+	})
+
+	t.Run("TestDecodeWithErr", func(t *testing.T) {
+		r := []byte("foo")
+		sr := &SingleResult{rdr: r, err: errors.New("DecodeBytes error")}
+		res, err := sr.DecodeBytes()
+		if !bytes.Equal(res, r) {
+			t.Fatalf("DecodeBytes contents do not match; expected %v, returned %v", res, r)
+		}
+		if err != sr.err {
+			t.Fatalf("Error returned by DecodeBytes was %v when %v was expected", err, sr.err)
+		}
 	})
 }

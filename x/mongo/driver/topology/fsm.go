@@ -11,11 +11,11 @@ import (
 	"fmt"
 
 	"github.com/pritunl/mongo-go-driver/bson/primitive"
-	"github.com/pritunl/mongo-go-driver/x/network/address"
-	"github.com/pritunl/mongo-go-driver/x/network/description"
+	"github.com/pritunl/mongo-go-driver/x/mongo/driver/address"
+	"github.com/pritunl/mongo-go-driver/x/mongo/driver/description"
 )
 
-var supportedWireVersions = description.NewVersionRange(2, 6)
+var supportedWireVersions = description.NewVersionRange(2, 8)
 var minSupportedMongoDBVersion = "2.6"
 
 type fsm struct {

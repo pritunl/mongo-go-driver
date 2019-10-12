@@ -11,11 +11,8 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"strings"
 	"testing"
-
-	"github.com/pritunl/mongo-go-driver/mongo/options"
-	"github.com/pritunl/mongo-go-driver/x/bsonx"
-
 	"time"
 
 	"github.com/google/go-cmp/cmp"
@@ -23,12 +20,14 @@ import (
 	"github.com/stretchr/testify/require"
 	"github.com/pritunl/mongo-go-driver/bson"
 	"github.com/pritunl/mongo-go-driver/bson/primitive"
+	"github.com/pritunl/mongo-go-driver/event"
 	"github.com/pritunl/mongo-go-driver/internal/testutil"
+	"github.com/pritunl/mongo-go-driver/mongo/options"
 	"github.com/pritunl/mongo-go-driver/mongo/readconcern"
 	"github.com/pritunl/mongo-go-driver/mongo/readpref"
 	"github.com/pritunl/mongo-go-driver/mongo/writeconcern"
-	"github.com/pritunl/mongo-go-driver/x/mongo/driver"
-	"github.com/pritunl/mongo-go-driver/x/network/command"
+	"github.com/pritunl/mongo-go-driver/x/bsonx"
+	"github.com/pritunl/mongo-go-driver/x/bsonx/bsoncore"
 )
 
 var impossibleWriteConcern = writeconcern.New(writeconcern.W(50), writeconcern.WTimeout(time.Second))
@@ -40,8 +39,14 @@ func createTestCollection(t *testing.T, dbName *string, collName *string, opts .
 	}
 
 	db := createTestDatabase(t, dbName)
+	db.RunCommand(
+		context.Background(),
+		bsonx.Doc{{"create", bsonx.String(*collName)}},
+	)
 
-	return db.Collection(*collName, opts...)
+	collOpts := []*options.CollectionOptions{options.Collection().SetWriteConcern(writeconcern.New(writeconcern.WMajority()))}
+	collOpts = append(collOpts, opts...)
+	return db.Collection(*collName, collOpts...)
 }
 
 func skipIfBelow34(t *testing.T, db *Database) {
@@ -63,6 +68,36 @@ func initCollection(t *testing.T, coll *Collection) {
 
 	_, err := coll.InsertMany(ctx, docs)
 	require.Nil(t, err)
+}
+
+func create16MBDocument(t *testing.T) bsoncore.Document {
+	// 4 bytes = document length
+	// 1 byte = element type (ObjectID = \x07)
+	// 4 bytes = key name ("_id" + \x00)
+	// 12 bytes = ObjectID value
+	// 1 byte = element type (string = \x02)
+	// 4 bytes = key name ("key" + \x00)
+	// 4 bytes = string length
+	// X bytes = string of length X bytes
+	// 1 byte = \x00
+	// 1 byte = \x00
+	//
+	// Therefore the string length should be: 1024*1024*16 - 32
+
+	targetDocSize := 1024 * 1024 * 16
+	strSize := targetDocSize - 32
+	var b strings.Builder
+	b.Grow(strSize)
+	for i := 0; i < strSize; i++ {
+		b.WriteByte('A')
+	}
+
+	idx, doc := bsoncore.AppendDocumentStart(nil)
+	doc = bsoncore.AppendObjectIDElement(doc, "_id", primitive.NewObjectID())
+	doc = bsoncore.AppendStringElement(doc, "key", b.String())
+	doc, _ = bsoncore.AppendDocumentEnd(doc, idx)
+	require.Equal(t, targetDocSize, len(doc), "expected document length %v, got %v", targetDocSize, len(doc))
+	return doc
 }
 
 func TestCollection_initialize(t *testing.T) {
@@ -227,27 +262,6 @@ func TestCollection_ReplaceTopologyError(t *testing.T) {
 
 	result = coll.FindOneAndUpdate(context.Background(), doc1, update)
 	require.Equal(t, result.err, ErrClientDisconnected)
-}
-
-func TestCollection_namespace(t *testing.T) {
-	dbName := "foo"
-	collName := "bar"
-
-	coll := createTestCollection(t, &dbName, &collName)
-	namespace := coll.namespace()
-	require.Equal(t, namespace.FullName(), fmt.Sprintf("%s.%s", dbName, collName))
-
-}
-
-func TestCollection_name_accessor(t *testing.T) {
-	dbName := "foo"
-	collName := "bar"
-
-	coll := createTestCollection(t, &dbName, &collName)
-	namespace := coll.namespace()
-	require.Equal(t, coll.Name(), collName)
-	require.Equal(t, coll.Name(), namespace.Collection)
-
 }
 
 func TestCollection_database_accessor(t *testing.T) {
@@ -640,6 +654,36 @@ func TestCollection_InsertMany_Batches(t *testing.T) {
 	require.Nil(t, err)
 	require.Len(t, result.InsertedIDs, numDocs)
 
+}
+
+func TestCollection_InsertMany_LargeDocumentBatches(t *testing.T) {
+	// TODO(GODRIVER-425): remove this as part a larger project to
+	// refactor integration and other longrunning tasks.
+	if os.Getenv("EVR_TASK_ID") == "" {
+		t.Skip("skipping long running integration test outside of evergreen")
+	}
+
+	client := createMonitoredClient(t, monitor)
+	db := client.Database("insertmany_largebatches_db")
+	coll := db.Collection("insertmany_largebatches_coll")
+	err := coll.Drop(ctx)
+	require.NoError(t, err, "Drop error: %v", err)
+	docs := []interface{}{create16MBDocument(t), create16MBDocument(t)}
+
+	drainChannels()
+	_, err = coll.InsertMany(ctx, docs)
+	require.NoError(t, err, "InsertMany error: %v", err)
+
+	for i := 0; i < 2; i++ {
+		var evt *event.CommandStartedEvent
+		select {
+		case evt = <-startedChan:
+		default:
+			t.Fatalf("no insert event found for iteration %v", i)
+		}
+
+		require.Equal(t, "insert", evt.CommandName, "expected 'insert' event, got '%v'", evt.CommandName)
+	}
 }
 
 func TestCollection_InsertMany_ErrorCases(t *testing.T) {
@@ -1726,38 +1770,34 @@ func TestCollection_Find_Error(t *testing.T) {
 		require.Nil(t, cursor, "expected nil cursor for invalid identifier, got non-nil")
 	})
 
-	t.Run("TestKillCursor", func(t *testing.T) {
+	t.Run("Test killCursor is killed server side", func(t *testing.T) {
+
 		coll := createTestCollection(t, nil, nil)
+		version, err := getServerVersion(coll.db)
+		if err != nil {
+			t.Fatalf("getServerVersion failed %v", err)
+		}
+
+		if compareVersions(t, version, "3.0") <= 0 {
+			t.Skip("skipping because less than 3.0 server version")
+		}
+
 		initCollection(t, coll)
 		c, err := coll.Find(context.Background(), bsonx.Doc{}, options.Find().SetBatchSize(2))
 		require.Nil(t, err, "error running find: %s", err)
 
-		// exhaust first batch
+		id := c.ID()
 		require.True(t, c.Next(context.Background()))
-		require.True(t, c.Next(context.Background()))
-
-		_, err = driver.KillCursors(ctx, command.Namespace{
-			DB:         coll.db.name,
-			Collection: coll.name,
-		}, c.bc.Server(), c.ID())
+		err = c.Close(context.Background())
 		require.NoError(t, err)
-		require.False(t, c.Next(context.Background()))
-		require.NotNil(t, c.Err())
-		_ = c.Close(context.Background())
-	})
 
-	t.Run("error type", func(t *testing.T) {
-		coll := createTestCollection(t, nil, nil)
-		initCollection(t, coll)
-		c, err := coll.Find(ctx, bson.D{}, options.Find().SetHint("foobar"))
-		if err == nil {
-			_ = c.Close(ctx)
-			t.Fatal("expected bad hint error but got nil")
-		}
-		_, ok := err.(CommandError)
-		if !ok {
-			t.Fatalf("err type mismatch; expected CommandError, got %T", err)
-		}
+		sr := coll.Database().RunCommand(context.Background(), bson.D{
+			{"getMore", id},
+			{"collection", coll.Name()},
+		})
+
+		ce := sr.Err().(CommandError)
+		require.Equal(t, int(ce.Code), int(43)) // CursorNotFound
 	})
 }
 
@@ -1774,6 +1814,82 @@ func TestCollection_Find_NegativeLimit(t *testing.T) {
 		numDocs++
 	}
 	require.Equal(t, 2, numDocs)
+}
+
+func TestCollection_Find_ExhaustCursor(t *testing.T) {
+	coll := createTestCollection(t, nil, nil)
+	initCollection(t, coll)
+	c, err := coll.Find(ctx, bson.D{})
+	require.NoError(t, err)
+
+	var numDocs int
+	for c.Next(ctx) {
+		numDocs++
+	}
+	require.Equal(t, 5, numDocs)
+
+	err = c.Close(ctx)
+	require.NoError(t, err)
+}
+
+func TestCollection_Find_Hint(t *testing.T) {
+	coll := createTestCollection(t, nil, nil)
+	initCollection(t, coll)
+
+	t.Run("string", func(t *testing.T) {
+		c, err := coll.Find(ctx, bson.D{}, options.Find().SetHint("_id_"))
+		if err != nil {
+			t.Fatalf("find error: %v", err)
+		}
+		_ = c.Close(ctx)
+	})
+	t.Run("document", func(t *testing.T) {
+		c, err := coll.Find(ctx, bson.D{}, options.Find().SetHint(bson.D{{"_id", 1}}))
+		if err != nil {
+			t.Fatalf("find error: %v", err)
+		}
+		_ = c.Close(ctx)
+	})
+	t.Run("error", func(t *testing.T) {
+		c, err := coll.Find(ctx, bson.D{}, options.Find().SetHint("foobar"))
+		if err == nil {
+			_ = c.Close(ctx)
+			t.Fatal("expected bad hint error but got nil")
+		}
+		_, ok := err.(CommandError)
+		if !ok {
+			t.Fatalf("err type mismatch; expected CommandError, got %T", err)
+		}
+	})
+}
+
+func TestCollection_FindOne_LimitSet(t *testing.T) {
+	client := createMonitoredClient(t, monitor)
+	coll := client.Database("FindOneLimitDB").Collection("FindOneLimitColl")
+	defer func() {
+		_ = coll.Drop(ctx)
+	}()
+	drainChannels()
+
+	res := coll.FindOne(ctx, bson.D{})
+	if err := res.Err(); err != ErrNoDocuments {
+		t.Fatalf("FindOne error: %v", err)
+	}
+
+	var started *event.CommandStartedEvent
+	select {
+	case started = <-startedChan:
+	default:
+		t.Fatalf("expected a CommandStartedEvent but none found")
+	}
+
+	limitVal, err := started.Command.LookupErr("limit")
+	if err != nil {
+		t.Fatal("no limit sent")
+	}
+	if limit := limitVal.Int64(); limit != 1 {
+		t.Fatalf("limit mismatch; expected %d, got %d", 1, limit)
+	}
 }
 
 func TestCollection_FindOne_found(t *testing.T) {
@@ -1843,7 +1959,7 @@ func TestCollection_FindOne_notFound(t *testing.T) {
 	initCollection(t, coll)
 
 	filter := bsonx.Doc{{"x", bsonx.Int32(6)}}
-	err := coll.FindOne(context.Background(), filter).Decode(nil)
+	err := coll.FindOne(context.Background(), filter).Err()
 	require.Equal(t, err, ErrNoDocuments)
 }
 
@@ -1891,7 +2007,7 @@ func TestCollection_FindOneAndDelete_notFound(t *testing.T) {
 
 	filter := bsonx.Doc{{"x", bsonx.Int32(6)}}
 
-	err := coll.FindOneAndDelete(context.Background(), filter).Decode(nil)
+	err := coll.FindOneAndDelete(context.Background(), filter).Err()
 	require.Equal(t, err, ErrNoDocuments)
 }
 
@@ -1905,7 +2021,7 @@ func TestCollection_FindOneAndDelete_notFound_ignoreResult(t *testing.T) {
 
 	filter := bsonx.Doc{{"x", bsonx.Int32(6)}}
 
-	err := coll.FindOneAndDelete(context.Background(), filter).Decode(nil)
+	err := coll.FindOneAndDelete(context.Background(), filter).Err()
 	require.Equal(t, ErrNoDocuments, err)
 }
 
@@ -1927,9 +2043,12 @@ func TestCollection_FindOneAndDelete_WriteConcernError(t *testing.T) {
 	var result bsonx.Doc
 	err := coll.FindOneAndDelete(context.Background(), filter).Decode(&result)
 	require.Error(t, err)
-	_, ok := err.(WriteConcernError)
+	we, ok := err.(WriteException)
 	if !ok {
-		t.Errorf("incorrect error type returned: %T", err)
+		t.Fatalf("incorrect error type returned: %T", err)
+	}
+	if we.WriteConcernError == nil {
+		t.Fatal("write concern error is nil")
 	}
 }
 
@@ -1980,7 +2099,7 @@ func TestCollection_FindOneAndReplace_notFound(t *testing.T) {
 	filter := bsonx.Doc{{"x", bsonx.Int32(6)}}
 	replacement := bsonx.Doc{{"y", bsonx.Int32(6)}}
 
-	err := coll.FindOneAndReplace(context.Background(), filter, replacement).Decode(nil)
+	err := coll.FindOneAndReplace(context.Background(), filter, replacement).Err()
 	require.Equal(t, err, ErrNoDocuments)
 }
 
@@ -1995,7 +2114,7 @@ func TestCollection_FindOneAndReplace_notFound_ignoreResult(t *testing.T) {
 	filter := bsonx.Doc{{"x", bsonx.Int32(6)}}
 	replacement := bsonx.Doc{{"y", bsonx.Int32(6)}}
 
-	err := coll.FindOneAndReplace(context.Background(), filter, replacement).Decode(nil)
+	err := coll.FindOneAndReplace(context.Background(), filter, replacement).Err()
 	require.Equal(t, err, ErrNoDocuments)
 }
 
@@ -2018,9 +2137,12 @@ func TestCollection_FindOneAndReplace_WriteConcernError(t *testing.T) {
 	var result bsonx.Doc
 	err := coll.FindOneAndReplace(context.Background(), filter, replacement).Decode(&result)
 	require.Error(t, err)
-	writeErr, ok := err.(WriteConcernError)
+	we, ok := err.(WriteException)
 	if !ok {
-		t.Errorf("incorrect error type returned: %T", writeErr)
+		t.Fatalf("incorrect error type returned: %T", we)
+	}
+	if we.WriteConcernError == nil {
+		t.Fatal("expected write concern error but got nil")
 	}
 }
 
@@ -2077,7 +2199,7 @@ func TestCollection_FindOneAndUpdate_notFound(t *testing.T) {
 	filter := bsonx.Doc{{"x", bsonx.Int32(6)}}
 	update := bsonx.Doc{{"$set", bsonx.Document(bsonx.Doc{{"x", bsonx.Int32(6)}})}}
 
-	err := coll.FindOneAndUpdate(context.Background(), filter, update).Decode(nil)
+	err := coll.FindOneAndUpdate(context.Background(), filter, update).Err()
 	require.Equal(t, err, ErrNoDocuments)
 }
 
@@ -2092,7 +2214,7 @@ func TestCollection_FindOneAndUpdate_notFound_ignoreResult(t *testing.T) {
 	filter := bsonx.Doc{{"x", bsonx.Int32(6)}}
 	update := bsonx.Doc{{"$set", bsonx.Document(bsonx.Doc{{"x", bsonx.Int32(6)}})}}
 
-	err := coll.FindOneAndUpdate(context.Background(), filter, update).Decode(nil)
+	err := coll.FindOneAndUpdate(context.Background(), filter, update).Err()
 	require.Equal(t, err, ErrNoDocuments)
 }
 
@@ -2115,8 +2237,13 @@ func TestCollection_FindOneAndUpdate_WriteConcernError(t *testing.T) {
 	var result bsonx.Doc
 	err := coll.FindOneAndUpdate(context.Background(), filter, update).Decode(&result)
 	require.Error(t, err)
-	if writeErr, ok := err.(WriteConcernError); !ok {
-		t.Errorf("incorrect error type returned: %T", writeErr)
+
+	we, ok := err.(WriteException)
+	if !ok {
+		t.Fatalf("incorrect error type returned: %T", we)
+	}
+	if we.WriteConcernError == nil {
+		t.Fatal("write concern error expected but got nil")
 	}
 }
 
@@ -2153,4 +2280,45 @@ func TestCollection_BulkWrite(t *testing.T) {
 			})
 		}
 	})
+}
+
+// test special types that should be converted to a document for updates even though the underlying type is a
+// slice/array
+func TestCollection_Update_SpecialSliceTypes(t *testing.T) {
+	doc := bson.D{{"$set", bson.D{{"x", 2}}}}
+	docBytes, err := bson.Marshal(doc)
+	require.NoError(t, err, "error getting document bytes: %v", err)
+	xUpdate := bsonx.Doc{{"x", bsonx.Int32(2)}}
+	xDoc := bsonx.Doc{{"$set", bsonx.Document(xUpdate)}}
+
+	testCases := []struct {
+		name   string
+		update interface{}
+	}{
+		{"bsoncore Document", bsoncore.Document(docBytes)},
+		{"bson Raw", bson.Raw(docBytes)},
+		{"bson D", doc},
+		{"bsonx Document", xDoc},
+		{"byte slice", docBytes},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			coll := createTestCollection(t, nil, &tc.name)
+			defer func() {
+				_ = coll.Drop(ctx)
+			}()
+
+			insertedDoc := bson.D{{"x", 1}}
+			_, err = coll.InsertOne(ctx, insertedDoc)
+			require.NoError(t, err, "error inserting document: %v", err)
+
+			res, err := coll.UpdateOne(ctx, insertedDoc, tc.update)
+			require.NoError(t, err, "error updating document: %v", err)
+			require.Equal(t, int64(1), res.MatchedCount,
+				"matched count mismatch; expected %d, got %d", 1, res.MatchedCount)
+			require.Equal(t, int64(1), res.ModifiedCount,
+				"modified count mismatch; expected %d, got %d", 1, res.ModifiedCount)
+		})
+	}
 }

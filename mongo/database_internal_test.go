@@ -9,7 +9,6 @@ package mongo
 import (
 	"context"
 	"errors"
-	"strings"
 	"testing"
 
 	"fmt"
@@ -17,6 +16,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 	"github.com/pritunl/mongo-go-driver/bson"
+	"github.com/pritunl/mongo-go-driver/bson/bsoncodec"
 	"github.com/pritunl/mongo-go-driver/bson/primitive"
 	"github.com/pritunl/mongo-go-driver/internal/testutil"
 	"github.com/pritunl/mongo-go-driver/mongo/options"
@@ -24,8 +24,8 @@ import (
 	"github.com/pritunl/mongo-go-driver/mongo/readpref"
 	"github.com/pritunl/mongo-go-driver/mongo/writeconcern"
 	"github.com/pritunl/mongo-go-driver/x/bsonx"
-	"github.com/pritunl/mongo-go-driver/x/network/connstring"
-	"github.com/pritunl/mongo-go-driver/x/network/description"
+	"github.com/pritunl/mongo-go-driver/x/mongo/driver/connstring"
+	"github.com/pritunl/mongo-go-driver/x/mongo/driver/description"
 )
 
 func createTestDatabase(t *testing.T, name *string, opts ...*options.DatabaseOptions) *Database {
@@ -35,7 +35,10 @@ func createTestDatabase(t *testing.T, name *string, opts ...*options.DatabaseOpt
 	}
 
 	client := createTestClient(t)
-	return client.Database(*name, opts...)
+
+	dbOpts := []*options.DatabaseOptions{options.Database().SetWriteConcern(writeconcern.New(writeconcern.WMajority()))}
+	dbOpts = append(dbOpts, opts...)
+	return client.Database(*name, dbOpts...)
 }
 
 func TestDatabase_initialize(t *testing.T) {
@@ -56,6 +59,8 @@ func compareDbs(t *testing.T, expected *Database, got *Database) {
 		t.Errorf("expected read concern %#v. got %#v", expected.readConcern, got.readConcern)
 	case expected.writeConcern != got.writeConcern:
 		t.Errorf("expected write concern %#v. got %#v", expected.writeConcern, got.writeConcern)
+	case expected.registry != got.registry:
+		t.Errorf("expected registry %#v, got %#v", expected.registry, got.registry)
 	}
 }
 
@@ -67,14 +72,16 @@ func TestDatabase_Options(t *testing.T) {
 	wc2 := writeconcern.New(writeconcern.W(10))
 	rcLocal := readconcern.Local()
 	rcMajority := readconcern.Majority()
+	reg := bsoncodec.NewRegistryBuilder().Build()
 
 	opts := options.Database().SetReadPreference(rpPrimary).SetReadConcern(rcLocal).SetWriteConcern(wc1).
-		SetReadPreference(rpSecondary).SetReadConcern(rcMajority).SetWriteConcern(wc2)
+		SetReadPreference(rpSecondary).SetReadConcern(rcMajority).SetWriteConcern(wc2).SetRegistry(reg)
 
 	expectedDb := &Database{
 		readConcern:    rcMajority,
 		readPreference: rpSecondary,
 		writeConcern:   wc2,
+		registry:       reg,
 	}
 
 	t.Run("IndividualOptions", func(t *testing.T) {
@@ -92,9 +99,10 @@ func TestDatabase_InheritOptions(t *testing.T) {
 	rcLocal := readconcern.Local()
 	client.readPreference = rpPrimary
 	client.readConcern = rcLocal
+	reg := bsoncodec.NewRegistryBuilder().Build()
 
 	wc1 := writeconcern.New(writeconcern.W(10))
-	db := client.Database(name, options.Database().SetWriteConcern(wc1))
+	db := client.Database(name, options.Database().SetWriteConcern(wc1).SetRegistry(reg))
 
 	// db should inherit read preference and read concern from client
 	switch {
@@ -104,6 +112,8 @@ func TestDatabase_InheritOptions(t *testing.T) {
 		t.Errorf("expected read concern local. got %#v", db.readConcern)
 	case db.writeConcern != wc1:
 		t.Errorf("expected write concern %#v. got %#v", wc1, db.writeConcern)
+	case db.registry != reg:
+		t.Errorf("expected registry %#v, got %#v", reg, db.registry)
 	}
 }
 
@@ -180,6 +190,9 @@ func TestDatabase_NilDocumentError(t *testing.T) {
 
 	_, err = db.ListCollections(context.Background(), nil)
 	require.Equal(t, err, ErrNilDocument)
+
+	_, err = db.ListCollectionNames(context.Background(), nil)
+	require.Equal(t, err, ErrNilDocument)
 }
 
 func TestDatabase_Drop(t *testing.T) {
@@ -199,10 +212,52 @@ func TestDatabase_Drop(t *testing.T) {
 
 }
 
+func TestListCollectionNames(t *testing.T) {
+	serverVersion, err := getServerVersion(createTestDatabase(t, nil))
+	require.NoError(t, err)
+
+	if compareVersions(t, serverVersion, "4.0") < 0 {
+		t.Skip()
+	}
+
+	testcases := []struct {
+		name   string
+		filter bson.D
+		found  bool
+	}{
+		{"no_filter", bson.D{}, true},
+		{"filter", bson.D{{"name", "filter"}}, true},
+		{"filter_not_found", bson.D{{"name", "123"}}, false},
+	}
+
+	for _, tc := range testcases {
+		t.Run(tc.name, func(t *testing.T) {
+			dbName := "TestListCollectionNames"
+			coll := createTestCollection(t, &dbName, &tc.name)
+			defer func() {
+				_ = coll.Drop(ctx)
+			}()
+
+			cols, err := coll.Database().ListCollectionNames(context.Background(), tc.filter)
+			require.NoError(t, err)
+			if !tc.found {
+				require.Len(t, cols, 0)
+				return
+			}
+
+			require.Len(t, cols, 1)
+			require.Equal(t, tc.name, cols[0],
+				"collection name mismatch; expected %s, got %s", tc.name, cols[0])
+		})
+	}
+}
+
 // creates 1 normal collection and 1 capped collection of size 64*1024
 func setupListCollectionsDb(db *Database) (uncappedName string, cappedName string, err error) {
 	uncappedName, cappedName = "listcoll_uncapped", "listcoll_capped"
-	uncappedColl := db.Collection(uncappedName)
+	uncappedColl := db.Collection(uncappedName, options.Collection().SetWriteConcern(writeconcern.New(writeconcern.WMajority())))
+	// insert a document to ensure the database exists
+	_, _ = uncappedColl.InsertOne(context.Background(), bson.D{})
 
 	err = db.RunCommand(
 		context.Background(),
@@ -383,49 +438,63 @@ func TestDatabase_ListCollections(t *testing.T) {
 	}
 }
 
-func TestDatabase_LegacyListCollections(t *testing.T) {
-	db := createTestDatabase(t, nil, nil)
-	version, err := getServerVersion(db)
-	noerr(t, err)
-	if compareVersions(t, version, "2.6") > 0 {
-		t.Skip("skipping for server versions > 2.6")
+func TestDatabase_RunCommandCursor(t *testing.T) {
+	var elms []interface{}
+	for i := 0; i < 5; i++ {
+		elms = append(elms, bson.D{
+			{"x", i},
+		})
 	}
 
-	coll := db.Collection("bar", options.Collection().SetWriteConcern(writeconcern.New(writeconcern.WMajority())))
-	initCollection(t, coll)
+	tests := []struct {
+		name        string
+		ctx         context.Context
+		runCommand  interface{}
+		readPref    *readpref.ReadPref
+		toInsert    []interface{}
+		expectedErr error
+		minVersion  string
+	}{
+		{"Success", nil, bson.D{
+			{"find", "bar"},
+		}, nil, elms, nil, "3.2"},
+		{"Success", nil, bson.D{
+			{"aggregate", "bar"},
+			{"pipeline", bson.A{}},
+			{"cursor", bson.D{}},
+		}, nil, elms, nil, "2.6"},
+		{"Failure", nil, bson.D{
+			{"ping", 1},
+		}, nil, elms, errors.New("cursor should be an embedded document but is of BSON type invalid"), "2.6"},
+	}
 
-	t.Run("ignore indexes", func(t *testing.T) {
-		// legacy list collections should not return any collections containing a $
-		c, err := db.ListCollections(ctx, bson.D{})
-		noerr(t, err)
-		defer func() {
-			_ = c.Close(ctx)
-		}()
-
-		for c.Next(ctx) {
-			name := c.Current.Lookup("name").StringValue()
-			if strings.Contains(name, "$") {
-				t.Fatalf("index %s returned from ListCollections", name)
+	for _, test := range tests {
+		t.Run(test.name, func(tt *testing.T) {
+			serverVersion, err := getServerVersion(createTestDatabase(t, nil))
+			require.NoError(t, err)
+			if compareVersions(t, serverVersion, test.minVersion) < 0 {
+				tt.Skip()
 			}
-		}
-	})
-	t.Run("filter name", func(t *testing.T) {
-		c, err := db.ListCollections(ctx, bson.D{{"name", "bar"}})
-		noerr(t, err)
-		defer func() {
-			_ = c.Close(ctx)
-		}()
 
-		var foundBar bool
-		for c.Next(ctx) {
-			name := c.Current.Lookup("name").StringValue()
-			if name == "bar" {
-				foundBar = true
-				break
+			foo := "foo"
+			bar := "bar"
+			coll := createTestCollection(t, &foo, &bar, options.Collection().SetWriteConcern(wcMajority).SetReadPreference(test.readPref))
+			defer func() {
+				_ = coll.Drop(ctx)
+			}()
+
+			res, err := coll.InsertMany(test.ctx, test.toInsert)
+			require.NoError(t, err, "error inserting into database")
+
+			cursor, err := coll.Database().RunCommandCursor(test.ctx, test.runCommand)
+			require.Equal(tt, test.expectedErr, err, "db.RunCommandCursor returned different error than expected")
+			if cursor != nil {
+				var count int
+				for cursor.Next(test.ctx) {
+					count++
+				}
+				require.Equal(t, len(res.InsertedIDs), count, "doc count mismatch; expected %d, got %d", len(res.InsertedIDs), count)
 			}
-		}
-		if !foundBar {
-			t.Fatalf("collection bar not returned from ListCollections")
-		}
-	})
+		})
+	}
 }

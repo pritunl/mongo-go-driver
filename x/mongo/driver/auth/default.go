@@ -9,8 +9,8 @@ package auth
 import (
 	"context"
 
-	"github.com/pritunl/mongo-go-driver/x/network/description"
-	"github.com/pritunl/mongo-go-driver/x/network/wiremessage"
+	"github.com/pritunl/mongo-go-driver/x/mongo/driver"
+	"github.com/pritunl/mongo-go-driver/x/mongo/driver/description"
 )
 
 func newDefaultAuthenticator(cred *Cred) (Authenticator, error) {
@@ -26,7 +26,7 @@ type DefaultAuthenticator struct {
 }
 
 // Auth authenticates the connection.
-func (a *DefaultAuthenticator) Auth(ctx context.Context, desc description.Server, rw wiremessage.ReadWriter) error {
+func (a *DefaultAuthenticator) Auth(ctx context.Context, desc description.Server, conn driver.Connection) error {
 	var actual Authenticator
 	var err error
 
@@ -43,7 +43,7 @@ func (a *DefaultAuthenticator) Auth(ctx context.Context, desc description.Server
 		return newAuthError("error creating authenticator", err)
 	}
 
-	return actual.Auth(ctx, desc, rw)
+	return actual.Auth(ctx, desc, conn)
 }
 
 // If a server provides a list of supported mechanisms, we choose

@@ -7,4 +7,4 @@
 package version // import "github.com/pritunl/mongo-go-driver/version"
 
 // Driver is the current version of the driver.
-var Driver = "v1.0.4"
+var Driver = "v1.1.2"

@@ -13,18 +13,36 @@ import (
 	"testing"
 	"time"
 
-	"github.com/pritunl/mongo-go-driver/x/network/address"
-	"github.com/pritunl/mongo-go-driver/x/network/command"
-	"github.com/pritunl/mongo-go-driver/x/network/description"
+	"github.com/pritunl/mongo-go-driver/x/mongo/driver"
+	"github.com/pritunl/mongo-go-driver/x/mongo/driver/address"
+	"github.com/pritunl/mongo-go-driver/x/mongo/driver/connstring"
+	"github.com/pritunl/mongo-go-driver/x/mongo/driver/description"
 )
 
 const testTimeout = 2 * time.Second
 
 func noerr(t *testing.T, err error) {
+	t.Helper()
 	if err != nil {
 		t.Errorf("Unexpected error: %v", err)
 		t.FailNow()
 	}
+}
+
+func compareErrors(err1, err2 error) bool {
+	if err1 == nil && err2 == nil {
+		return true
+	}
+
+	if err1 == nil || err2 == nil {
+		return false
+	}
+
+	if err1.Error() != err2.Error() {
+		return false
+	}
+
+	return true
 }
 
 func TestServerSelection(t *testing.T) {
@@ -209,7 +227,7 @@ func TestServerSelection(t *testing.T) {
 		topo, err := New()
 		noerr(t, err)
 		atomic.StoreInt32(&topo.connectionstate, connected)
-		srvr, err := NewServer(address.Address("one"), func(desc description.Server) { topo.apply(context.Background(), desc) })
+		srvr, err := ConnectServer(address.Address("one"), func(desc description.Server) { topo.apply(context.Background(), desc) })
 		noerr(t, err)
 		topo.servers[address.Address("one")] = srvr
 		desc := topo.desc.Load().(description.Topology)
@@ -243,7 +261,7 @@ func TestServerSelection(t *testing.T) {
 
 		// manually add the servers to the topology
 		for _, srv := range desc.Servers {
-			s, err := NewServer(srv.Addr, func(desc description.Server) { topo.apply(context.Background(), desc) })
+			s, err := ConnectServer(srv.Addr, func(desc description.Server) { topo.apply(context.Background(), desc) })
 			noerr(t, err)
 			topo.servers[srv.Addr] = s
 		}
@@ -263,11 +281,8 @@ func TestServerSelection(t *testing.T) {
 		// send a not master error to the server forcing an update
 		serv, err := topo.FindServer(desc.Servers[0])
 		noerr(t, err)
-		err = serv.pool.Connect(context.Background())
-		noerr(t, err)
 		atomic.StoreInt32(&serv.connectionstate, connected)
-		sc := &sconn{s: serv.Server}
-		sc.processErr(command.Error{Message: "not master"})
+		serv.ProcessError(driver.Error{Message: "not master"})
 
 		resp := make(chan []description.Server)
 
@@ -423,4 +438,44 @@ func TestSessionTimeout(t *testing.T) {
 			t.Errorf("session timeout minutes mismatch. got: %d. expected: 0", currDesc.SessionTimeoutMinutes)
 		}
 	})
+}
+
+func TestMinPoolSize(t *testing.T) {
+	connStr := connstring.ConnString{
+		Hosts:          []string{"localhost:27017"},
+		MinPoolSize:    10,
+		MinPoolSizeSet: true,
+	}
+	topo, err := New(WithConnString(func(connstring.ConnString) connstring.ConnString { return connStr }))
+	if err != nil {
+		t.Errorf("topology.New shouldn't error. got: %v", err)
+	}
+	err = topo.Connect()
+	if err != nil {
+		t.Errorf("topology.Connect shouldn't error. got: %v", err)
+	}
+}
+
+func TestTopology_String_Race(t *testing.T) {
+	ch := make(chan bool)
+	topo := &Topology{
+		servers: make(map[address.Address]*Server),
+	}
+
+	go func() {
+		topo.serversLock.Lock()
+		srv := &Server{}
+		srv.desc.Store(description.Server{})
+		topo.servers[address.Address("127.0.0.1:27017")] = srv
+		topo.serversLock.Unlock()
+		ch <- true
+	}()
+
+	go func() {
+		topo.String()
+		ch <- true
+	}()
+
+	<-ch
+	<-ch
 }

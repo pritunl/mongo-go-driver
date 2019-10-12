@@ -10,7 +10,7 @@ import (
 	"testing"
 
 	"github.com/pritunl/mongo-go-driver/internal/testutil/helpers"
-	"github.com/pritunl/mongo-go-driver/x/network/description"
+	"github.com/pritunl/mongo-go-driver/x/mongo/driver/description"
 )
 
 func TestSessionPool(t *testing.T) {

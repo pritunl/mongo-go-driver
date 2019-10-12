@@ -12,8 +12,8 @@ import (
 	"context"
 	"testing"
 
-	"github.com/pritunl/mongo-go-driver/x/network/address"
-	"github.com/pritunl/mongo-go-driver/x/network/description"
+	"github.com/pritunl/mongo-go-driver/x/mongo/driver/address"
+	"github.com/pritunl/mongo-go-driver/x/mongo/driver/description"
 )
 
 func TestGSSAPIAuthenticator(t *testing.T) {
