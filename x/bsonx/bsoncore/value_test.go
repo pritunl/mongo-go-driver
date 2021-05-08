@@ -110,6 +110,11 @@ func TestValue(t *testing.T) {
 			nil,
 		},
 		{
+			"StringValue/Zero Length", Value.StringValue, Value{Type: bsontype.String, Data: []byte{0x00, 0x00, 0x00, 0x00}},
+			NewInsufficientBytesError([]byte{0x00, 0x00, 0x00, 0x00}, []byte{0x00, 0x00, 0x00, 0x00}),
+			nil,
+		},
+		{
 			"StringValue/Success", Value.StringValue, Value{Type: bsontype.String, Data: AppendString(nil, "hello, world!")},
 			nil,
 			[]interface{}{string("hello, world!")},
@@ -121,6 +126,11 @@ func TestValue(t *testing.T) {
 		},
 		{
 			"StringValueOK/Insufficient Bytes", Value.StringValueOK, Value{Type: bsontype.String, Data: []byte{0x01, 0x02, 0x03, 0x04}},
+			nil,
+			[]interface{}{string(""), false},
+		},
+		{
+			"StringValueOK/Zero Length", Value.StringValueOK, Value{Type: bsontype.String, Data: []byte{0x00, 0x00, 0x00, 0x00}},
 			nil,
 			[]interface{}{string(""), false},
 		},
@@ -172,22 +182,22 @@ func TestValue(t *testing.T) {
 		{
 			"Array/Success", Value.Array, Value{Type: bsontype.Array, Data: []byte{0x05, 0x00, 0x00, 0x00, 0x00}},
 			nil,
-			[]interface{}{Document{0x05, 0x00, 0x00, 0x00, 0x00}},
+			[]interface{}{Array{0x05, 0x00, 0x00, 0x00, 0x00}},
 		},
 		{
 			"ArrayOK/Not Array", Value.ArrayOK, Value{Type: bsontype.String},
 			nil,
-			[]interface{}{Document(nil), false},
+			[]interface{}{Array(nil), false},
 		},
 		{
 			"ArrayOK/Insufficient Bytes", Value.ArrayOK, Value{Type: bsontype.Array, Data: []byte{0x01, 0x02, 0x03, 0x04}},
 			nil,
-			[]interface{}{Document(nil), false},
+			[]interface{}{Array(nil), false},
 		},
 		{
 			"ArrayOK/Success", Value.ArrayOK, Value{Type: bsontype.Array, Data: []byte{0x05, 0x00, 0x00, 0x00, 0x00}},
 			nil,
-			[]interface{}{Document{0x05, 0x00, 0x00, 0x00, 0x00}, true},
+			[]interface{}{Array{0x05, 0x00, 0x00, 0x00, 0x00}, true},
 		},
 		{
 			"Binary/Not Binary", Value.Binary, Value{Type: bsontype.String},

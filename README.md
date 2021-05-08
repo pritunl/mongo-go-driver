@@ -1,9 +1,9 @@
 <p align="center"><img src="etc/assets/mongo-gopher.png" width="250"></p>
 <p align="center">
   <a href="https://goreportcard.com/report/github.com/pritunl/mongo-go-driver"><img src="https://goreportcard.com/badge/github.com/pritunl/mongo-go-driver"></a>
-  <a href="https://godoc.org/github.com/pritunl/mongo-go-driver/mongo"><img src="etc/assets/godoc-mongo-blue.svg" alt="GoDoc"></a>
-  <a href="https://godoc.org/github.com/pritunl/mongo-go-driver/bson"><img src="etc/assets/godoc-bson-blue.svg" alt="GoDoc"></a>
-  <a href="https://docs.mongodb.com/ecosystem/drivers/go/"><img src="etc/assets/docs-mongodb-green.svg"></a>
+  <a href="https://pkg.go.dev/github.com/pritunl/mongo-go-driver/mongo"><img src="etc/assets/godev-mongo-blue.svg" alt="docs"></a>
+  <a href="https://pkg.go.dev/github.com/pritunl/mongo-go-driver/bson"><img src="etc/assets/godev-bson-blue.svg" alt="docs"></a>
+  <a href="https://docs.mongodb.com/drivers/go/"><img src="etc/assets/docs-mongodb-green.svg"></a>
 </p>
 
 # MongoDB Go Driver
@@ -28,45 +28,55 @@ The MongoDB supported driver for Go.
 -------------------------
 ## Installation
 
-The recommended way to get started using the MongoDB Go driver is by using `dep` to install the dependency in your project.
+The recommended way to get started using the MongoDB Go driver is by using go modules to install the dependency in
+your project. This can be done either by importing packages from `github.com/pritunl/mongo-go-driver` and having the build
+step install the dependency or by explicitly running
 
 ```bash
-dep ensure -add "github.com/pritunl/mongo-go-driver/mongo@~1.1.2"
+go get github.com/pritunl/mongo-go-driver/mongo
+```
+
+When using a version of Go that does not support modules, the driver can be installed using `dep` by running
+
+```bash
+dep ensure -add "github.com/pritunl/mongo-go-driver/mongo"
 ```
 
 -------------------------
 ## Usage
 
-To get started with the driver, import the `mongo` package, create a `mongo.Client`:
+To get started with the driver, import the `mongo` package and create a `mongo.Client` with the `Connect` function:
 
 ```go
 import (
     "github.com/pritunl/mongo-go-driver/mongo"
     "github.com/pritunl/mongo-go-driver/mongo/options"
+    "github.com/pritunl/mongo-go-driver/mongo/readpref"
 )
 
-client, err := mongo.NewClient(options.Client().ApplyURI("mongodb://localhost:27017"))
-```
-
-And connect it to your running MongoDB server:
-
-```go
-ctx, _ := context.WithTimeout(context.Background(), 10*time.Second)
-err = client.Connect(ctx)
-```
-
-To do this in a single step, you can use the `Connect` function:
-
-```go
-ctx, _ := context.WithTimeout(context.Background(), 10*time.Second)
+ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+defer cancel()
 client, err := mongo.Connect(ctx, options.Client().ApplyURI("mongodb://localhost:27017"))
 ```
+
+Make sure to defer a call to `Disconnect` after instantiating your client:
+
+```go
+defer func() {
+    if err = client.Disconnect(ctx); err != nil {
+        panic(err)
+    }
+}()
+```
+
+For more advanced configuration and authentication, see the [documentation for mongo.Connect](https://pkg.go.dev/github.com/pritunl/mongo-go-driver/mongo#Connect).
 
 Calling `Connect` does not block for server discovery. If you wish to know if a MongoDB server has been found and connected to,
 use the `Ping` method:
 
 ```go
-ctx, _ = context.WithTimeout(context.Background(), 2*time.Second)
+ctx, cancel = context.WithTimeout(context.Background(), 2*time.Second)
+defer cancel()
 err = client.Ping(ctx, readpref.Primary())
 ```
 
@@ -79,20 +89,35 @@ collection := client.Database("testing").Collection("numbers")
 The `Collection` instance can then be used to insert documents:
 
 ```go
-ctx, _ = context.WithTimeout(context.Background(), 5*time.Second)
-res, err := collection.InsertOne(ctx, bson.M{"name": "pi", "value": 3.14159})
+ctx, cancel = context.WithTimeout(context.Background(), 5*time.Second)
+defer cancel()
+res, err := collection.InsertOne(ctx, bson.D{{"name", "pi"}, {"value", 3.14159}})
 id := res.InsertedID
+```
+
+To use `bson.D`, you will need to add `"github.com/pritunl/mongo-go-driver/bson"` to your imports.
+
+Your import statement should now look like this:
+
+```go
+import (
+    "github.com/pritunl/mongo-go-driver/bson"
+    "github.com/pritunl/mongo-go-driver/mongo"
+    "github.com/pritunl/mongo-go-driver/mongo/options"
+    "github.com/pritunl/mongo-go-driver/mongo/readpref"
+)
 ```
 
 Several query methods return a cursor, which can be used like this:
 
 ```go
-ctx, _ = context.WithTimeout(context.Background(), 30*time.Second)
+ctx, cancel = context.WithTimeout(context.Background(), 30*time.Second)
+defer cancel()
 cur, err := collection.Find(ctx, bson.D{})
 if err != nil { log.Fatal(err) }
 defer cur.Close(ctx)
 for cur.Next(ctx) {
-   var result bson.M
+   var result bson.D
    err := cur.Decode(&result)
    if err != nil { log.Fatal(err) }
    // do something with result....
@@ -108,8 +133,9 @@ For methods that return a single item, a `SingleResult` instance is returned:
 var result struct {
     Value float64
 }
-filter := bson.M{"name": "pi"}
-ctx, _ = context.WithTimeout(context.Background(), 5*time.Second)
+filter := bson.D{{"name", "pi"}}
+ctx, cancel = context.WithTimeout(context.Background(), 5*time.Second)
+defer cancel()
 err = collection.FindOne(ctx, filter).Decode(&result)
 if err != nil {
     log.Fatal(err)
@@ -117,49 +143,40 @@ if err != nil {
 // Do something with result...
 ```
 
-Additional examples and documentation can be found under the examples directory and [on the MongoDB Documentation website](https://docs.mongodb.com/ecosystem/drivers/go/).
+Additional examples and documentation can be found under the examples directory and [on the MongoDB Documentation website](https://docs.mongodb.com/drivers/go/).
 
 -------------------------
-## Bugs / Feature Reporting
+## Feedback
 
-New Features and bugs can be reported on jira: https://jira.mongodb.org/browse/GODRIVER
+For help with the driver, please post in the [MongoDB Community Forums](https://developer.mongodb.com/community/forums/tag/golang/).
+
+New features and bugs can be reported on jira: https://jira.mongodb.org/browse/GODRIVER
 
 -------------------------
 ## Testing / Development
 
-The driver tests can be run against several database configurations. The most simple configuration is a standalone mongod with no auth, no ssl, and no compression. To run these basic driver tests, make sure a standalone MongoDB server instance is running at localhost:27017. To run the tests, you can run `make` (on Windows, run `nmake`) with the following:
-
-```
-TOPOLOGY=server make
-```
-
-The `TOPOLOGY`variable must be set to run tests. This will run coverage, run go-lint, run go-vet, and build the examples.
+The driver tests can be run against several database configurations. The most simple configuration is a standalone mongod with no auth, no ssl, and no compression. To run these basic driver tests, make sure a standalone MongoDB server instance is running at localhost:27017. To run the tests, you can run `make` (on Windows, run `nmake`). This will run coverage, run go-lint, run go-vet, and build the examples.
 
 ### Testing Different Topologies
 
-To test a **replica set**, set `MONGODB_URI="<connection-string>"` and `TOPOLOGY=replica_set` for the `make` command. For example, for a local replica set named `rs1` comprised of three nodes on ports 27017, 27018, and 27019:
+To test a **replica set** or **sharded cluster**, set `MONGODB_URI="<connection-string>"` for the `make` command.
+For example, for a local replica set named `rs1` comprised of three nodes on ports 27017, 27018, and 27019:
 
 ```
-MONGODB_URI="mongodb://localhost:27017,localhost:27018,localhost:27018/?replicaSet=rs1" TOPOLOGY=replica_set make
+MONGODB_URI="mongodb://localhost:27017,localhost:27018,localhost:27018/?replicaSet=rs1" make
 ```
 
-To test a **sharded cluster**, set `MONGODB_URI="<connection-string>"` and `TOPOLOGY=sharded_cluster` variables for the `make` command. For example, for a sharded cluster with a single mongos on port 27017:
+### Testing Auth and TLS
 
-```
-MONGODB_URI="mongodb://localhost:27017/" TOPOLOGY=sharder_cluster make
-```
-
-### Testing Auth and SSL
-
-To test authentication and SSL, first set up a MongoDB cluster with auth and SSL configured. Testing authentication requires a user with the `root` role on the `admin` database. The Go Driver repository comes with example certificates in the `data/certificates` directory. These certs can be used for testing. Here is an example command that would run a mongod with SSL correctly configured for tests:
+To test authentication and TLS, first set up a MongoDB cluster with auth and TLS configured. Testing authentication requires a user with the `root` role on the `admin` database. The Go Driver repository comes with example certificates in the `data/certificates` directory. These certs can be used for testing. Here is an example command that would run a mongod with TLS correctly configured for tests:
 
 ```
 mongod \
 --auth \
---sslMode requireSSL \
---sslPEMKeyFile $(pwd)/data/certificates/server.pem \
---sslCAFile $(pwd)/data/certificates/ca.pem \
---sslWeakCertificateValidation
+--tlsMode requireTLS \
+--tlsCertificateKeyFile $(pwd)/data/certificates/server.pem \
+--tlsCAFile $(pwd)/data/certificates/ca.pem \
+--tlsAllowInvalidCertificates
 ```
 
 To run the tests with `make`, set `MONGO_GO_DRIVER_CA_FILE` to the location of the CA file used by the database, set `MONGODB_URI` to the connection string of the server, set `AUTH=auth`, and set `SSL=ssl`. For example:
@@ -169,12 +186,12 @@ AUTH=auth SSL=ssl MONGO_GO_DRIVER_CA_FILE=$(pwd)/data/certificates/ca.pem  MONGO
 ```
 
 Notes:
-- The `--sslWeakCertificateValidation` flag is required on the server for the test suite to work correctly.
+- The `--tlsAllowInvalidCertificates` flag is required on the server for the test suite to work correctly.
 - The test suite requires the auth database to be set with `?authSource=admin`, not `/admin`.
 
 ### Testing Compression
 
-The MongoDB Go Driver supports wire protocol compression using Snappy or zLib. To run tests with wire protocol compression, set `MONGO_GO_DRIVER_COMPRESSOR` to `snappy` or `zlib`.  For example:
+The MongoDB Go Driver supports wire protocol compression using Snappy, zLib, or zstd. To run tests with wire protocol compression, set `MONGO_GO_DRIVER_COMPRESSOR` to `snappy`, `zlib`, or `zstd`.  For example:
 
 ```
 MONGO_GO_DRIVER_COMPRESSOR=snappy make
@@ -183,10 +200,9 @@ MONGO_GO_DRIVER_COMPRESSOR=snappy make
 Ensure the [`--networkMessageCompressors` flag](https://docs.mongodb.com/manual/reference/program/mongod/#cmdoption-mongod-networkmessagecompressors) on mongod or mongos includes `zlib` if testing zLib compression.
 
 -------------------------
-## Feedback
+## Contribution
 
-The MongoDB Go Driver is not feature complete, so any help is appreciated. Check out the [project page](https://jira.mongodb.org/browse/GODRIVER)
-for tickets that need completing. See our [contribution guidelines](CONTRIBUTING.md) for details.
+Check out the [project page](https://jira.mongodb.org/browse/GODRIVER) for tickets that need completing. See our [contribution guidelines](CONTRIBUTING.md) for details.
 
 -------------------------
 ## Continuous Integration

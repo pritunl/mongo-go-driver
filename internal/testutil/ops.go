@@ -12,10 +12,10 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/require"
+	"github.com/pritunl/mongo-go-driver/mongo/description"
 	"github.com/pritunl/mongo-go-driver/mongo/writeconcern"
 	"github.com/pritunl/mongo-go-driver/x/bsonx/bsoncore"
 	"github.com/pritunl/mongo-go-driver/x/mongo/driver"
-	"github.com/pritunl/mongo-go-driver/x/mongo/driver/description"
 	"github.com/pritunl/mongo-go-driver/x/mongo/driver/operation"
 	"github.com/pritunl/mongo-go-driver/x/mongo/driver/topology"
 )

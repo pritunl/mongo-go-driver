@@ -13,9 +13,9 @@ import (
 
 	"flag"
 
+	"github.com/pritunl/mongo-go-driver/mongo/description"
 	"github.com/pritunl/mongo-go-driver/x/bsonx/bsoncore"
 	"github.com/pritunl/mongo-go-driver/x/mongo/driver/connstring"
-	"github.com/pritunl/mongo-go-driver/x/mongo/driver/description"
 	"github.com/pritunl/mongo-go-driver/x/mongo/driver/operation"
 	"github.com/pritunl/mongo-go-driver/x/mongo/driver/topology"
 )
@@ -31,7 +31,7 @@ func main() {
 		log.Fatalf("uri flag must have a value")
 	}
 
-	cs, err := connstring.Parse(*uri)
+	cs, err := connstring.ParseAndValidate(*uri)
 	if err != nil {
 		log.Fatal(err)
 	}

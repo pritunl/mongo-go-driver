@@ -14,12 +14,12 @@ import (
 
 	"github.com/pritunl/mongo-go-driver/bson/bsontype"
 	"github.com/pritunl/mongo-go-driver/event"
+	"github.com/pritunl/mongo-go-driver/mongo/description"
 	"github.com/pritunl/mongo-go-driver/mongo/readconcern"
 	"github.com/pritunl/mongo-go-driver/mongo/readpref"
 	"github.com/pritunl/mongo-go-driver/mongo/writeconcern"
 	"github.com/pritunl/mongo-go-driver/x/bsonx/bsoncore"
 	"github.com/pritunl/mongo-go-driver/x/mongo/driver"
-	"github.com/pritunl/mongo-go-driver/x/mongo/driver/description"
 	"github.com/pritunl/mongo-go-driver/x/mongo/driver/session"
 )
 
@@ -44,6 +44,7 @@ type Aggregate struct {
 	retry                    *driver.RetryMode
 	selector                 description.ServerSelector
 	writeConcern             *writeconcern.WriteConcern
+	crypt                    *driver.Crypt
 
 	result driver.CursorResponse
 }
@@ -68,7 +69,7 @@ func (a *Aggregate) ResultCursorResponse() driver.CursorResponse {
 	return a.result
 }
 
-func (a *Aggregate) processResponse(response bsoncore.Document, srvr driver.Server, desc description.Server) error {
+func (a *Aggregate) processResponse(response bsoncore.Document, srvr driver.Server, desc description.Server, currIndex int) error {
 	var err error
 
 	a.result, err = driver.NewCursorResponse(response, srvr, desc)
@@ -97,6 +98,7 @@ func (a *Aggregate) Execute(ctx context.Context) error {
 		RetryMode:                      a.retry,
 		Selector:                       a.selector,
 		WriteConcern:                   a.writeConcern,
+		Crypt:                          a.crypt,
 		MinimumWriteConcernWireVersion: 5,
 	}.Execute(ctx, nil)
 
@@ -339,5 +341,15 @@ func (a *Aggregate) Retry(retry driver.RetryMode) *Aggregate {
 	}
 
 	a.retry = &retry
+	return a
+}
+
+// Crypt sets the Crypt object to use for automatic encryption and decryption.
+func (a *Aggregate) Crypt(crypt *driver.Crypt) *Aggregate {
+	if a == nil {
+		a = new(Aggregate)
+	}
+
+	a.crypt = crypt
 	return a
 }

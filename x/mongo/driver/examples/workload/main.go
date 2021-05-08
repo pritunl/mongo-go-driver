@@ -19,11 +19,11 @@ import (
 	"strings"
 	"time"
 
+	"github.com/pritunl/mongo-go-driver/mongo/description"
 	"github.com/pritunl/mongo-go-driver/mongo/readpref"
 	"github.com/pritunl/mongo-go-driver/x/bsonx/bsoncore"
 	"github.com/pritunl/mongo-go-driver/x/mongo/driver"
 	"github.com/pritunl/mongo-go-driver/x/mongo/driver/connstring"
-	"github.com/pritunl/mongo-go-driver/x/mongo/driver/description"
 	"github.com/pritunl/mongo-go-driver/x/mongo/driver/operation"
 	"github.com/pritunl/mongo-go-driver/x/mongo/driver/topology"
 )
@@ -40,7 +40,7 @@ func main() {
 	sig := make(chan os.Signal, 1)
 	signal.Notify(sig, os.Interrupt)
 
-	cs, err := connstring.Parse("mongodb://localhost:27017/")
+	cs, err := connstring.ParseAndValidate("mongodb://localhost:27017/")
 	if err != nil {
 		log.Fatalf("unable to parse connection string: %v", err)
 	}

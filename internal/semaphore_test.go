@@ -11,8 +11,8 @@ import (
 	"sync"
 	"testing"
 
-	. "github.com/pritunl/mongo-go-driver/internal"
 	"github.com/stretchr/testify/require"
+	. "github.com/pritunl/mongo-go-driver/internal"
 )
 
 func TestSemaphore_Wait(t *testing.T) {

@@ -13,8 +13,8 @@ import (
 	"time"
 
 	"github.com/pritunl/mongo-go-driver/bson/bsontype"
+	"github.com/pritunl/mongo-go-driver/mongo/description"
 	"github.com/pritunl/mongo-go-driver/x/bsonx/bsoncore"
-	"github.com/pritunl/mongo-go-driver/x/mongo/driver/description"
 	"github.com/pritunl/mongo-go-driver/x/mongo/driver/wiremessage"
 )
 
@@ -55,7 +55,7 @@ func (op Operation) legacyFind(ctx context.Context, dst []byte, srvr Server, con
 	}
 
 	if op.ProcessResponseFn != nil {
-		return op.ProcessResponseFn(finishedInfo.response, srvr, desc.Server)
+		return op.ProcessResponseFn(finishedInfo.response, srvr, desc.Server, 0)
 	}
 	return nil
 }
@@ -225,7 +225,7 @@ func (op Operation) legacyGetMore(ctx context.Context, dst []byte, srvr Server, 
 	}
 
 	if op.ProcessResponseFn != nil {
-		return op.ProcessResponseFn(finishedInfo.response, srvr, desc.Server)
+		return op.ProcessResponseFn(finishedInfo.response, srvr, desc.Server, 0)
 	}
 	return nil
 }
@@ -297,7 +297,7 @@ func (op Operation) legacyKillCursors(ctx context.Context, dst []byte, srvr Serv
 	if err != nil {
 		err = Error{Message: err.Error(), Labels: []string{TransientTransactionError, NetworkError}}
 		if ep, ok := srvr.(ErrorProcessor); ok {
-			ep.ProcessError(err)
+			_ = ep.ProcessError(err, conn)
 		}
 
 		finishedInfo.cmdErr = err
@@ -307,7 +307,7 @@ func (op Operation) legacyKillCursors(ctx context.Context, dst []byte, srvr Serv
 
 	ridx, response := bsoncore.AppendDocumentStart(nil)
 	response = bsoncore.AppendInt32Element(response, "ok", 1)
-	response = bsoncore.AppendArrayElement(response, "cursorsKilled", startedInfo.cmd.Lookup("cursors").Array())
+	response = bsoncore.AppendArrayElement(response, "cursorsUnknown", startedInfo.cmd.Lookup("cursors").Array())
 	response, _ = bsoncore.AppendDocumentEnd(response, ridx)
 
 	finishedInfo.response = response
@@ -339,7 +339,7 @@ func (op Operation) createLegacyKillCursorsWiremessage(dst []byte, desc descript
 	}
 
 	var collName string
-	var cursors bsoncore.Document
+	var cursors bsoncore.Array
 	for _, elem := range cmdElems {
 		switch elem.Key() {
 		case "killCursors":
@@ -393,7 +393,7 @@ func (op Operation) legacyListCollections(ctx context.Context, dst []byte, srvr 
 	}
 
 	if op.ProcessResponseFn != nil {
-		return op.ProcessResponseFn(finishedInfo.response, srvr, desc.Server)
+		return op.ProcessResponseFn(finishedInfo.response, srvr, desc.Server, 0)
 	}
 	return nil
 }
@@ -438,12 +438,17 @@ func (op Operation) createLegacyListCollectionsWiremessage(dst []byte, desc desc
 		optsElems = bsoncore.AppendDocumentElement(optsElems, "$readPreference", rp)
 	}
 
+	var batchSize int32
+	if val, ok := cmdDoc.Lookup("cursor", "batchSize").AsInt32OK(); ok {
+		batchSize = val
+	}
+
 	var wmIdx int32
 	wmIdx, dst = wiremessage.AppendHeaderStart(dst, info.requestID, 0, wiremessage.OpQuery)
 	dst = wiremessage.AppendQueryFlags(dst, op.slaveOK(desc))
 	dst = wiremessage.AppendQueryFullCollectionName(dst, op.getFullCollectionName(listCollectionsNamespace))
 	dst = wiremessage.AppendQueryNumberToSkip(dst, 0)
-	dst = wiremessage.AppendQueryNumberToReturn(dst, 0)
+	dst = wiremessage.AppendQueryNumberToReturn(dst, batchSize)
 	dst = op.appendLegacyQueryDocument(dst, filter, optsElems)
 	// leave out returnFieldsSelector because it is optional
 
@@ -520,7 +525,7 @@ func (op Operation) legacyListIndexes(ctx context.Context, dst []byte, srvr Serv
 	}
 
 	if op.ProcessResponseFn != nil {
-		return op.ProcessResponseFn(finishedInfo.response, srvr, desc.Server)
+		return op.ProcessResponseFn(finishedInfo.response, srvr, desc.Server, 0)
 	}
 	return nil
 }
@@ -635,7 +640,7 @@ func (op Operation) appendLegacyQueryDocument(dst []byte, filter bsoncore.Docume
 func (op Operation) roundTripLegacyCursor(ctx context.Context, wm []byte, srvr Server, conn Connection, collName, identifier string) (bsoncore.Document, error) {
 	wm, err := op.roundTripLegacy(ctx, conn, wm)
 	if ep, ok := srvr.(ErrorProcessor); ok {
-		ep.ProcessError(err)
+		_ = ep.ProcessError(err, conn)
 	}
 	if err != nil {
 		return nil, err
@@ -648,12 +653,12 @@ func (op Operation) roundTripLegacyCursor(ctx context.Context, wm []byte, srvr S
 func (op Operation) roundTripLegacy(ctx context.Context, conn Connection, wm []byte) ([]byte, error) {
 	err := conn.WriteWireMessage(ctx, wm)
 	if err != nil {
-		return nil, Error{Message: err.Error(), Labels: []string{TransientTransactionError, NetworkError}}
+		return nil, Error{Message: err.Error(), Labels: []string{TransientTransactionError, NetworkError}, Wrapped: err}
 	}
 
 	wm, err = conn.ReadWireMessage(ctx, wm[:0])
 	if err != nil {
-		err = Error{Message: err.Error(), Labels: []string{TransientTransactionError, NetworkError}}
+		err = Error{Message: err.Error(), Labels: []string{TransientTransactionError, NetworkError}, Wrapped: err}
 	}
 	return wm, err
 }

@@ -11,7 +11,8 @@ import (
 	"time"
 
 	"github.com/kr/pretty"
-	"github.com/pritunl/mongo-go-driver/x/mongo/driver/address"
+	"github.com/pritunl/mongo-go-driver/bson/primitive"
+	"github.com/pritunl/mongo-go-driver/mongo/address"
 	"github.com/pritunl/mongo-go-driver/x/mongo/driver/topology"
 )
 
@@ -19,12 +20,8 @@ func main() {
 	s, err := topology.ConnectServer(
 		address.Address("localhost:27017"),
 		nil,
+		primitive.NewObjectID(),
 		topology.WithHeartbeatInterval(func(time.Duration) time.Duration { return 2 * time.Second }),
-		topology.WithConnectionOptions(
-			func(opts ...topology.ConnectionOption) []topology.ConnectionOption {
-				return append(opts, topology.WithAppName(func(string) string { return "server monitoring test" }))
-			},
-		),
 	)
 	if err != nil {
 		log.Fatalf("could not start server: %v", err)

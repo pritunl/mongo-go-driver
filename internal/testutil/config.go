@@ -19,10 +19,12 @@ import (
 
 	"github.com/stretchr/testify/require"
 	"github.com/pritunl/mongo-go-driver/event"
+	"github.com/pritunl/mongo-go-driver/mongo/description"
 	"github.com/pritunl/mongo-go-driver/x/bsonx/bsoncore"
 	"github.com/pritunl/mongo-go-driver/x/mongo/driver/connstring"
-	"github.com/pritunl/mongo-go-driver/x/mongo/driver/description"
+	"github.com/pritunl/mongo-go-driver/x/mongo/driver/ocsp"
 	"github.com/pritunl/mongo-go-driver/x/mongo/driver/operation"
+	"github.com/pritunl/mongo-go-driver/x/mongo/driver/session"
 	"github.com/pritunl/mongo-go-driver/x/mongo/driver/topology"
 )
 
@@ -30,9 +32,11 @@ var connectionString connstring.ConnString
 var connectionStringOnce sync.Once
 var connectionStringErr error
 var liveTopology *topology.Topology
+var liveSessionPool *session.Pool
 var liveTopologyOnce sync.Once
 var liveTopologyErr error
 var monitoredTopology *topology.Topology
+var monitoredSessionPool *session.Pool
 var monitoredTopologyOnce sync.Once
 var monitoredTopologyErr error
 
@@ -91,6 +95,9 @@ func MonitoredTopology(t *testing.T, dbName string, monitor *event.CommandMonito
 						topology.WithMonitor(func(*event.CommandMonitor) *event.CommandMonitor {
 							return monitor
 						}),
+						topology.WithOCSPCache(func(ocsp.Cache) ocsp.Cache {
+							return ocsp.NewCache()
+						}),
 					)
 				}),
 			)
@@ -126,6 +133,9 @@ func GlobalMonitoredTopology(t *testing.T, monitor *event.CommandMonitor) *topol
 						topology.WithMonitor(func(*event.CommandMonitor) *event.CommandMonitor {
 							return monitor
 						}),
+						topology.WithOCSPCache(func(ocsp.Cache) ocsp.Cache {
+							return ocsp.NewCache()
+						}),
 					)
 				}),
 			)
@@ -144,6 +154,10 @@ func GlobalMonitoredTopology(t *testing.T, monitor *event.CommandMonitor) *topol
 				Database(DBName(t)).ServerSelector(description.WriteSelector()).Deployment(monitoredTopology).Execute(context.Background())
 
 			require.NoError(t, err)
+
+			sub, err := monitoredTopology.Subscribe()
+			require.NoError(t, err)
+			monitoredSessionPool = session.NewPool(sub.Updates)
 		}
 	})
 
@@ -154,12 +168,35 @@ func GlobalMonitoredTopology(t *testing.T, monitor *event.CommandMonitor) *topol
 	return monitoredTopology
 }
 
+// GlobalMonitoredSessionPool returns the globally configured session pool.
+// Must be called after GlobalMonitoredTopology()
+func GlobalMonitoredSessionPool() *session.Pool {
+	return monitoredSessionPool
+}
+
 // Topology gets the globally configured topology.
 func Topology(t *testing.T) *topology.Topology {
 	cs := ConnString(t)
+	opts := []topology.Option{
+		topology.WithConnString(func(connstring.ConnString) connstring.ConnString { return cs }),
+		topology.WithServerOptions(func(opts ...topology.ServerOption) []topology.ServerOption {
+			return append(
+				opts,
+				topology.WithConnectionOptions(func(opts ...topology.ConnectionOption) []topology.ConnectionOption {
+					return append(
+						opts,
+						topology.WithOCSPCache(func(ocsp.Cache) ocsp.Cache {
+							return ocsp.NewCache()
+						}),
+					)
+				}),
+			)
+		}),
+	}
+
 	liveTopologyOnce.Do(func() {
 		var err error
-		liveTopology, err = topology.New(topology.WithConnString(func(connstring.ConnString) connstring.ConnString { return cs }))
+		liveTopology, err = topology.New(opts...)
 		if err != nil {
 			liveTopologyErr = err
 		} else {
@@ -168,6 +205,10 @@ func Topology(t *testing.T) *topology.Topology {
 			err = operation.NewCommand(bsoncore.BuildDocument(nil, bsoncore.AppendInt32Element(nil, "dropDatabase", 1))).
 				Database(DBName(t)).ServerSelector(description.WriteSelector()).Deployment(liveTopology).Execute(context.Background())
 			require.NoError(t, err)
+
+			sub, err := liveTopology.Subscribe()
+			require.NoError(t, err)
+			liveSessionPool = session.NewPool(sub.Updates)
 		}
 	})
 
@@ -178,10 +219,32 @@ func Topology(t *testing.T) *topology.Topology {
 	return liveTopology
 }
 
+// SessionPool gets the globally configured session pool. Must be called after Topology().
+func SessionPool() *session.Pool {
+	return liveSessionPool
+}
+
 // TopologyWithConnString takes a connection string and returns a connected
 // topology, or else bails out of testing
 func TopologyWithConnString(t *testing.T, cs connstring.ConnString) *topology.Topology {
-	topology, err := topology.New(topology.WithConnString(func(connstring.ConnString) connstring.ConnString { return cs }))
+	opts := []topology.Option{
+		topology.WithConnString(func(connstring.ConnString) connstring.ConnString { return cs }),
+		topology.WithServerOptions(func(opts ...topology.ServerOption) []topology.ServerOption {
+			return append(
+				opts,
+				topology.WithConnectionOptions(func(opts ...topology.ConnectionOption) []topology.ConnectionOption {
+					return append(
+						opts,
+						topology.WithOCSPCache(func(ocsp.Cache) ocsp.Cache {
+							return ocsp.NewCache()
+						}),
+					)
+				}),
+			)
+		}),
+	}
+
+	topology, err := topology.New(opts...)
 	if err != nil {
 		t.Fatal("Could not construct topology")
 	}
@@ -214,7 +277,7 @@ func ConnString(t *testing.T) connstring.ConnString {
 		mongodbURI = AddCompressorToUri(mongodbURI)
 
 		var err error
-		connectionString, err = connstring.Parse(mongodbURI)
+		connectionString, err = connstring.ParseAndValidate(mongodbURI)
 		if err != nil {
 			connectionStringErr = err
 		}
@@ -234,7 +297,7 @@ func GetConnString() (connstring.ConnString, error) {
 
 	mongodbURI = AddTLSConfigToURI(mongodbURI)
 
-	cs, err := connstring.Parse(mongodbURI)
+	cs, err := connstring.ParseAndValidate(mongodbURI)
 	if err != nil {
 		return connstring.ConnString{}, err
 	}

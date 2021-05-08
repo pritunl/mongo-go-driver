@@ -97,8 +97,33 @@ func TestJsonScannerValidInputs(t *testing.T) {
 		},
 		{
 			desc:   "valid string--escaped characters",
-			input:  `"\"\\\'\/\b\f\n\r\t"`,
-			tokens: []jsonToken{{t: jttString, v: "\"\\'/\b\f\n\r\t"}},
+			input:  `"\"\\\/\b\f\n\r\t"`,
+			tokens: []jsonToken{{t: jttString, v: "\"\\/\b\f\n\r\t"}},
+		},
+		{
+			desc:   "valid string--surrogate pair",
+			input:  `"abc \uD834\uDd1e 123"`,
+			tokens: []jsonToken{{t: jttString, v: "abc 𝄞 123"}},
+		},
+		{
+			desc:   "valid string--high surrogate at end of string",
+			input:  `"abc \uD834"`,
+			tokens: []jsonToken{{t: jttString, v: "abc �"}},
+		},
+		{
+			desc:   "valid string--low surrogate at end of string",
+			input:  `"abc \uDD1E"`,
+			tokens: []jsonToken{{t: jttString, v: "abc �"}},
+		},
+		{
+			desc:   "valid string--high surrogate with non-surrogate Unicode value",
+			input:  `"abc \uDD1E\u00BF"`,
+			tokens: []jsonToken{{t: jttString, v: "abc �¿"}},
+		},
+		{
+			desc:   "valid string--high surrogate with non-Unicode escape sequence",
+			input:  `"abc \uDD1E\t"`,
+			tokens: []jsonToken{{t: jttString, v: "abc �\t"}},
 		},
 		{
 			desc: "valid literal--true", input: "true",
@@ -275,32 +300,34 @@ func TestJsonScannerValidInputs(t *testing.T) {
 	}
 
 	for _, tc := range cases {
-		js := &jsonScanner{r: strings.NewReader(tc.input)}
+		t.Run(tc.desc, func(t *testing.T) {
+			js := &jsonScanner{r: strings.NewReader(tc.input)}
 
-		for _, token := range tc.tokens {
+			for _, token := range tc.tokens {
+				c, err := js.nextToken()
+				expectNoError(t, err, tc.desc)
+				jttDiff(t, token.t, c.t, tc.desc)
+				jtvDiff(t, token.v, c.v, tc.desc)
+			}
+
 			c, err := js.nextToken()
-			jttDiff(t, token.t, c.t, tc.desc)
-			jtvDiff(t, token.v, c.v, tc.desc)
-			expectNoError(t, err, tc.desc)
-		}
+			noerr(t, err)
+			jttDiff(t, jttEOF, c.t, tc.desc)
 
-		c, err := js.nextToken()
-		jttDiff(t, jttEOF, c.t, tc.desc)
-		noerr(t, err)
+			// testing early EOF reading
+			js = &jsonScanner{r: iotest.DataErrReader(strings.NewReader(tc.input))}
 
-		// testing early EOF reading
-		js = &jsonScanner{r: iotest.DataErrReader(strings.NewReader(tc.input))}
+			for _, token := range tc.tokens {
+				c, err := js.nextToken()
+				expectNoError(t, err, tc.desc)
+				jttDiff(t, token.t, c.t, tc.desc)
+				jtvDiff(t, token.v, c.v, tc.desc)
+			}
 
-		for _, token := range tc.tokens {
-			c, err := js.nextToken()
-			jttDiff(t, token.t, c.t, tc.desc)
-			jtvDiff(t, token.v, c.v, tc.desc)
-			expectNoError(t, err, tc.desc)
-		}
-
-		c, err = js.nextToken()
-		jttDiff(t, jttEOF, c.t, tc.desc)
-		noerr(t, err)
+			c, err = js.nextToken()
+			noerr(t, err)
+			jttDiff(t, jttEOF, c.t, tc.desc)
+		})
 	}
 }
 
@@ -309,6 +336,7 @@ func TestJsonScannerInvalidInputs(t *testing.T) {
 		{desc: "missing quotation", input: `"missing`},
 		{desc: "invalid escape character--first character", input: `"\invalid"`},
 		{desc: "invalid escape character--middle", input: `"i\nv\alid"`},
+		{desc: "invalid escape character--single quote", input: `"f\'oo"`},
 		{desc: "invalid literal--trueee", input: "trueee"},
 		{desc: "invalid literal--tire", input: "tire"},
 		{desc: "invalid literal--nulll", input: "nulll"},
@@ -337,10 +365,12 @@ func TestJsonScannerInvalidInputs(t *testing.T) {
 	}
 
 	for _, tc := range cases {
-		js := &jsonScanner{r: strings.NewReader(tc.input)}
+		t.Run(tc.desc, func(t *testing.T) {
+			js := &jsonScanner{r: strings.NewReader(tc.input)}
 
-		c, err := js.nextToken()
-		expectNilToken(t, c, tc.desc)
-		expectError(t, err, tc.desc)
+			c, err := js.nextToken()
+			expectNilToken(t, c, tc.desc)
+			expectError(t, err, tc.desc)
+		})
 	}
 }

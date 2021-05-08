@@ -9,9 +9,9 @@ package connstring_test
 import (
 	"fmt"
 	"testing"
-
 	"time"
 
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/pritunl/mongo-go-driver/x/mongo/driver/connstring"
 )
@@ -30,7 +30,7 @@ func TestAppName(t *testing.T) {
 	for _, test := range tests {
 		s := fmt.Sprintf("mongodb://localhost/?%s", test.s)
 		t.Run(s, func(t *testing.T) {
-			cs, err := connstring.Parse(s)
+			cs, err := connstring.ParseAndValidate(s)
 			if test.err {
 				require.Error(t, err)
 			} else {
@@ -56,7 +56,7 @@ func TestAuthMechanism(t *testing.T) {
 	for _, test := range tests {
 		s := fmt.Sprintf("mongodb://user:pass@localhost/?%s", test.s)
 		t.Run(s, func(t *testing.T) {
-			cs, err := connstring.Parse(s)
+			cs, err := connstring.ParseAndValidate(s)
 			if test.err {
 				require.Error(t, err)
 			} else {
@@ -81,7 +81,7 @@ func TestAuthSource(t *testing.T) {
 	for _, test := range tests {
 		s := fmt.Sprintf("mongodb://user:pass@localhost/%s", test.s)
 		t.Run(s, func(t *testing.T) {
-			cs, err := connstring.Parse(s)
+			cs, err := connstring.ParseAndValidate(s)
 			if test.err {
 				require.Error(t, err)
 			} else {
@@ -102,18 +102,59 @@ func TestConnect(t *testing.T) {
 		{s: "connect=AUTOMATIC", expected: connstring.AutoConnect},
 		{s: "connect=direct", expected: connstring.SingleConnect},
 		{s: "connect=blah", err: true},
+		// Combinations of connect and directConnection where connect is set first - conflicting combinations must
+		// error.
+		{s: "connect=automatic&directConnection=true", err: true},
+		{s: "connect=automatic&directConnection=false", expected: connstring.AutoConnect},
+		{s: "connect=direct&directConnection=true", expected: connstring.SingleConnect},
+		{s: "connect=direct&directConnection=false", err: true},
+		// Combinations of connect and directConnection where directConnection is set first.
+		{s: "directConnection=true&connect=automatic", err: true},
+		{s: "directConnection=false&connect=automatic", expected: connstring.AutoConnect},
+		{s: "directConnection=true&connect=direct", expected: connstring.SingleConnect},
+		{s: "directConnection=false&connect=direct", err: true},
 	}
 
 	for _, test := range tests {
 		s := fmt.Sprintf("mongodb://localhost/?%s", test.s)
 		t.Run(s, func(t *testing.T) {
-			cs, err := connstring.Parse(s)
+			cs, err := connstring.ParseAndValidate(s)
 			if test.err {
 				require.Error(t, err)
 			} else {
 				require.NoError(t, err)
 				require.Equal(t, test.expected, cs.Connect)
 			}
+		})
+	}
+}
+
+func TestDirectConnection(t *testing.T) {
+	testCases := []struct {
+		s        string
+		expected bool
+		err      bool
+	}{
+		{"directConnection=true", true, false},
+		{"directConnection=false", false, false},
+		{"directConnection=TRUE", true, false},
+		{"directConnection=FALSE", false, false},
+		{"directConnection=blah", false, true},
+	}
+
+	for _, tc := range testCases {
+		s := fmt.Sprintf("mongodb://localhost/?%s", tc.s)
+		t.Run(s, func(t *testing.T) {
+			cs, err := connstring.ParseAndValidate(s)
+			if tc.err {
+				assert.NotNil(t, err, "expected error, got nil")
+				return
+			}
+
+			assert.Nil(t, err, "expected no error, got %v", err)
+			assert.Equal(t, tc.expected, cs.DirectConnection, "expected DirectConnection value %v, got %v", tc.expected,
+				cs.DirectConnection)
+			assert.True(t, cs.DirectConnectionSet, "expected DirectConnectionSet to be true, got false")
 		})
 	}
 }
@@ -133,7 +174,7 @@ func TestConnectTimeout(t *testing.T) {
 	for _, test := range tests {
 		s := fmt.Sprintf("mongodb://localhost/?%s", test.s)
 		t.Run(s, func(t *testing.T) {
-			cs, err := connstring.Parse(s)
+			cs, err := connstring.ParseAndValidate(s)
 			if test.err {
 				require.Error(t, err)
 			} else {
@@ -160,7 +201,7 @@ func TestHeartbeatInterval(t *testing.T) {
 	for _, test := range tests {
 		s := fmt.Sprintf("mongodb://localhost/?%s", test.s)
 		t.Run(s, func(t *testing.T) {
-			cs, err := connstring.Parse(s)
+			cs, err := connstring.ParseAndValidate(s)
 			if test.err {
 				require.Error(t, err)
 			} else {
@@ -187,7 +228,7 @@ func TestLocalThreshold(t *testing.T) {
 	for _, test := range tests {
 		s := fmt.Sprintf("mongodb://localhost/?%s", test.s)
 		t.Run(s, func(t *testing.T) {
-			cs, err := connstring.Parse(s)
+			cs, err := connstring.ParseAndValidate(s)
 			if test.err {
 				require.Error(t, err)
 			} else {
@@ -213,7 +254,7 @@ func TestMaxConnIdleTime(t *testing.T) {
 	for _, test := range tests {
 		s := fmt.Sprintf("mongodb://localhost/?%s", test.s)
 		t.Run(s, func(t *testing.T) {
-			cs, err := connstring.Parse(s)
+			cs, err := connstring.ParseAndValidate(s)
 			if test.err {
 				require.Error(t, err)
 			} else {
@@ -239,7 +280,7 @@ func TestMaxPoolSize(t *testing.T) {
 	for _, test := range tests {
 		s := fmt.Sprintf("mongodb://localhost/?%s", test.s)
 		t.Run(s, func(t *testing.T) {
-			cs, err := connstring.Parse(s)
+			cs, err := connstring.ParseAndValidate(s)
 			if test.err {
 				require.Error(t, err)
 			} else {
@@ -266,7 +307,7 @@ func TestMinPoolSize(t *testing.T) {
 	for _, test := range tests {
 		s := fmt.Sprintf("mongodb://localhost/?%s", test.s)
 		t.Run(s, func(t *testing.T) {
-			cs, err := connstring.Parse(s)
+			cs, err := connstring.ParseAndValidate(s)
 			if test.err {
 				require.Error(t, err)
 			} else {
@@ -292,7 +333,7 @@ func TestReadPreference(t *testing.T) {
 	for _, test := range tests {
 		s := fmt.Sprintf("mongodb://localhost/?%s", test.s)
 		t.Run(s, func(t *testing.T) {
-			cs, err := connstring.Parse(s)
+			cs, err := connstring.ParseAndValidate(s)
 			if test.err {
 				require.Error(t, err)
 			} else {
@@ -321,7 +362,7 @@ func TestReadPreferenceTags(t *testing.T) {
 	for _, test := range tests {
 		s := fmt.Sprintf("mongodb://localhost/?%s", test.s)
 		t.Run(s, func(t *testing.T) {
-			cs, err := connstring.Parse(s)
+			cs, err := connstring.ParseAndValidate(s)
 			if test.err {
 				require.Error(t, err)
 			} else {
@@ -346,7 +387,7 @@ func TestMaxStaleness(t *testing.T) {
 	for _, test := range tests {
 		s := fmt.Sprintf("mongodb://localhost/?%s", test.s)
 		t.Run(s, func(t *testing.T) {
-			cs, err := connstring.Parse(s)
+			cs, err := connstring.ParseAndValidate(s)
 			if test.err {
 				require.Error(t, err)
 			} else {
@@ -370,7 +411,7 @@ func TestReplicaSet(t *testing.T) {
 	for _, test := range tests {
 		s := fmt.Sprintf("mongodb://localhost/?%s", test.s)
 		t.Run(s, func(t *testing.T) {
-			cs, err := connstring.Parse(s)
+			cs, err := connstring.ParseAndValidate(s)
 			if test.err {
 				require.Error(t, err)
 			} else {
@@ -389,19 +430,46 @@ func TestRetryWrites(t *testing.T) {
 	}{
 		{s: "retryWrites=true", expected: true},
 		{s: "retryWrites=false", expected: false},
+		{s: "retryWrites=foobar", expected: false, err: true},
 	}
 
 	for _, test := range tests {
 		s := fmt.Sprintf("mongodb://localhost/?%s", test.s)
 		t.Run(s, func(t *testing.T) {
-			cs, err := connstring.Parse(s)
+			cs, err := connstring.ParseAndValidate(s)
 			if test.err {
 				require.Error(t, err)
-			} else {
-				require.NoError(t, err)
-				require.Equal(t, test.expected, cs.RetryWrites)
-				require.Equal(t, true, cs.RetryWritesSet)
+				return
 			}
+			require.NoError(t, err)
+			require.Equal(t, test.expected, cs.RetryWrites)
+			require.True(t, cs.RetryWritesSet)
+		})
+	}
+}
+
+func TestRetryReads(t *testing.T) {
+	tests := []struct {
+		s        string
+		expected bool
+		err      bool
+	}{
+		{s: "retryReads=true", expected: true},
+		{s: "retryReads=false", expected: false},
+		{s: "retryReads=foobar", expected: false, err: true},
+	}
+
+	for _, test := range tests {
+		s := fmt.Sprintf("mongodb://localhost/?%s", test.s)
+		t.Run(s, func(t *testing.T) {
+			cs, err := connstring.ParseAndValidate(s)
+			if test.err {
+				require.Error(t, err)
+				return
+			}
+			require.NoError(t, err)
+			require.Equal(t, test.expected, cs.RetryReads)
+			require.True(t, cs.RetryReadsSet)
 		})
 	}
 }
@@ -409,7 +477,7 @@ func TestRetryWrites(t *testing.T) {
 func TestScheme(t *testing.T) {
 	// Can't unit test 'mongodb+srv' because that requires networking.  Tested
 	// in x/mongo/driver/topology/initial_dns_seedlist_discovery_test.go
-	cs, err := connstring.Parse("mongodb://localhost/")
+	cs, err := connstring.ParseAndValidate("mongodb://localhost/")
 	require.NoError(t, err)
 	require.Equal(t, cs.Scheme, "mongodb")
 	require.Equal(t, cs.Scheme, connstring.SchemeMongoDB)
@@ -430,7 +498,7 @@ func TestServerSelectionTimeout(t *testing.T) {
 	for _, test := range tests {
 		s := fmt.Sprintf("mongodb://localhost/?%s", test.s)
 		t.Run(s, func(t *testing.T) {
-			cs, err := connstring.Parse(s)
+			cs, err := connstring.ParseAndValidate(s)
 			if test.err {
 				require.Error(t, err)
 			} else {
@@ -457,7 +525,7 @@ func TestSocketTimeout(t *testing.T) {
 	for _, test := range tests {
 		s := fmt.Sprintf("mongodb://localhost/?%s", test.s)
 		t.Run(s, func(t *testing.T) {
-			cs, err := connstring.Parse(s)
+			cs, err := connstring.ParseAndValidate(s)
 			if test.err {
 				require.Error(t, err)
 			} else {
@@ -484,7 +552,7 @@ func TestWTimeout(t *testing.T) {
 	for _, test := range tests {
 		s := fmt.Sprintf("mongodb://localhost/?%s", test.s)
 		t.Run(s, func(t *testing.T) {
-			cs, err := connstring.Parse(s)
+			cs, err := connstring.ParseAndValidate(s)
 			if test.err {
 				require.Error(t, err)
 			} else {
@@ -502,25 +570,34 @@ func TestCompressionOptions(t *testing.T) {
 		uriOptions  string
 		compressors []string
 		zlibLevel   int
+		zstdLevel   int
 		err         bool
 	}{
 		{name: "SingleCompressor", uriOptions: "compressors=zlib", compressors: []string{"zlib"}},
-		{name: "BothCompressors", uriOptions: "compressors=snappy,zlib", compressors: []string{"snappy", "zlib"}},
+		{name: "MultiCompressors", uriOptions: "compressors=snappy,zlib", compressors: []string{"snappy", "zlib"}},
 		{name: "ZlibWithLevel", uriOptions: "compressors=zlib&zlibCompressionLevel=7", compressors: []string{"zlib"}, zlibLevel: 7},
 		{name: "DefaultZlibLevel", uriOptions: "compressors=zlib&zlibCompressionLevel=-1", compressors: []string{"zlib"}, zlibLevel: 6},
 		{name: "InvalidZlibLevel", uriOptions: "compressors=zlib&zlibCompressionLevel=-2", compressors: []string{"zlib"}, err: true},
+		{name: "ZstdWithLevel", uriOptions: "compressors=zstd&zstdCompressionLevel=20", compressors: []string{"zstd"}, zstdLevel: 20},
+		{name: "DefaultZstdLevel", uriOptions: "compressors=zstd&zstdCompressionLevel=-1", compressors: []string{"zstd"}, zstdLevel: 6},
+		{name: "InvalidZstdLevel", uriOptions: "compressors=zstd&zstdCompressionLevel=30", compressors: []string{"zstd"}, err: true},
 	}
 
 	for _, tc := range tests {
 		uri := fmt.Sprintf("mongodb://localhost/?%s", tc.uriOptions)
 		t.Run(tc.name, func(t *testing.T) {
-			cs, err := connstring.Parse(uri)
+			cs, err := connstring.ParseAndValidate(uri)
 			if tc.err {
-				require.Error(t, err)
+				assert.Error(t, err)
 			} else {
 				require.NoError(t, err)
-				require.Equal(t, tc.compressors, cs.Compressors)
-				require.Equal(t, tc.zlibLevel, cs.ZlibLevel)
+				assert.Equal(t, tc.compressors, cs.Compressors)
+				if tc.zlibLevel != 0 {
+					assert.Equal(t, tc.zlibLevel, cs.ZlibLevel)
+				}
+				if tc.zstdLevel != 0 {
+					assert.Equal(t, tc.zstdLevel, cs.ZstdLevel)
+				}
 			}
 		})
 	}
