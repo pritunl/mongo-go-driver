@@ -744,9 +744,6 @@ func (dvd DefaultValueDecoders) objectIDDecodeType(dc DecodeContext, vr bsonrw.V
 		if oid, err = primitive.ObjectIDFromHex(str); err == nil {
 			break
 		}
-		if len(str) != 12 {
-			return emptyValue, fmt.Errorf("an ObjectID string must be exactly 12 bytes long (got %v)", len(str))
-		}
 		byteArr := []byte(str)
 		copy(oid[:], byteArr)
 	case bsontype.Null:
