@@ -12,15 +12,18 @@ import (
 	"fmt"
 	"reflect"
 	"testing"
+	"time"
 
 	"github.com/google/go-cmp/cmp"
-	"github.com/stretchr/testify/require"
 	"github.com/pritunl/mongo-go-driver/bson/bsoncodec"
 	"github.com/pritunl/mongo-go-driver/bson/bsonrw"
 	"github.com/pritunl/mongo-go-driver/bson/primitive"
 	"github.com/pritunl/mongo-go-driver/internal/testutil/assert"
 	"github.com/pritunl/mongo-go-driver/x/bsonx/bsoncore"
+	"github.com/stretchr/testify/require"
 )
+
+var tInt32 = reflect.TypeOf(int32(0))
 
 func TestMarshalAppendWithRegistry(t *testing.T) {
 	for _, tc := range marshalingTestCases {
@@ -299,4 +302,81 @@ func TestNullBytes(t *testing.T) {
 			})
 		}
 	})
+
+	t.Run("sub document field name", func(t *testing.T) {
+		doc := D{{"foo", D{{"foobar", D{{"a\x00", "foobar"}}}}}}
+		res, err := Marshal(doc)
+		wantErr := errors.New("BSON element key cannot contain null bytes")
+		assert.Equal(t, wantErr, err, "expected Marshal error %v, got error %v with result %q", wantErr, err, Raw(res))
+	})
+}
+
+func TestMarshalExtJSONIndent(t *testing.T) {
+	type indentTestCase struct {
+		name            string
+		val             interface{}
+		expectedExtJSON string
+	}
+
+	// expectedExtJSON must be written as below because single-quoted
+	// literal strings capture undesired code formatting tabs
+	testCases := []indentTestCase{
+		{
+			"empty val",
+			struct{}{},
+			`{}`,
+		},
+		{
+			"embedded struct",
+			struct {
+				Embedded interface{} `json:"embedded"`
+				Foo      string      `json:"foo"`
+			}{
+				Embedded: struct {
+					Name string `json:"name"`
+					Word string `json:"word"`
+				}{
+					Name: "test",
+					Word: "word",
+				},
+				Foo: "bar",
+			},
+			"{\n\t\"embedded\": {\n\t\t\"name\": \"test\",\n\t\t\"word\": \"word\"\n\t},\n\t\"foo\": \"bar\"\n}",
+		},
+		{
+			"date struct",
+			struct {
+				Foo  string    `json:"foo"`
+				Date time.Time `json:"date"`
+			}{
+				Foo:  "bar",
+				Date: time.Date(2000, time.January, 1, 12, 0, 0, 0, time.UTC),
+			},
+			"{\n\t\"foo\": \"bar\",\n\t\"date\": {\n\t\t\"$date\": {\n\t\t\t\"$numberLong\": \"946728000000\"\n\t\t}\n\t}\n}",
+		},
+		{
+			"float struct",
+			struct {
+				Foo   string  `json:"foo"`
+				Float float32 `json:"float"`
+			}{
+				Foo:   "bar",
+				Float: 3.14,
+			},
+			"{\n\t\"foo\": \"bar\",\n\t\"float\": {\n\t\t\"$numberDouble\": \"3.140000104904175\"\n\t}\n}",
+		},
+	}
+
+	for _, tc := range testCases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			extJSONBytes, err := MarshalExtJSONIndent(tc.val, true, false, "", "\t")
+			assert.Nil(t, err, "Marshal indent error: %v", err)
+
+			expectedExtJSONBytes := []byte(tc.expectedExtJSON)
+
+			assert.Equal(t, expectedExtJSONBytes, extJSONBytes, "expected:\n%s\ngot:\n%s", expectedExtJSONBytes, extJSONBytes)
+		})
+	}
 }

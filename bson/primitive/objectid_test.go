@@ -14,8 +14,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/stretchr/testify/require"
 	"github.com/pritunl/mongo-go-driver/internal/testutil/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestNew(t *testing.T) {
@@ -172,6 +172,38 @@ func TestCounterOverflow(t *testing.T) {
 	require.Equal(t, uint32(0), objectIDCounter)
 }
 
+func TestObjectID_MarshalJSONMap(t *testing.T) {
+	type mapOID struct {
+		Map map[ObjectID]string
+	}
+
+	oid := NewObjectID()
+	expectedJSON := []byte(fmt.Sprintf(`{"Map":{%q:"foo"}}`, oid.Hex()))
+	data := mapOID{
+		Map: map[ObjectID]string{oid: "foo"},
+	}
+
+	out, err := json.Marshal(&data)
+	require.NoError(t, err)
+	require.Equal(t, expectedJSON, out)
+}
+
+func TestObjectID_UnmarshalJSONMap(t *testing.T) {
+	type mapOID struct {
+		Map map[ObjectID]string
+	}
+	oid := NewObjectID()
+	mapOIDJSON := []byte(fmt.Sprintf(`{"Map":{%q:"foo"}}`, oid.Hex()))
+	expectedData := mapOID{
+		Map: map[ObjectID]string{oid: "foo"},
+	}
+
+	data := mapOID{}
+	err := json.Unmarshal(mapOIDJSON, &data)
+	require.NoError(t, err)
+	require.Equal(t, expectedData, data)
+}
+
 func TestObjectID_UnmarshalJSON(t *testing.T) {
 	oid := NewObjectID()
 
@@ -200,4 +232,21 @@ func TestObjectID_UnmarshalJSON(t *testing.T) {
 			assert.Equal(t, tc.expected, gotOid, "expected ObjectID %s, got %s", tc.expected, gotOid)
 		})
 	}
+}
+
+func TestObjectID_MarshalText(t *testing.T) {
+	oid := ObjectID{0x0, 0x1, 0x2, 0x3, 0x4, 0x5, 0x6, 0x7, 0x8, 0x9, 0xA, 0xB}
+	b, err := oid.MarshalText()
+	assert.Nil(t, err, "MarshalText error: %v", err)
+	want := "000102030405060708090a0b"
+	got := string(b)
+	assert.Equal(t, want, got, "want %v, got %v", want, got)
+}
+
+func TestObjectID_UnmarshalText(t *testing.T) {
+	var oid ObjectID
+	err := oid.UnmarshalText([]byte("000102030405060708090a0b"))
+	assert.Nil(t, err, "UnmarshalText error: %v", err)
+	want := ObjectID{0x0, 0x1, 0x2, 0x3, 0x4, 0x5, 0x6, 0x7, 0x8, 0x9, 0xA, 0xB}
+	assert.Equal(t, want, oid, "want %v, got %v", want, oid)
 }

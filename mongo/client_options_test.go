@@ -12,16 +12,17 @@ import (
 	"sync/atomic"
 	"testing"
 
-	"github.com/stretchr/testify/require"
 	"github.com/pritunl/mongo-go-driver/internal/testutil"
 	"github.com/pritunl/mongo-go-driver/mongo/options"
 	"github.com/pritunl/mongo-go-driver/x/bsonx"
+	"github.com/stretchr/testify/require"
 )
 
 func TestClientOptions_CustomDialer(t *testing.T) {
 	td := &testDialer{d: &net.Dialer{}}
 	cs := testutil.ConnString(t)
 	opts := options.Client().ApplyURI(cs.String()).SetDialer(td)
+	testutil.AddTestServerAPIVersion(opts)
 	client, err := NewClient(opts)
 	require.NoError(t, err)
 	err = client.Connect(context.Background())

@@ -10,12 +10,14 @@ import (
 	"github.com/google/go-cmp/cmp"
 	"github.com/pritunl/mongo-go-driver/bson/bsontype"
 	"github.com/pritunl/mongo-go-driver/bson/primitive"
+	"github.com/pritunl/mongo-go-driver/internal"
 	"github.com/pritunl/mongo-go-driver/internal/testutil/assert"
 	"github.com/pritunl/mongo-go-driver/mongo/address"
 	"github.com/pritunl/mongo-go-driver/mongo/description"
 	"github.com/pritunl/mongo-go-driver/mongo/readconcern"
 	"github.com/pritunl/mongo-go-driver/mongo/readpref"
 	"github.com/pritunl/mongo-go-driver/mongo/writeconcern"
+	"github.com/pritunl/mongo-go-driver/tag"
 	"github.com/pritunl/mongo-go-driver/x/bsonx/bsoncore"
 	"github.com/pritunl/mongo-go-driver/x/mongo/driver/session"
 	"github.com/pritunl/mongo-go-driver/x/mongo/driver/uuid"
@@ -129,7 +131,8 @@ func TestOperation(t *testing.T) {
 		noerr(t, err)
 		err = sessInProgressTransaction.StartTransaction(nil)
 		noerr(t, err)
-		sessInProgressTransaction.ApplyCommand(description.Server{})
+		err = sessInProgressTransaction.ApplyCommand(description.Server{})
+		noerr(t, err)
 
 		wcAck := writeconcern.New(writeconcern.WMajority())
 		wcUnack := writeconcern.New(writeconcern.W(0))
@@ -396,6 +399,25 @@ func TestOperation(t *testing.T) {
 				readpref.SecondaryPreferred(readpref.WithTags("disk", "ssd", "use", "reporting")),
 				description.RSSecondary, description.ReplicaSet, false, rpWithTags,
 			},
+			// GODRIVER-2205: Ensure empty tag sets are written as an empty document in the read
+			// preference document. Empty tag sets match any server and are used as a fallback when
+			// no other tag sets match any servers.
+			{
+				"secondaryPreferred/withTags/emptyTagSet",
+				readpref.SecondaryPreferred(readpref.WithTagSets(
+					tag.Set{{Name: "disk", Value: "ssd"}},
+					tag.Set{})),
+				description.RSSecondary,
+				description.ReplicaSet,
+				false,
+				bsoncore.NewDocumentBuilder().
+					AppendString("mode", "secondaryPreferred").
+					AppendArray("tags", bsoncore.NewArrayBuilder().
+						AppendDocument(bsoncore.NewDocumentBuilder().AppendString("disk", "ssd").Build()).
+						AppendDocument(bsoncore.NewDocumentBuilder().Build()).
+						Build()).
+					Build(),
+			},
 			{
 				"secondaryPreferred/withMaxStaleness",
 				readpref.SecondaryPreferred(readpref.WithMaxStaleness(25 * time.Second)),
@@ -427,7 +449,8 @@ func TestOperation(t *testing.T) {
 		for _, tc := range testCases {
 			tc := tc
 			t.Run(tc.name, func(t *testing.T) {
-				got, err := Operation{ReadPreference: tc.rp}.createReadPref(tc.serverKind, tc.topoKind, tc.opQuery)
+				desc := description.SelectedServer{Kind: tc.topoKind, Server: description.Server{Kind: tc.serverKind}}
+				got, err := Operation{ReadPreference: tc.rp}.createReadPref(desc, tc.opQuery)
 				if err != nil {
 					t.Fatalf("error creating read pref: %v", err)
 				}
@@ -437,28 +460,28 @@ func TestOperation(t *testing.T) {
 			})
 		}
 	})
-	t.Run("slaveOK", func(t *testing.T) {
+	t.Run("secondaryOK", func(t *testing.T) {
 		t.Run("description.SelectedServer", func(t *testing.T) {
-			want := wiremessage.SlaveOK
+			want := wiremessage.SecondaryOK
 			desc := description.SelectedServer{
 				Kind:   description.Single,
 				Server: description.Server{Kind: description.RSSecondary},
 			}
-			got := Operation{}.slaveOK(desc)
+			got := Operation{}.secondaryOK(desc)
 			if got != want {
 				t.Errorf("Did not receive expected query flags. got %v; want %v", got, want)
 			}
 		})
 		t.Run("readPreference", func(t *testing.T) {
-			want := wiremessage.SlaveOK
-			got := Operation{ReadPreference: readpref.Secondary()}.slaveOK(description.SelectedServer{})
+			want := wiremessage.SecondaryOK
+			got := Operation{ReadPreference: readpref.Secondary()}.secondaryOK(description.SelectedServer{})
 			if got != want {
 				t.Errorf("Did not receive expected query flags. got %v; want %v", got, want)
 			}
 		})
-		t.Run("not slaveOK", func(t *testing.T) {
+		t.Run("not secondaryOK", func(t *testing.T) {
 			var want wiremessage.QueryFlag
-			got := Operation{}.slaveOK(description.SelectedServer{})
+			got := Operation{}.secondaryOK(description.SelectedServer{})
 			if got != want {
 				t.Errorf("Did not receive expected query flags. got %v; want %v", got, want)
 			}
@@ -547,7 +570,7 @@ func TestOperation(t *testing.T) {
 		}
 		op := Operation{
 			CommandFn: func(dst []byte, desc description.SelectedServer) ([]byte, error) {
-				return bsoncore.AppendInt32Element(dst, "isMaster", 1), nil
+				return bsoncore.AppendInt32Element(dst, internal.LegacyHello, 1), nil
 			},
 			Database:   "admin",
 			Deployment: SingleConnectionDeployment{conn},
@@ -636,20 +659,22 @@ type mockConnection struct {
 	pReadDst []byte
 
 	// returns
-	rWriteErr  error
-	rReadWM    []byte
-	rReadErr   error
-	rDesc      description.Server
-	rCloseErr  error
-	rID        string
-	rAddr      address.Address
-	rCanStream bool
-	rStreaming bool
+	rWriteErr     error
+	rReadWM       []byte
+	rReadErr      error
+	rDesc         description.Server
+	rCloseErr     error
+	rID           string
+	rServerConnID *int32
+	rAddr         address.Address
+	rCanStream    bool
+	rStreaming    bool
 }
 
 func (m *mockConnection) Description() description.Server { return m.rDesc }
 func (m *mockConnection) Close() error                    { return m.rCloseErr }
 func (m *mockConnection) ID() string                      { return m.rID }
+func (m *mockConnection) ServerConnectionID() *int32      { return m.rServerConnID }
 func (m *mockConnection) Address() address.Address        { return m.rAddr }
 func (m *mockConnection) SupportsStreaming() bool         { return m.rCanStream }
 func (m *mockConnection) CurrentlyStreaming() bool        { return m.rStreaming }

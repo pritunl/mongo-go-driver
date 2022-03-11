@@ -12,8 +12,6 @@ import (
 	"github.com/pritunl/mongo-go-driver/bson/bsontype"
 )
 
-const validateMaxDepthDefault = 2048
-
 // ElementTypeError specifies that a method to obtain a BSON value an incorrect type was called on a bson.Value.
 //
 // TODO: rename this ValueTypeError.

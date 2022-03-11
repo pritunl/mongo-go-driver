@@ -8,6 +8,7 @@ package integration
 
 import (
 	"context"
+	"os"
 	"testing"
 	"time"
 
@@ -27,8 +28,9 @@ func TestCursor(t *testing.T) {
 	defer mt.Close()
 	cappedCollectionOpts := bson.D{{"capped", true}, {"size", 64 * 1024}}
 
-	// server versions 2.6 and 3.0 use OP_GET_MORE so this works on >= 3.2
-	mt.RunOpts("cursor is killed on server", mtest.NewOptions().MinServerVersion("3.2"), func(mt *mtest.T) {
+	// Server versions 2.6 and 3.0 use OP_GET_MORE so this works on >= 3.2 and when RequireAPIVersion is false;
+	// getMore cannot be sent with RunCommand as server API options will be attached when they should not be.
+	mt.RunOpts("cursor is killed on server", mtest.NewOptions().MinServerVersion("3.2").RequireAPIVersion(false), func(mt *mtest.T) {
 		initCollection(mt, mt.Coll)
 		c, err := mt.Coll.Find(mtest.Background, bson.D{}, options.Find().SetBatchSize(2))
 		assert.Nil(mt, err, "Find error: %v", err)
@@ -46,6 +48,11 @@ func TestCursor(t *testing.T) {
 		assert.Equal(mt, int32(errorCursorNotFound), ce.Code, "expected error code %v, got %v", errorCursorNotFound, ce.Code)
 	})
 	mt.RunOpts("try next", noClientOpts, func(mt *mtest.T) {
+		// Skip tests if running against serverless, as capped collections are banned.
+		if os.Getenv("SERVERLESS") == "serverless" {
+			mt.Skip("skipping as serverless forbids capped collections")
+		}
+
 		mt.Run("existing non-empty batch", func(mt *mtest.T) {
 			// If there's already documents in the current batch, TryNext should return true without doing a getMore
 
@@ -85,6 +92,11 @@ func TestCursor(t *testing.T) {
 	})
 	mt.RunOpts("RemainingBatchLength", noClientOpts, func(mt *mtest.T) {
 		cappedMtOpts := mtest.NewOptions().CollectionCreateOptions(cappedCollectionOpts)
+		// Skip tests if running against serverless, as capped collections are banned.
+		if os.Getenv("SERVERLESS") == "serverless" {
+			mt.Skip("skipping as serverless forbids capped collections")
+		}
+
 		mt.RunOpts("first batch is non empty", cappedMtOpts, func(mt *mtest.T) {
 			// Test that the cursor reports the correct value for RemainingBatchLength at various execution points if
 			// the first batch from the server is non-empty.
@@ -216,6 +228,34 @@ func TestCursor(t *testing.T) {
 			assert.True(mt, ok, "expected mongo.CommandError, got: %T", err)
 			assert.Equal(mt, failpointData.ErrorCode, mongoErr.Code, "expected code %v, got: %v", failpointData.ErrorCode, mongoErr.Code)
 		})
+	})
+	// For versions < 3.2, the first find will get all the documents
+	mt.RunOpts("set batchSize", mtest.NewOptions().MinServerVersion("3.2"), func(mt *mtest.T) {
+		initCollection(mt, mt.Coll)
+		mt.ClearEvents()
+
+		// create cursor with batchSize 0
+		cursor, err := mt.Coll.Find(mtest.Background, bson.D{}, options.Find().SetBatchSize(0))
+		assert.Nil(mt, err, "Find error: %v", err)
+		defer cursor.Close(mtest.Background)
+		evt := mt.GetStartedEvent()
+		assert.Equal(mt, "find", evt.CommandName, "expected 'find' event, got '%v'", evt.CommandName)
+		sizeVal, err := evt.Command.LookupErr("batchSize")
+		assert.Nil(mt, err, "expected find command to have batchSize")
+		batchSize := sizeVal.Int32()
+		assert.Equal(mt, int32(0), batchSize, "expected batchSize 0, got %v", batchSize)
+
+		// make sure that the getMore sends the new batchSize
+		batchCursor := mongo.BatchCursorFromCursor(cursor)
+		batchCursor.SetBatchSize(4)
+		assert.True(mt, cursor.Next(mtest.Background), "expected Next true, got false")
+		evt = mt.GetStartedEvent()
+		assert.NotNil(mt, evt, "expected getMore event, got nil")
+		assert.Equal(mt, "getMore", evt.CommandName, "expected 'getMore' event, got '%v'", evt.CommandName)
+		sizeVal, err = evt.Command.LookupErr("batchSize")
+		assert.Nil(mt, err, "expected getMore command to have batchSize")
+		batchSize = sizeVal.Int32()
+		assert.Equal(mt, int32(4), batchSize, "expected batchSize 4, got %v", batchSize)
 	})
 }
 

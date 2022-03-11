@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/pritunl/mongo-go-driver/bson"
+	"github.com/pritunl/mongo-go-driver/internal"
 	"github.com/pritunl/mongo-go-driver/mongo"
 	"github.com/pritunl/mongo-go-driver/mongo/options"
 )
@@ -53,10 +54,10 @@ func runTest(ctx context.Context, clientOpts *options.ClientOptions) error {
 	}()
 
 	db := client.Database("test")
-	cmd := bson.D{{"isMaster", 1}}
+	cmd := bson.D{{internal.LegacyHello, 1}}
 	err = db.RunCommand(ctx, cmd).Err()
 	if err != nil {
-		return fmt.Errorf("isMaster error: %v", err)
+		return fmt.Errorf("legacy hello error: %v", err)
 	}
 
 	coll := db.Collection("test")

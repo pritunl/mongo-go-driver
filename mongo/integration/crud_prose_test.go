@@ -8,16 +8,15 @@ package integration
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"testing"
 
 	"github.com/pritunl/mongo-go-driver/bson"
-	"github.com/pritunl/mongo-go-driver/bson/bsontype"
 	"github.com/pritunl/mongo-go-driver/internal/testutil/assert"
 	"github.com/pritunl/mongo-go-driver/mongo"
 	"github.com/pritunl/mongo-go-driver/mongo/integration/mtest"
 	"github.com/pritunl/mongo-go-driver/mongo/options"
-	"github.com/pritunl/mongo-go-driver/mongo/readpref"
 	"github.com/pritunl/mongo-go-driver/x/bsonx/bsoncore"
 )
 
@@ -113,6 +112,185 @@ func TestWriteErrorsWithLabels(t *testing.T) {
 
 }
 
+func TestWriteErrorsDetails(t *testing.T) {
+	clientOpts := options.Client().
+		SetRetryWrites(false).
+		SetWriteConcern(mtest.MajorityWc).
+		SetReadConcern(mtest.MajorityRc)
+	mtOpts := mtest.NewOptions().
+		ClientOptions(clientOpts).
+		MinServerVersion("5.0").
+		Topologies(mtest.ReplicaSet, mtest.Single).
+		CreateClient(false)
+
+	mt := mtest.New(t, mtOpts)
+	defer mt.Close()
+
+	mt.Run("JSON Schema validation", func(mt *mtest.T) {
+		// Create a JSON Schema validator document that requires properties "a" and "b". Use it in
+		// the collection creation options so that collections created for subtests have the JSON
+		// Schema validator applied.
+		validator := bson.D{{
+			Key: "validator",
+			Value: bson.M{
+				"$jsonSchema": bson.M{
+					"bsonType": "object",
+					"required": []string{"a", "b"},
+					"properties": bson.M{
+						"a": bson.M{"bsonType": "string"},
+						"b": bson.M{"bsonType": "int"},
+					},
+				},
+			},
+		}}
+		validatorOpts := mtest.NewOptions().CollectionCreateOptions(validator)
+
+		cases := []struct {
+			desc                string
+			operation           func(*mongo.Collection) error
+			expectBulkError     bool
+			expectedCommandName string
+		}{
+			{
+				desc: "InsertOne schema validation errors should include Details",
+				operation: func(coll *mongo.Collection) error {
+					// Try to insert a document that doesn't contain the required properties.
+					_, err := coll.InsertOne(context.Background(), bson.D{{"nope", 1}})
+					return err
+				},
+				expectBulkError:     false,
+				expectedCommandName: "insert",
+			},
+			{
+				desc: "InsertMany schema validation errors should include Details",
+				operation: func(coll *mongo.Collection) error {
+					// Try to insert a document that doesn't contain the required properties.
+					_, err := coll.InsertMany(context.Background(), []interface{}{bson.D{{"nope", 1}}})
+					return err
+				},
+				expectBulkError:     true,
+				expectedCommandName: "insert",
+			},
+			{
+				desc: "UpdateOne schema validation errors should include Details",
+				operation: func(coll *mongo.Collection) error {
+					// Try to set "a" to be an int, which violates the string type requirement.
+					_, err := coll.UpdateOne(
+						context.Background(),
+						bson.D{},
+						bson.D{{"$set", bson.D{{"a", 1}}}})
+					return err
+				},
+				expectBulkError:     false,
+				expectedCommandName: "update",
+			},
+			{
+				desc: "UpdateMany schema validation errors should include Details",
+				operation: func(coll *mongo.Collection) error {
+					// Try to set "a" to be an int in all documents in the collection, which violates
+					// the string type requirement.
+					_, err := coll.UpdateMany(
+						context.Background(),
+						bson.D{},
+						bson.D{{"$set", bson.D{{"a", 1}}}})
+					return err
+				},
+				expectBulkError:     false,
+				expectedCommandName: "update",
+			},
+		}
+
+		for _, tc := range cases {
+			mt.RunOpts(tc.desc, validatorOpts, func(mt *mtest.T) {
+				// Insert two valid documents so that the Update* tests can try to update them.
+				{
+					_, err := mt.Coll.InsertMany(
+						context.Background(),
+						[]interface{}{
+							bson.D{{"a", "str1"}, {"b", 1}},
+							bson.D{{"a", "str2"}, {"b", 2}},
+						})
+					assert.Nil(mt, err, "unexpected error inserting valid documents: %s", err)
+				}
+
+				err := tc.operation(mt.Coll)
+				assert.NotNil(mt, err, "expected an error from calling the operation")
+				sErr := err.(mongo.ServerError)
+				assert.True(
+					mt,
+					sErr.HasErrorCode(121),
+					"expected mongo.ServerError to have error code 121 (DocumentValidationFailure)")
+
+				var details bson.Raw
+				if tc.expectBulkError {
+					bwe, ok := err.(mongo.BulkWriteException)
+					assert.True(
+						mt,
+						ok,
+						"expected error to be type mongo.BulkWriteException, got type %T (error %q)",
+						err,
+						err)
+					// Assert that there is one WriteError and that the Details field is populated.
+					assert.Equal(
+						mt,
+						1,
+						len(bwe.WriteErrors),
+						"expected exactly 1 write error, but got %d write errors (error %q)",
+						len(bwe.WriteErrors),
+						err)
+					details = bwe.WriteErrors[0].Details
+				} else {
+					we, ok := err.(mongo.WriteException)
+					assert.True(
+						mt,
+						ok,
+						"expected error to be type mongo.WriteException, got type %T (error %q)",
+						err,
+						err)
+					// Assert that there is one WriteError and that the Details field is populated.
+					assert.Equal(
+						mt,
+						1,
+						len(we.WriteErrors),
+						"expected exactly 1 write error, but got %d write errors (error %q)",
+						len(we.WriteErrors),
+						err)
+					details = we.WriteErrors[0].Details
+				}
+
+				assert.True(
+					mt,
+					len(details) > 0,
+					"expected WriteError.Details to be populated, but is empty")
+
+				// Assert that the most recent CommandSucceededEvent was triggered by the expected
+				// operation and contains the resulting write errors and that
+				// "writeErrors[0].errInfo" is the same as "WriteException.WriteErrors[0].Details".
+				evts := mt.GetAllSucceededEvents()
+				assert.True(
+					mt,
+					len(evts) >= 2,
+					"expected there to be at least 2 CommandSucceededEvent recorded")
+				evt := evts[len(evts)-1]
+				assert.Equal(
+					mt,
+					tc.expectedCommandName,
+					evt.CommandName,
+					"expected the last CommandSucceededEvent to be for %q, was %q",
+					tc.expectedCommandName,
+					evt.CommandName)
+				errInfo, ok := evt.Reply.Lookup("writeErrors", "0", "errInfo").DocumentOK()
+				assert.True(
+					mt,
+					ok,
+					"expected evt.Reply to contain writeErrors[0].errInfo but doesn't (evt.Reply = %v)",
+					evt.Reply)
+				assert.Equal(mt, details, errInfo, "want %v, got %v", details, errInfo)
+			})
+		}
+	})
+}
+
 func TestHintErrors(t *testing.T) {
 	mtOpts := mtest.NewOptions().MaxServerVersion("3.2").CreateClient(false)
 	mt := mtest.New(t, mtOpts)
@@ -143,83 +321,6 @@ func TestHintErrors(t *testing.T) {
 		_, got := mt.Coll.BulkWrite(mtest.Background, models)
 		assert.NotNil(mt, got, "expected non-nil error, got nil")
 		assert.Equal(mt, got, expected, "expected: %v got: %v", expected, got)
-	})
-}
-
-type testValueMarshaler struct {
-	val []bson.D
-}
-
-func (tvm testValueMarshaler) MarshalBSONValue() (bsontype.Type, []byte, error) {
-	return bson.MarshalValue(tvm.val)
-}
-
-func TestAggregatePrimaryPreferredReadPreference(t *testing.T) {
-	primaryPrefClientOpts := options.Client().
-		SetWriteConcern(mtest.MajorityWc).
-		SetReadPreference(readpref.PrimaryPreferred()).
-		SetReadConcern(mtest.MajorityRc)
-	mtOpts := mtest.NewOptions().
-		ClientOptions(primaryPrefClientOpts).
-		MinServerVersion("4.1.0") // Consistent with tests in aggregate-out-readConcern.json
-
-	mt := mtest.New(t, mtOpts)
-	mt.Run("aggregate $out with non-primary read preference", func(mt *mtest.T) {
-		doc, err := bson.Marshal(bson.D{
-			{"_id", 1},
-			{"x", 11},
-		})
-		assert.Nil(mt, err, "Marshal error: %v", err)
-		outputCollName := "aggregate-read-pref-primary-preferred-output"
-		testCases := []struct {
-			name     string
-			pipeline interface{}
-		}{
-			{
-				"pipeline",
-				mongo.Pipeline{bson.D{{"$out", outputCollName}}},
-			},
-			{
-				"doc slice",
-				[]bson.D{{{"$out", outputCollName}}},
-			},
-			{
-				"bson a",
-				bson.A{bson.D{{"$out", outputCollName}}},
-			},
-			{
-				"valueMarshaler",
-				testValueMarshaler{[]bson.D{{{"$out", outputCollName}}}},
-			},
-		}
-		for _, tc := range testCases {
-			mt.Run(tc.name, func(mt *mtest.T) {
-				_, err = mt.Coll.InsertOne(mtest.Background, doc)
-				assert.Nil(mt, err, "InsertOne error: %v", err)
-
-				mt.ClearEvents()
-
-				cursor, err := mt.Coll.Aggregate(mtest.Background, tc.pipeline)
-				assert.Nil(mt, err, "Aggregate error: %v", err)
-				_ = cursor.Close(mtest.Background)
-
-				// Assert that the output collection contains the document we expect.
-				outputColl := mt.CreateCollection(mtest.Collection{Name: outputCollName}, false)
-				cursor, err = outputColl.Find(mtest.Background, bson.D{})
-				assert.Nil(mt, err, "Find error: %v", err)
-				defer cursor.Close(mtest.Background)
-
-				assert.True(mt, cursor.Next(mtest.Background), "expected Next to return true, got false")
-				assert.True(mt, bytes.Equal(doc, cursor.Current), "expected document %s, got %s", bson.Raw(doc), cursor.Current)
-				assert.False(mt, cursor.Next(mtest.Background), "unexpected document returned by Find: %s", cursor.Current)
-
-				// Assert that no read preference was sent to the server.
-				evt := mt.GetStartedEvent()
-				assert.Equal(mt, "aggregate", evt.CommandName, "expected command 'aggregate', got '%s'", evt.CommandName)
-				_, err = evt.Command.LookupErr("$readPreference")
-				assert.NotNil(mt, err, "expected command %s to not contain $readPreference", evt.Command)
-			})
-		}
 	})
 }
 

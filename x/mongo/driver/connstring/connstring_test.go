@@ -11,9 +11,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/pritunl/mongo-go-driver/x/mongo/driver/connstring"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"github.com/pritunl/mongo-go-driver/x/mongo/driver/connstring"
 )
 
 func TestAppName(t *testing.T) {
@@ -319,6 +319,33 @@ func TestMinPoolSize(t *testing.T) {
 	}
 }
 
+func TestMaxConnecting(t *testing.T) {
+	tests := []struct {
+		s        string
+		expected uint64
+		err      bool
+	}{
+		{s: "maxConnecting=10", expected: 10},
+		{s: "maxConnecting=100", expected: 100},
+		{s: "maxConnecting=-2", err: true},
+		{s: "maxConnecting=gsdge", err: true},
+	}
+
+	for _, test := range tests {
+		s := fmt.Sprintf("mongodb://localhost/?%s", test.s)
+		t.Run(s, func(t *testing.T) {
+			cs, err := connstring.ParseAndValidate(s)
+			if test.err {
+				require.Error(t, err)
+			} else {
+				require.NoError(t, err)
+				require.True(t, cs.MaxConnectingSet)
+				require.Equal(t, test.expected, cs.MaxConnecting)
+			}
+		})
+	}
+}
+
 func TestReadPreference(t *testing.T) {
 	tests := []struct {
 		s        string
@@ -355,8 +382,8 @@ func TestReadPreferenceTags(t *testing.T) {
 		{s: "readPreferenceTags=one:1,two:2", expected: []map[string]string{{"one": "1", "two": "2"}}},
 		{s: "readPreferenceTags=one:1&readPreferenceTags=two:2", expected: []map[string]string{{"one": "1"}, {"two": "2"}}},
 		{s: "readPreferenceTags=one:1:3,two:2", err: true},
-		{s: "readPreferenceTags=one:1&readPreferenceTags=two:2&readPreferenceTags=", expected: []map[string]string{{"one": "1"}, {"two": "2"}}},
-		{s: "readPreferenceTags=", expected: nil},
+		{s: "readPreferenceTags=one:1&readPreferenceTags=two:2&readPreferenceTags=", expected: []map[string]string{{"one": "1"}, {"two": "2"}, {}}},
+		{s: "readPreferenceTags=", expected: []map[string]string{{}}},
 	}
 
 	for _, test := range tests {

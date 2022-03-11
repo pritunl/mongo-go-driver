@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 
 	"github.com/pritunl/mongo-go-driver/bson"
@@ -21,6 +22,7 @@ import (
 	"github.com/pritunl/mongo-go-driver/mongo/readconcern"
 	"github.com/pritunl/mongo-go-driver/mongo/readpref"
 	"github.com/pritunl/mongo-go-driver/mongo/writeconcern"
+	"github.com/pritunl/mongo-go-driver/x/mongo/driver"
 )
 
 var (
@@ -30,6 +32,8 @@ var (
 	MajorityWc = writeconcern.New(writeconcern.WMajority())
 	// PrimaryRp is the primary read preference.
 	PrimaryRp = readpref.Primary()
+	// SecondaryRp is the secondary read preference.
+	SecondaryRp = readpref.Secondary()
 	// LocalRc is the local read concern
 	LocalRc = readconcern.Local()
 	// MajorityRc is the majority read concern
@@ -41,7 +45,7 @@ const (
 )
 
 // FailPoint is a representation of a server fail point.
-// See https://github.com/mongodb/specifications/tree/master/source/transactions/tests#server-fail-point
+// See https://github.com/mongodb/specifications/tree/HEAD/source/transactions/tests#server-fail-point
 // for more information regarding fail points.
 type FailPoint struct {
 	ConfigureFailPoint string `bson:"configureFailPoint"`
@@ -80,27 +84,33 @@ type WriteConcernErrorData struct {
 
 // T is a wrapper around testing.T.
 type T struct {
+	// connsCheckedOut is the net number of connections checked out during test execution.
+	// It must be accessed using the atomic package and should be at the beginning of the struct.
+	// - atomic bug: https://pkg.go.dev/sync/atomic#pkg-note-BUG
+	// - suggested layout: https://go101.org/article/memory-layout.html
+	connsCheckedOut int64
+
 	*testing.T
 
 	// members for only this T instance
-	createClient     *bool
-	createCollection *bool
-	runOn            []RunOnBlock
-	mockDeployment   *mockDeployment // nil if the test is not being run against a mock
-	mockResponses    []bson.D
-	createdColls     []*Collection // collections created in this test
-	proxyDialer      *proxyDialer
-	dbName, collName string
-	failPointNames   []string
-	minServerVersion string
-	maxServerVersion string
-	validTopologies  []TopologyKind
-	auth             *bool
-	enterprise       *bool
-	dataLake         *bool
-	ssl              *bool
-	collCreateOpts   bson.D
-	connsCheckedOut  int // net number of connections checked out during test execution
+	createClient      *bool
+	createCollection  *bool
+	runOn             []RunOnBlock
+	mockDeployment    *mockDeployment // nil if the test is not being run against a mock
+	mockResponses     []bson.D
+	createdColls      []*Collection // collections created in this test
+	proxyDialer       *proxyDialer
+	dbName, collName  string
+	failPointNames    []string
+	minServerVersion  string
+	maxServerVersion  string
+	validTopologies   []TopologyKind
+	auth              *bool
+	enterprise        *bool
+	dataLake          *bool
+	ssl               *bool
+	collCreateOpts    bson.D
+	requireAPIVersion *bool
 
 	// options copied to sub-tests
 	clientType  ClientType
@@ -227,7 +237,7 @@ func (t *T) RunOpts(name string, opts *Options, callback func(*T)) {
 			// store number of sessions and connections checked out here but assert that they're equal to 0 after
 			// cleaning up test resources to make sure resources are always cleared
 			sessions := sub.Client.NumberSessionsInProgress()
-			conns := sub.connsCheckedOut
+			conns := sub.NumberConnectionsCheckedOut()
 
 			if sub.clientType != Mock {
 				sub.ClearFailPoints()
@@ -260,6 +270,8 @@ func (t *T) ClearMockResponses() {
 
 // GetStartedEvent returns the most recent CommandStartedEvent, or nil if one is not present.
 // This can only be called once per event.
+// TODO(GODRIVER-2075): GetStartedEvent documents that it returns the most recent event, but
+// actually returns the first event. Update either the documentation or implementation.
 func (t *T) GetStartedEvent() *event.CommandStartedEvent {
 	if len(t.started) == 0 {
 		return nil
@@ -271,6 +283,8 @@ func (t *T) GetStartedEvent() *event.CommandStartedEvent {
 
 // GetSucceededEvent returns the most recent CommandSucceededEvent, or nil if one is not present.
 // This can only be called once per event.
+// TODO(GODRIVER-2075): GetSucceededEvent documents that it returns the most recent event, but
+// actually returns the first event. Update either the documentation or implementation.
 func (t *T) GetSucceededEvent() *event.CommandSucceededEvent {
 	if len(t.succeeded) == 0 {
 		return nil
@@ -282,6 +296,8 @@ func (t *T) GetSucceededEvent() *event.CommandSucceededEvent {
 
 // GetFailedEvent returns the most recent CommandFailedEvent, or nil if one is not present.
 // This can only be called once per event.
+// TODO(GODRIVER-2075): GetFailedEvent documents that it returns the most recent event, but actually
+// returns the first event. Update either the documentation or implementation.
 func (t *T) GetFailedEvent() *event.CommandFailedEvent {
 	if len(t.failed) == 0 {
 		return nil
@@ -355,6 +371,11 @@ func (t *T) GetProxiedMessages() []*ProxyMessage {
 		return nil
 	}
 	return t.proxyDialer.Messages()
+}
+
+// NumberConnectionsCheckedOut returns the number of connections checked out from the test Client.
+func (t *T) NumberConnectionsCheckedOut() int {
+	return int(atomic.LoadInt64(&t.connsCheckedOut))
 }
 
 // ClearEvents clears the existing command monitoring events.
@@ -545,6 +566,10 @@ func (t *T) createTestClient() {
 		// default opts
 		clientOpts = options.Client().SetWriteConcern(MajorityWc).SetReadPreference(PrimaryRp)
 	}
+	// set ServerAPIOptions to latest version if required
+	if clientOpts.Deployment == nil && t.clientType != Mock && clientOpts.ServerAPIOptions == nil && testContext.requireAPIVersion {
+		clientOpts.SetServerAPIOptions(options.ServerAPI(driver.TestServerAPIVersion))
+	}
 	// command monitor
 	clientOpts.SetMonitor(&event.CommandMonitor{
 		Started: func(_ context.Context, cse *event.CommandStartedEvent) {
@@ -575,9 +600,9 @@ func (t *T) createTestClient() {
 
 				switch evt.Type {
 				case event.GetSucceeded:
-					t.connsCheckedOut++
+					atomic.AddInt64(&t.connsCheckedOut, 1)
 				case event.ConnectionReturned:
-					t.connsCheckedOut--
+					atomic.AddInt64(&t.connsCheckedOut, -1)
 				}
 			},
 		})
@@ -666,13 +691,71 @@ func verifyTopologyConstraints(topologies []TopologyKind) error {
 	return fmt.Errorf("topology kind %q does not match any of the required kinds %q", testContext.topoKind, topologies)
 }
 
+func verifyServerParametersConstraints(serverParameters map[string]bson.RawValue) error {
+	for param, expected := range serverParameters {
+		actual, err := testContext.serverParameters.LookupErr(param)
+		if err != nil {
+			return fmt.Errorf("server does not support parameter %q", param)
+		}
+		if !expected.Equal(actual) {
+			return fmt.Errorf("mismatched values for server parameter %q; expected %s, got %s", param, expected, actual)
+		}
+	}
+	return nil
+}
+
+func verifyAuthConstraint(expected *bool) error {
+	if expected != nil && *expected != testContext.authEnabled {
+		return fmt.Errorf("test requires auth value: %v, cluster auth value: %v", *expected, testContext.authEnabled)
+	}
+	return nil
+}
+
+func verifyServerlessConstraint(expected string) error {
+	switch expected {
+	case "require":
+		if !testContext.serverless {
+			return fmt.Errorf("test requires serverless")
+		}
+	case "forbid":
+		if testContext.serverless {
+			return fmt.Errorf("test forbids serverless")
+		}
+	case "allow", "":
+	default:
+		return fmt.Errorf("invalid value for serverless: %s", expected)
+	}
+	return nil
+}
+
 // verifyRunOnBlockConstraint returns an error if the current environment does not match the provided RunOnBlock.
 func verifyRunOnBlockConstraint(rob RunOnBlock) error {
 	if err := verifyVersionConstraints(rob.MinServerVersion, rob.MaxServerVersion); err != nil {
 		return err
 	}
+	if err := verifyTopologyConstraints(rob.Topology); err != nil {
+		return err
+	}
 
-	return verifyTopologyConstraints(rob.Topology)
+	// Tests in the unified test format have runOn.auth to indicate whether the
+	// test should be run against an auth-enabled configuration. SDAM integration
+	// spec tests have runOn.authEnabled to indicate the same thing. Use whichever
+	// is set for verifyAuthConstraint().
+	auth := rob.Auth
+	if rob.AuthEnabled != nil {
+		if auth != nil {
+			return fmt.Errorf("runOnBlock cannot specify both auth and authEnabled")
+		}
+		auth = rob.AuthEnabled
+	}
+	if err := verifyAuthConstraint(auth); err != nil {
+		return err
+	}
+
+	if err := verifyServerlessConstraint(rob.Serverless); err != nil {
+		return err
+	}
+	return verifyServerParametersConstraints(rob.ServerParameters)
 }
 
 // verifyConstraints returns an error if the current environment does not match the constraints specified for the test.
@@ -684,8 +767,8 @@ func (t *T) verifyConstraints() error {
 	if err := verifyTopologyConstraints(t.validTopologies); err != nil {
 		return err
 	}
-	if t.auth != nil && *t.auth != testContext.authEnabled {
-		return fmt.Errorf("test requires auth value: %v, cluster auth value: %v", *t.auth, testContext.authEnabled)
+	if err := verifyAuthConstraint(t.auth); err != nil {
+		return err
 	}
 	if t.ssl != nil && *t.ssl != testContext.sslEnabled {
 		return fmt.Errorf("test requires ssl value: %v, cluster ssl value: %v", *t.ssl, testContext.sslEnabled)
@@ -697,6 +780,10 @@ func (t *T) verifyConstraints() error {
 	if t.dataLake != nil && *t.dataLake != testContext.dataLake {
 		return fmt.Errorf("test requires cluster to be data lake: %v, cluster is data lake: %v", *t.dataLake,
 			testContext.dataLake)
+	}
+	if t.requireAPIVersion != nil && *t.requireAPIVersion != testContext.requireAPIVersion {
+		return fmt.Errorf("test requires RequireAPIVersion value: %v, local RequireAPIVersion value: %v", *t.requireAPIVersion,
+			testContext.requireAPIVersion)
 	}
 
 	// Check runOn blocks. The test can be executed if there are no blocks or at least block matches the current test

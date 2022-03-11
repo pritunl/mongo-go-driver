@@ -14,11 +14,11 @@ import (
 	"fmt"
 	"io/ioutil"
 	logger "log"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
 
-	"github.com/stretchr/testify/require"
 	"github.com/pritunl/mongo-go-driver/bson"
 	"github.com/pritunl/mongo-go-driver/bson/primitive"
 	"github.com/pritunl/mongo-go-driver/mongo"
@@ -26,6 +26,7 @@ import (
 	"github.com/pritunl/mongo-go-driver/mongo/readconcern"
 	"github.com/pritunl/mongo-go-driver/mongo/readpref"
 	"github.com/pritunl/mongo-go-driver/mongo/writeconcern"
+	"github.com/stretchr/testify/require"
 )
 
 func requireCursorLength(t *testing.T, cursor *mongo.Cursor, length int) {
@@ -2526,6 +2527,94 @@ func AggregationExamples(t *testing.T, db *mongo.Database) {
 	}
 }
 
+// CausalConsistencyExamples contains examples of causal consistency usage.
+func CausalConsistencyExamples(client *mongo.Client) error {
+	ctx := context.Background()
+	coll := client.Database("test").Collection("items")
+
+	currentDate := time.Now()
+
+	err := coll.Drop(ctx)
+	if err != nil {
+		return err
+	}
+
+	// Start Causal Consistency Example 1
+
+	// Use a causally-consistent session to run some operations
+	opts := options.Session().SetDefaultReadConcern(readconcern.Majority()).SetDefaultWriteConcern(
+		writeconcern.New(writeconcern.WMajority(), writeconcern.WTimeout(1000)))
+	session1, err := client.StartSession(opts)
+
+	if err != nil {
+		return err
+	}
+
+	err = client.UseSessionWithOptions(context.TODO(), opts, func(sctx mongo.SessionContext) error {
+		// Run an update with our causally-consistent session
+		_, err = coll.UpdateOne(sctx, bson.D{{"sku", 111}}, bson.D{{"$set", bson.D{{"end", currentDate}}}})
+		if err != nil {
+			return err
+		}
+
+		// Run an insert with our causally-consistent session
+		_, err = coll.InsertOne(sctx, bson.D{{"sku", "nuts-111"}, {"name", "Pecans"}, {"start", currentDate}})
+		if err != nil {
+			return err
+		}
+
+		return nil
+	})
+
+	if err != nil {
+		return err
+	}
+
+	// End Causal Consistency Example 1
+
+	// Start Causal Consistency Example 2
+
+	// Make a new session that is causally consistent with session1 so session2 reads what session1 writes
+	opts = options.Session().SetDefaultReadPreference(readpref.Secondary()).SetDefaultReadConcern(
+		readconcern.Majority()).SetDefaultWriteConcern(writeconcern.New(writeconcern.WMajority(),
+		writeconcern.WTimeout(1000)))
+	session2, err := client.StartSession(opts)
+
+	if err != nil {
+		return err
+	}
+
+	err = client.UseSessionWithOptions(context.TODO(), opts, func(sctx mongo.SessionContext) error {
+		// Set cluster time of session2 to session1's cluster time
+		clusterTime := session1.ClusterTime()
+		session2.AdvanceClusterTime(clusterTime)
+
+		// Set operation time of session2 to session1's operation time
+		operationTime := session1.OperationTime()
+		session2.AdvanceOperationTime(operationTime)
+		// Run a find on session2, which should find all the writes from session1
+		cursor, err := coll.Find(sctx, bson.D{{"end", nil}})
+
+		if err != nil {
+			return err
+		}
+
+		for cursor.Next(sctx) {
+			doc := cursor.Current
+			fmt.Printf("Document: %v\n", doc.String())
+		}
+
+		return cursor.Err()
+	})
+
+	if err != nil {
+		return err
+	}
+	// End Causal Consistency Example 2
+
+	return nil
+}
+
 // RunCommandExamples contains examples of RunCommand operations.
 func RunCommandExamples(t *testing.T, db *mongo.Database) {
 	ctx := context.Background()
@@ -2711,4 +2800,159 @@ func IndexExamples(t *testing.T, db *mongo.Database) {
 
 		require.NoError(t, err)
 	}
+}
+
+// Start Versioned API Example 1
+
+// VersionedAPIExample is an example of creating a client with versioned API.
+func VersionedAPIExample() {
+	ctx := context.Background()
+	// For a replica set, include the replica set name and a seedlist of the members in the URI string; e.g.
+	// uri := "mongodb://mongodb0.example.com:27017,mongodb1.example.com:27017/?replicaSet=myRepl"
+	// For a sharded cluster, connect to the mongos instances; e.g.
+	// uri := "mongodb://mongos0.example.com:27017,mongos1.example.com:27017/"
+	uri := "mongodb://localhost:27017"
+
+	serverAPIOptions := options.ServerAPI(options.ServerAPIVersion1)
+	clientOpts := options.Client().ApplyURI(uri).SetServerAPIOptions(serverAPIOptions)
+	client, err := mongo.Connect(ctx, clientOpts)
+	if err != nil {
+		panic(err)
+	}
+	defer func() { _ = client.Disconnect(ctx) }()
+}
+
+// End Versioned API Example 1
+
+// Start Versioned API Example 2
+
+// VersionedAPIStrictExample is an example of creating a client with strict versioned API.
+func VersionedAPIStrictExample() {
+	ctx := context.Background()
+	// For a replica set, include the replica set name and a seedlist of the members in the URI string; e.g.
+	// uri := "mongodb://mongodb0.example.com:27017,mongodb1.example.com:27017/?replicaSet=myRepl"
+	// For a sharded cluster, connect to the mongos instances; e.g.
+	// uri := "mongodb://mongos0.example.com:27017,mongos1.example.com:27017/"
+	uri := "mongodb://localhost:27017"
+
+	serverAPIOptions := options.ServerAPI(options.ServerAPIVersion1).SetStrict(true)
+	clientOpts := options.Client().ApplyURI(uri).SetServerAPIOptions(serverAPIOptions)
+	client, err := mongo.Connect(ctx, clientOpts)
+	if err != nil {
+		panic(err)
+	}
+	defer func() { _ = client.Disconnect(ctx) }()
+}
+
+// End Versioned API Example 2
+
+// Start Versioned API Example 3
+
+// VersionedAPINonStrictExample is an example of creating a client with non-strict versioned API.
+func VersionedAPINonStrictExample() {
+	ctx := context.Background()
+	// For a replica set, include the replica set name and a seedlist of the members in the URI string; e.g.
+	// uri := "mongodb://mongodb0.example.com:27017,mongodb1.example.com:27017/?replicaSet=myRepl"
+	// For a sharded cluster, connect to the mongos instances; e.g.
+	// uri := "mongodb://mongos0.example.com:27017,mongos1.example.com:27017/"
+	uri := "mongodb://localhost:27017"
+
+	serverAPIOptions := options.ServerAPI(options.ServerAPIVersion1).SetStrict(false)
+	clientOpts := options.Client().ApplyURI(uri).SetServerAPIOptions(serverAPIOptions)
+	client, err := mongo.Connect(ctx, clientOpts)
+	if err != nil {
+		panic(err)
+	}
+	defer func() { _ = client.Disconnect(ctx) }()
+}
+
+// End Versioned API Example 3
+
+// Start Versioned API Example 4
+
+// VersionedAPIDeprecationErrorsExample is an example of creating a client with versioned API
+// with deprecation errors.
+func VersionedAPIDeprecationErrorsExample() {
+	ctx := context.Background()
+	// For a replica set, include the replica set name and a seedlist of the members in the URI string; e.g.
+	// uri := "mongodb://mongodb0.example.com:27017,mongodb1.example.com:27017/?replicaSet=myRepl"
+	// For a sharded cluster, connect to the mongos instances; e.g.
+	// uri := "mongodb://mongos0.example.com:27017,mongos1.example.com:27017/"
+	uri := "mongodb://localhost:27017"
+
+	serverAPIOptions := options.ServerAPI(options.ServerAPIVersion1).SetDeprecationErrors(true)
+	clientOpts := options.Client().ApplyURI(uri).SetServerAPIOptions(serverAPIOptions)
+	client, err := mongo.Connect(ctx, clientOpts)
+	if err != nil {
+		panic(err)
+	}
+	defer func() { _ = client.Disconnect(ctx) }()
+}
+
+// End Versioned API Example 4
+
+// VersionedAPIStrictCountExample is an example of using CountDocuments instead of a traditional count
+// with a strict API version since the count command does not belong to API version 1.
+func VersionedAPIStrictCountExample(t *testing.T) {
+	uri := "mongodb://localhost:27017"
+
+	serverAPIOptions := options.ServerAPI(options.ServerAPIVersion1).SetStrict(true)
+	clientOpts := options.Client().ApplyURI(uri).SetServerAPIOptions(serverAPIOptions)
+
+	client, err := mongo.Connect(context.TODO(), clientOpts)
+	require.Nil(t, err, "Connect error: %v", err)
+	defer func() { _ = client.Disconnect(context.TODO()) }()
+
+	// Start Versioned API Example 5
+
+	coll := client.Database("db").Collection("sales")
+	docs := []interface{}{
+		bson.D{{"_id", 1}, {"item", "abc"}, {"price", 10}, {"quantity", 2}, {"date", "2021-01-01T08:00:00Z"}},
+		bson.D{{"_id", 2}, {"item", "jkl"}, {"price", 20}, {"quantity", 1}, {"date", "2021-02-03T09:00:00Z"}},
+		bson.D{{"_id", 3}, {"item", "xyz"}, {"price", 5}, {"quantity", 5}, {"date", "2021-02-03T09:05:00Z"}},
+		bson.D{{"_id", 4}, {"item", "abc"}, {"price", 10}, {"quantity", 10}, {"date", "2021-02-15T08:00:00Z"}},
+		bson.D{{"_id", 5}, {"item", "xyz"}, {"price", 5}, {"quantity", 10}, {"date", "2021-02-15T09:05:00Z"}},
+		bson.D{{"_id", 6}, {"item", "xyz"}, {"price", 5}, {"quantity", 5}, {"date", "2021-02-15T12:05:10Z"}},
+		bson.D{{"_id", 7}, {"item", "xyz"}, {"price", 5}, {"quantity", 10}, {"date", "2021-02-15T14:12:12Z"}},
+		bson.D{{"_id", 8}, {"item", "abc"}, {"price", 10}, {"quantity", 5}, {"date", "2021-03-16T20:20:13Z"}},
+	}
+	_, err = coll.InsertMany(context.TODO(), docs)
+
+	// End Versioned API Example 5
+	defer func() { _ = coll.Drop(context.TODO()) }()
+	require.Nil(t, err, "InsertMany error: %v", err)
+
+	res := client.Database("db").RunCommand(context.TODO(), bson.D{{"count", "sales"}})
+	require.NotNil(t, res.Err(), "expected RunCommand error, got nil")
+	expectedErr := "Provided apiStrict:true, but the command count is not in API Version 1"
+	require.True(t, strings.Contains(res.Err().Error(), expectedErr),
+		"expected RunCommand error to contain %q, got %q", expectedErr, res.Err().Error())
+
+	// Start Versioned API Example 6
+
+	// (APIStrictError) Provided apiStrict:true, but the command count is not in API Version 1.
+
+	// End Versioned API Example 6
+
+	// Start Versioned API Example 7
+
+	count, err := coll.CountDocuments(context.TODO(), bson.D{})
+
+	// End Versioned API Example 7
+	require.Nil(t, err, "CountDocuments error: %v", err)
+	require.Equal(t, count, int64(8), "expected count to be 8, got %v", count)
+
+	// Start Versioned API Example 8
+
+	// 8
+
+	// End Versioned API Example 8
+}
+
+// VersionedAPIExamples runs all versioned API examples.
+func VersionedAPIExamples() {
+	VersionedAPIExample()
+	VersionedAPIStrictExample()
+	VersionedAPINonStrictExample()
+	VersionedAPIDeprecationErrorsExample()
 }

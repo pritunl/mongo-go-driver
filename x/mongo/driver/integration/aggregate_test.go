@@ -6,7 +6,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/stretchr/testify/require"
 	"github.com/pritunl/mongo-go-driver/bson"
 	"github.com/pritunl/mongo-go-driver/event"
 	"github.com/pritunl/mongo-go-driver/internal/testutil"
@@ -16,6 +15,7 @@ import (
 	"github.com/pritunl/mongo-go-driver/x/mongo/driver"
 	"github.com/pritunl/mongo-go-driver/x/mongo/driver/operation"
 	"github.com/pritunl/mongo-go-driver/x/mongo/driver/topology"
+	"github.com/stretchr/testify/require"
 )
 
 func setUpMonitor() (*event.CommandMonitor, chan *event.CommandStartedEvent, chan *event.CommandSucceededEvent, chan *event.CommandFailedEvent) {
@@ -37,12 +37,14 @@ func setUpMonitor() (*event.CommandMonitor, chan *event.CommandStartedEvent, cha
 }
 
 func skipIfBelow32(ctx context.Context, t *testing.T, topo *topology.Topology) {
-	server, err := topo.SelectServerLegacy(ctx, description.WriteSelector())
+	server, err := topo.SelectServer(ctx, description.WriteSelector())
 	noerr(t, err)
 
 	versionCmd := bsoncore.BuildDocument(nil, bsoncore.AppendInt32Element(nil, "serverStatus", 1))
-	serverStatus, err := testutil.RunCommand(t, server.Server, dbName, versionCmd)
+	serverStatus, err := testutil.RunCommand(t, server, dbName, versionCmd)
+	noerr(t, err)
 	version, err := serverStatus.LookupErr("version")
+	noerr(t, err)
 
 	if testutil.CompareVersions(t, version.StringValue(), "3.2") < 0 {
 		t.Skip()

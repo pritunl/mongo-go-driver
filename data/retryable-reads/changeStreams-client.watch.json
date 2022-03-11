@@ -9,8 +9,10 @@
     {
       "minServerVersion": "4.1.7",
       "topology": [
-        "sharded"
-      ]
+        "sharded",
+        "load-balanced"
+      ],
+      "serverless": "forbid"
     }
   ],
   "database_name": "retryable-reads-tests",
@@ -39,7 +41,6 @@
               "pipeline": [
                 {
                   "$changeStream": {
-                    "fullDocument": "default",
                     "allChangesForCluster": true
                   }
                 }
@@ -79,7 +80,6 @@
               "pipeline": [
                 {
                   "$changeStream": {
-                    "fullDocument": "default",
                     "allChangesForCluster": true
                   }
                 }
@@ -96,7 +96,6 @@
               "pipeline": [
                 {
                   "$changeStream": {
-                    "fullDocument": "default",
                     "allChangesForCluster": true
                   }
                 }
@@ -140,7 +139,6 @@
               "pipeline": [
                 {
                   "$changeStream": {
-                    "fullDocument": "default",
                     "allChangesForCluster": true
                   }
                 }
@@ -181,7 +179,6 @@
               "pipeline": [
                 {
                   "$changeStream": {
-                    "fullDocument": "default",
                     "allChangesForCluster": true
                   }
                 }
@@ -198,7 +195,6 @@
               "pipeline": [
                 {
                   "$changeStream": {
-                    "fullDocument": "default",
                     "allChangesForCluster": true
                   }
                 }

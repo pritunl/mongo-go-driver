@@ -7,8 +7,9 @@
 package bsonx
 
 import (
-	"github.com/pritunl/mongo-go-driver/bson/primitive"
 	"testing"
+
+	"github.com/pritunl/mongo-go-driver/bson/primitive"
 )
 
 func noerr(t *testing.T, err error) {

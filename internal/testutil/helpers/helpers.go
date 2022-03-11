@@ -112,6 +112,9 @@ func VerifyConnStringOptions(t *testing.T, cs connstring.ConnString, options map
 		case "journal":
 			require.True(t, cs.JSet)
 			require.Equal(t, value, cs.J)
+		case "loadbalanced":
+			require.True(t, cs.LoadBalancedSet)
+			require.Equal(t, value, cs.LoadBalanced)
 		case "localthresholdms":
 			require.True(t, cs.LocalThresholdSet)
 			require.Equal(t, value, float64(cs.LocalThreshold/time.Millisecond))
@@ -147,6 +150,10 @@ func VerifyConnStringOptions(t *testing.T, cs connstring.ConnString, options map
 			require.Equal(t, value, cs.RetryWrites)
 		case "serverselectiontimeoutms":
 			require.Equal(t, value, float64(cs.ServerSelectionTimeout/time.Millisecond))
+		case "srvmaxhosts":
+			require.Equal(t, value, float64(cs.SRVMaxHosts))
+		case "srvservicename":
+			require.Equal(t, value, cs.SRVServiceName)
 		case "ssl", "tls":
 			require.Equal(t, value, cs.SSL)
 		case "sockettimeoutms":

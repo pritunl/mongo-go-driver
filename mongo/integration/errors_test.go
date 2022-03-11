@@ -4,6 +4,7 @@
 // not use this file except in compliance with the License. You may obtain
 // a copy of the License at http://www.apache.org/licenses/LICENSE-2.0
 
+//go:build go1.13
 // +build go1.13
 
 package integration
@@ -17,6 +18,7 @@ import (
 	"time"
 
 	"github.com/pritunl/mongo-go-driver/bson"
+	"github.com/pritunl/mongo-go-driver/internal/testutil"
 	"github.com/pritunl/mongo-go-driver/internal/testutil/assert"
 	"github.com/pritunl/mongo-go-driver/mongo"
 	"github.com/pritunl/mongo-go-driver/mongo/integration/mtest"
@@ -81,7 +83,9 @@ func TestErrors(t *testing.T) {
 				},
 			})
 
-			client, err := mongo.Connect(mtest.Background, options.Client().ApplyURI(mtest.ClusterURI()))
+			clientOpts := options.Client().ApplyURI(mtest.ClusterURI())
+			testutil.AddTestServerAPIVersion(clientOpts)
+			client, err := mongo.Connect(mtest.Background, clientOpts)
 			assert.Nil(mt, err, "Connect error: %v", err)
 			defer client.Disconnect(mtest.Background)
 
@@ -197,8 +201,8 @@ func TestErrors(t *testing.T) {
 				mongo.WriteException{
 					nil,
 					mongo.WriteErrors{
-						mongo.WriteError{0, otherCode, "bar"},
-						mongo.WriteError{0, matchCode, "foo"},
+						mongo.WriteError{0, otherCode, "bar", nil},
+						mongo.WriteError{0, matchCode, "foo", nil},
 					},
 					[]string{"otherError"},
 				},
@@ -213,7 +217,7 @@ func TestErrors(t *testing.T) {
 				mongo.WriteException{
 					&mongo.WriteConcernError{"name", otherCode, "bar", nil},
 					mongo.WriteErrors{
-						mongo.WriteError{0, otherCode, "baz"},
+						mongo.WriteError{0, otherCode, "baz", nil},
 					},
 					[]string{"otherError"},
 				},
@@ -228,7 +232,7 @@ func TestErrors(t *testing.T) {
 				mongo.WriteException{
 					&mongo.WriteConcernError{"name", matchCode, "bar", nil},
 					mongo.WriteErrors{
-						mongo.WriteError{0, otherCode, "foo"},
+						mongo.WriteError{0, otherCode, "foo", nil},
 					},
 					[]string{"otherError"},
 				},
@@ -256,8 +260,8 @@ func TestErrors(t *testing.T) {
 				mongo.BulkWriteException{
 					nil,
 					[]mongo.BulkWriteError{
-						{mongo.WriteError{0, matchCode, "foo"}, &mongo.InsertOneModel{}},
-						{mongo.WriteError{0, otherCode, "bar"}, &mongo.InsertOneModel{}},
+						{mongo.WriteError{0, matchCode, "foo", nil}, &mongo.InsertOneModel{}},
+						{mongo.WriteError{0, otherCode, "bar", nil}, &mongo.InsertOneModel{}},
 					},
 					[]string{"otherError"},
 				},
@@ -272,7 +276,7 @@ func TestErrors(t *testing.T) {
 				mongo.BulkWriteException{
 					&mongo.WriteConcernError{"name", otherCode, "bar", nil},
 					[]mongo.BulkWriteError{
-						{mongo.WriteError{0, otherCode, "baz"}, &mongo.InsertOneModel{}},
+						{mongo.WriteError{0, otherCode, "baz", nil}, &mongo.InsertOneModel{}},
 					},
 					[]string{"otherError"},
 				},
@@ -287,7 +291,7 @@ func TestErrors(t *testing.T) {
 				mongo.BulkWriteException{
 					&mongo.WriteConcernError{"name", matchCode, "bar", nil},
 					[]mongo.BulkWriteError{
-						{mongo.WriteError{0, otherCode, "foo"}, &mongo.InsertOneModel{}},
+						{mongo.WriteError{0, otherCode, "foo", nil}, &mongo.InsertOneModel{}},
 					},
 					[]string{"otherError"},
 				},
@@ -334,7 +338,7 @@ func TestErrors(t *testing.T) {
 					mongo.WriteException{
 						&mongo.WriteConcernError{"name", 11001, "bar", nil},
 						mongo.WriteErrors{
-							mongo.WriteError{0, 100, "baz"},
+							mongo.WriteError{0, 100, "baz", nil},
 						},
 						nil,
 					},
@@ -345,7 +349,7 @@ func TestErrors(t *testing.T) {
 					mongo.WriteException{
 						&mongo.WriteConcernError{"name", 100, "bar", nil},
 						mongo.WriteErrors{
-							mongo.WriteError{0, 12582, "baz"},
+							mongo.WriteError{0, 12582, "baz", nil},
 						},
 						nil,
 					},
@@ -356,7 +360,7 @@ func TestErrors(t *testing.T) {
 					mongo.WriteException{
 						&mongo.WriteConcernError{"name", 16460, "bar", nil},
 						mongo.WriteErrors{
-							mongo.WriteError{0, 100, "blah  E11000 blah"},
+							mongo.WriteError{0, 100, "blah E11000 blah", nil},
 						},
 						nil,
 					},
@@ -367,7 +371,7 @@ func TestErrors(t *testing.T) {
 					mongo.BulkWriteException{
 						&mongo.WriteConcernError{"name", 100, "bar", nil},
 						[]mongo.BulkWriteError{
-							{mongo.WriteError{0, 16460, "blah  E11000 blah"}, &mongo.InsertOneModel{}},
+							{mongo.WriteError{0, 16460, "blah E11000 blah", nil}, &mongo.InsertOneModel{}},
 						},
 						[]string{"otherError"},
 					},
@@ -378,7 +382,7 @@ func TestErrors(t *testing.T) {
 					mongo.BulkWriteException{
 						&mongo.WriteConcernError{"name", 100, "bar", nil},
 						[]mongo.BulkWriteError{
-							{mongo.WriteError{0, 110, "blah"}, &mongo.InsertOneModel{}},
+							{mongo.WriteError{0, 110, "blah", nil}, &mongo.InsertOneModel{}},
 						},
 						[]string{"otherError"},
 					},

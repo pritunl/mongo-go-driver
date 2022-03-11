@@ -8,287 +8,115 @@ package unified
 
 import (
 	"context"
-	"fmt"
+	"testing"
 
 	"github.com/pritunl/mongo-go-driver/bson"
-	"github.com/pritunl/mongo-go-driver/mongo"
-	"github.com/pritunl/mongo-go-driver/mongo/gridfs"
-	"github.com/pritunl/mongo-go-driver/mongo/options"
+	"github.com/pritunl/mongo-go-driver/internal/testutil/assert"
 )
 
-// EntityOptions represents all options that can be used to configure an entity. Because there are multiple entity
-// types, only a subset of the options that this type contains apply to any given entity.
-type EntityOptions struct {
-	// Options that apply to all entity types.
-	ID string `bson:"id"`
+func TestEntityMap(t *testing.T) {
+	record := bson.D{{"foo", 1}}
+	doc, err := bson.Marshal(record)
+	assert.Nil(t, err, "error marshaling example doc %v", err)
+	t.Run("bson array entity", func(t *testing.T) {
+		name := "errors"
+		notFoundName := "failures"
+		notFoundErr := newEntityNotFoundError("BSON array", "failures")
+		em := newEntityMap()
 
-	// Options for client entities.
-	URIOptions          bson.M   `bson:"uriOptions"`
-	UseMultipleMongoses *bool    `bson:"useMultipleMongoses"`
-	ObserveEvents       []string `bson:"observeEvents"`
-	IgnoredCommands     []string `bson:"ignoreCommandMonitoringEvents"`
+		err = em.addBSONArrayEntity(name)
+		assert.Nil(t, err, "addBSONArrayEntity error: %v", err)
+		// adding an existing bson array entity twice shouldn't error
+		err = em.addBSONArrayEntity(name)
+		assert.Nil(t, err, "addBSONArrayEntity error: %v", err)
 
-	// Options for database entities.
-	DatabaseName    string                 `bson:"databaseName"`
-	DatabaseOptions *DBOrCollectionOptions `bson:"databaseOptions"`
+		err = em.appendBSONArrayEntity(name, doc)
+		assert.Nil(t, err, "appendBSONArrayEntity error: %v", err)
 
-	// Options for collection entities.
-	CollectionName    string                 `bson:"collectionName"`
-	CollectionOptions *DBOrCollectionOptions `bson:"collectionOptions"`
+		err = em.appendBSONArrayEntity(notFoundName, doc)
+		assert.Equal(t, err, notFoundErr, "expected error %v, got %v", notFoundErr, err)
 
-	// Options for session entities.
-	SessionOptions *SessionOptions `bson:"sessionOptions"`
+		// bson array can't be retrieved until the map is closed
+		_, err = em.BSONArray(name)
+		assert.Equal(t, err, ErrEntityMapOpen, "expected error %v, got %v", ErrEntityMapOpen, err)
 
-	// Options for GridFS bucket entities.
-	GridFSBucketOptions *GridFSBucketOptions `bson:"bucketOptions"`
+		em.close(context.Background())
 
-	// Options that reference other entities.
-	ClientID   string `bson:"client"`
-	DatabaseID string `bson:"database"`
-}
+		retDocs, err := em.BSONArray(name)
+		assert.Nil(t, err, "BSONArray error: %v", err)
+		assert.Equal(t, bson.Raw(doc), retDocs[0], "expected %s, got %s", bson.Raw(doc), retDocs[0])
 
-// EntityMap is used to store entities during tests. This type enforces uniqueness so no two entities can have the same
-// ID, even if they are of different types. It also enforces referential integrity so construction of an entity that
-// references another (e.g. a database entity references a client) will fail if the referenced entity does not exist.
-type EntityMap struct {
-	allEntities   map[string]struct{}
-	changeStreams map[string]*mongo.ChangeStream
-	clients       map[string]*ClientEntity
-	dbs           map[string]*mongo.Database
-	collections   map[string]*mongo.Collection
-	sessions      map[string]mongo.Session
-	gridfsBuckets map[string]*gridfs.Bucket
-	bsonValues    map[string]bson.RawValue
-}
+		_, err = em.BSONArray(notFoundName)
+		assert.Equal(t, err, notFoundErr, "expected error %v, got %v", notFoundErr, err)
+	})
+	t.Run("events entity", func(t *testing.T) {
+		name := "events"
+		em := newEntityMap()
+		err = em.addEventsEntity(name)
+		assert.Nil(t, err, "addEventsEntity error: %v", err)
+		err = em.addEventsEntity(name)
+		assert.NotNil(t, err, "expected error for duplicate entity name")
 
-func NewEntityMap() *EntityMap {
-	return &EntityMap{
-		allEntities:   make(map[string]struct{}),
-		gridfsBuckets: make(map[string]*gridfs.Bucket),
-		bsonValues:    make(map[string]bson.RawValue),
-		changeStreams: make(map[string]*mongo.ChangeStream),
-		clients:       make(map[string]*ClientEntity),
-		collections:   make(map[string]*mongo.Collection),
-		dbs:           make(map[string]*mongo.Database),
-		sessions:      make(map[string]mongo.Session),
-	}
-}
+		em.appendEventsEntity(name, doc)
 
-func (em *EntityMap) AddBSONEntity(id string, val bson.RawValue) error {
-	if err := em.verifyEntityDoesNotExist(id); err != nil {
-		return err
-	}
+		// Events can't be retrieved until the map is closed
+		_, err := em.EventList(name)
+		assert.Equal(t, err, ErrEntityMapOpen, "expected error %v, got %v", ErrEntityMapOpen, err)
 
-	em.allEntities[id] = struct{}{}
-	em.bsonValues[id] = val
-	return nil
-}
+		em.close(context.Background())
 
-func (em *EntityMap) AddChangeStreamEntity(id string, stream *mongo.ChangeStream) error {
-	if err := em.verifyEntityDoesNotExist(id); err != nil {
-		return err
-	}
+		retDocs, err := em.EventList(name)
+		assert.Nil(t, err, "EventList error: %v", err)
+		assert.Equal(t, bson.Raw(doc), retDocs[0], "expected %s, got %s", bson.Raw(doc), retDocs[0])
 
-	em.allEntities[id] = struct{}{}
-	em.changeStreams[id] = stream
-	return nil
-}
+		_, err = em.EventList("bar")
+		notFoundErr := newEntityNotFoundError("event list", "bar")
+		assert.Equal(t, err, notFoundErr, "expected error %v, got %v", notFoundErr, err)
+	})
+	t.Run("interations entity", func(t *testing.T) {
+		name := "iters"
+		notFoundName := "bar"
+		notFoundErr := newEntityNotFoundError("iterations", "bar")
+		em := newEntityMap()
+		err = em.addIterationsEntity(name)
+		assert.Nil(t, err, "addIterationsEntity error: %v", err)
+		err = em.addIterationsEntity(name)
+		assert.NotNil(t, err, "expected error for duplicate entity name")
 
-func (em *EntityMap) AddEntity(ctx context.Context, entityType string, entityOptions *EntityOptions) error {
-	if err := em.verifyEntityDoesNotExist(entityOptions.ID); err != nil {
-		return err
-	}
+		err = em.incrementIterations(name)
+		assert.Nil(t, err, "incrementIterations error: %v", err)
 
-	var err error
-	switch entityType {
-	case "client":
-		err = em.addClientEntity(ctx, entityOptions)
-	case "database":
-		err = em.addDatabaseEntity(entityOptions)
-	case "collection":
-		err = em.addCollectionEntity(entityOptions)
-	case "session":
-		err = em.addSessionEntity(entityOptions)
-	case "bucket":
-		err = em.addGridFSBucketEntity(entityOptions)
-	default:
-		return fmt.Errorf("unrecognized entity type %q", entityType)
-	}
+		err = em.incrementIterations(notFoundName)
+		assert.Equal(t, err, notFoundErr, "expected error %v, got %v", notFoundErr, err)
 
-	if err != nil {
-		return fmt.Errorf("error constructing entity of type %q: %v", entityType, err)
-	}
-	em.allEntities[entityOptions.ID] = struct{}{}
-	return nil
-}
+		retVal, err := em.Iterations(name)
+		assert.Nil(t, err, "expected nil error, got %v", err)
+		assert.Equal(t, int32(1), retVal, "expected %v, got %v", int32(1), retVal)
 
-func (em *EntityMap) GridFSBucket(id string) (*gridfs.Bucket, error) {
-	bucket, ok := em.gridfsBuckets[id]
-	if !ok {
-		return nil, newEntityNotFoundError("gridfs bucket", id)
-	}
-	return bucket, nil
-}
+		_, err = em.Iterations(notFoundName)
+		assert.Equal(t, err, notFoundErr, "expected error %v, got %v", notFoundErr, err)
+	})
+	t.Run("successes entity", func(t *testing.T) {
+		name := "successes"
+		notFoundName := "bar"
+		notFoundErr := newEntityNotFoundError("successes", "bar")
+		em := newEntityMap()
+		err = em.addSuccessesEntity(name)
+		assert.Nil(t, err, "addSuccessesEntity error: %v", err)
+		err = em.addSuccessesEntity(name)
+		assert.NotNil(t, err, "expected error for duplicate entity name")
 
-func (em *EntityMap) BSONValue(id string) (bson.RawValue, error) {
-	val, ok := em.bsonValues[id]
-	if !ok {
-		return emptyRawValue, newEntityNotFoundError("BSON", id)
-	}
-	return val, nil
-}
+		err = em.incrementSuccesses(name)
+		assert.Nil(t, err, "incrementSuccesses error: %v", err)
 
-func (em *EntityMap) ChangeStream(id string) (*mongo.ChangeStream, error) {
-	client, ok := em.changeStreams[id]
-	if !ok {
-		return nil, newEntityNotFoundError("change stream", id)
-	}
-	return client, nil
-}
+		err = em.incrementSuccesses(notFoundName)
+		assert.Equal(t, err, notFoundErr, "expected error %v, got %v", notFoundErr, err)
 
-func (em *EntityMap) Client(id string) (*ClientEntity, error) {
-	client, ok := em.clients[id]
-	if !ok {
-		return nil, newEntityNotFoundError("client", id)
-	}
-	return client, nil
-}
+		retVal, err := em.Successes(name)
+		assert.Nil(t, err, "Successes error: %v", err)
+		assert.Equal(t, int32(1), retVal, "expected %v, got %v", int32(1), retVal)
 
-func (em *EntityMap) Clients() map[string]*ClientEntity {
-	return em.clients
-}
-
-func (em *EntityMap) Collections() map[string]*mongo.Collection {
-	return em.collections
-}
-
-func (em *EntityMap) Collection(id string) (*mongo.Collection, error) {
-	coll, ok := em.collections[id]
-	if !ok {
-		return nil, newEntityNotFoundError("collection", id)
-	}
-	return coll, nil
-}
-
-func (em *EntityMap) Database(id string) (*mongo.Database, error) {
-	db, ok := em.dbs[id]
-	if !ok {
-		return nil, newEntityNotFoundError("database", id)
-	}
-	return db, nil
-}
-
-func (em *EntityMap) Session(id string) (mongo.Session, error) {
-	sess, ok := em.sessions[id]
-	if !ok {
-		return nil, newEntityNotFoundError("session", id)
-	}
-	return sess, nil
-}
-
-// Close disposes of the session and client entities associated with this map.
-func (em *EntityMap) Close(ctx context.Context) []error {
-	for _, sess := range em.sessions {
-		sess.EndSession(ctx)
-	}
-
-	var errs []error
-	for id, client := range em.clients {
-		if err := client.Disconnect(ctx); err != nil {
-			errs = append(errs, fmt.Errorf("error closing client with ID %q: %v", id, err))
-		}
-	}
-	return errs
-}
-
-func (em *EntityMap) addClientEntity(ctx context.Context, EntityOptions *EntityOptions) error {
-	var client *ClientEntity
-	client, err := NewClientEntity(ctx, EntityOptions)
-	if err != nil {
-		return fmt.Errorf("error creating client entity: %v", err)
-	}
-
-	em.clients[EntityOptions.ID] = client
-	return nil
-}
-
-func (em *EntityMap) addDatabaseEntity(EntityOptions *EntityOptions) error {
-	client, ok := em.clients[EntityOptions.ClientID]
-	if !ok {
-		return newEntityNotFoundError("client", EntityOptions.ClientID)
-	}
-
-	dbOpts := options.Database()
-	if EntityOptions.DatabaseOptions != nil {
-		dbOpts = EntityOptions.DatabaseOptions.DBOptions
-	}
-
-	em.dbs[EntityOptions.ID] = client.Database(EntityOptions.DatabaseName, dbOpts)
-	return nil
-}
-
-func (em *EntityMap) addCollectionEntity(EntityOptions *EntityOptions) error {
-	db, ok := em.dbs[EntityOptions.DatabaseID]
-	if !ok {
-		return newEntityNotFoundError("database", EntityOptions.DatabaseID)
-	}
-
-	collOpts := options.Collection()
-	if EntityOptions.CollectionOptions != nil {
-		collOpts = EntityOptions.CollectionOptions.CollectionOptions
-	}
-
-	em.collections[EntityOptions.ID] = db.Collection(EntityOptions.CollectionName, collOpts)
-	return nil
-}
-
-func (em *EntityMap) addSessionEntity(EntityOptions *EntityOptions) error {
-	client, ok := em.clients[EntityOptions.ClientID]
-	if !ok {
-		return newEntityNotFoundError("client", EntityOptions.ClientID)
-	}
-
-	sessionOpts := options.Session()
-	if EntityOptions.SessionOptions != nil {
-		sessionOpts = EntityOptions.SessionOptions.SessionOptions
-	}
-
-	sess, err := client.StartSession(sessionOpts)
-	if err != nil {
-		return fmt.Errorf("error starting session: %v", err)
-	}
-
-	em.sessions[EntityOptions.ID] = sess
-	return nil
-}
-
-func (em *EntityMap) addGridFSBucketEntity(EntityOptions *EntityOptions) error {
-	db, ok := em.dbs[EntityOptions.DatabaseID]
-	if !ok {
-		return newEntityNotFoundError("database", EntityOptions.DatabaseID)
-	}
-
-	bucketOpts := options.GridFSBucket()
-	if EntityOptions.GridFSBucketOptions != nil {
-		bucketOpts = EntityOptions.GridFSBucketOptions.BucketOptions
-	}
-
-	bucket, err := gridfs.NewBucket(db, bucketOpts)
-	if err != nil {
-		return fmt.Errorf("error creating GridFS bucket: %v", err)
-	}
-
-	em.gridfsBuckets[EntityOptions.ID] = bucket
-	return nil
-}
-
-func (em *EntityMap) verifyEntityDoesNotExist(id string) error {
-	if _, ok := em.allEntities[id]; ok {
-		return fmt.Errorf("entity with ID %q already exists", id)
-	}
-	return nil
-}
-
-func newEntityNotFoundError(entityType, entityID string) error {
-	return fmt.Errorf("no %s entity found with ID %q", entityType, entityID)
+		_, err = em.Successes(notFoundName)
+		assert.Equal(t, err, notFoundErr, "expected error %v, got %v", notFoundErr, err)
+	})
 }

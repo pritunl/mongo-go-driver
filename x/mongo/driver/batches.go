@@ -6,10 +6,6 @@ import (
 	"github.com/pritunl/mongo-go-driver/x/bsonx/bsoncore"
 )
 
-// this is the amount of reserved buffer space in a message that the
-// driver reserves for command overhead.
-const reservedCommandBufferBytes = 16 * 10 * 10 * 10
-
 // ErrDocumentTooLarge occurs when a document that is larger than the maximum size accepted by a
 // server is passed to an insert command.
 var ErrDocumentTooLarge = errors.New("an inserted document is too large")

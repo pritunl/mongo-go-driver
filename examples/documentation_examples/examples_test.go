@@ -11,6 +11,7 @@ package documentation_examples_test
 
 import (
 	"context"
+	"os"
 	"testing"
 	"time"
 
@@ -47,6 +48,18 @@ func TestDocumentationExamples(t *testing.T) {
 	documentation_examples.DeleteExamples(t, db)
 	documentation_examples.RunCommandExamples(t, db)
 	documentation_examples.IndexExamples(t, db)
+	documentation_examples.VersionedAPIExamples()
+
+	// Because it uses RunCommand with an apiVersion, the strict count example can only be
+	// run on 5.0+ without auth.
+	ver, err := getServerVersion(ctx, client)
+	require.NoError(t, err, "getServerVersion error: %v", err)
+	auth := os.Getenv("AUTH") == "auth"
+	if testutil.CompareVersions(t, ver, "5.0") >= 0 && !auth {
+		documentation_examples.VersionedAPIStrictCountExample(t)
+	} else {
+		t.Log("skipping versioned API strict count example")
+	}
 }
 
 func TestAggregationExamples(t *testing.T) {
@@ -97,6 +110,24 @@ func TestChangeStreamExamples(t *testing.T) {
 		t.Skip("server does not support changestreams")
 	}
 	documentation_examples.ChangeStreamExamples(t, db)
+}
+
+func TestCausalConsistencyExamples(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	cs := testutil.ConnString(t)
+	client, err := mongo.Connect(context.Background(), options.Client().ApplyURI(cs.String()))
+	require.NoError(t, err)
+	defer client.Disconnect(ctx)
+
+	// TODO(GODRIVER-2238): Remove skip once failures on MongoDB v4.0 sharded clusters are fixed.
+	ver, err := getServerVersion(ctx, client)
+	if err != nil || testutil.CompareVersions(t, ver, "4.0") == 0 {
+		t.Skip("TODO(GODRIVER-2238): Skip until failures on MongoDB v4.0 sharded clusters are fixed")
+	}
+
+	err = documentation_examples.CausalConsistencyExamples(client)
+	require.NoError(t, err)
 }
 
 func getServerVersion(ctx context.Context, client *mongo.Client) (string, error) {

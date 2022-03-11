@@ -8,16 +8,18 @@ package testutil // import "github.com/pritunl/mongo-go-driver/internal/testutil
 
 import (
 	"context"
+	"os"
 	"strings"
 	"testing"
 
-	"github.com/stretchr/testify/require"
 	"github.com/pritunl/mongo-go-driver/mongo/description"
+	"github.com/pritunl/mongo-go-driver/mongo/options"
 	"github.com/pritunl/mongo-go-driver/mongo/writeconcern"
 	"github.com/pritunl/mongo-go-driver/x/bsonx/bsoncore"
 	"github.com/pritunl/mongo-go-driver/x/mongo/driver"
 	"github.com/pritunl/mongo-go-driver/x/mongo/driver/operation"
 	"github.com/pritunl/mongo-go-driver/x/mongo/driver/topology"
+	"github.com/stretchr/testify/require"
 )
 
 // AutoCreateIndexes creates an index in the test cluster.
@@ -50,13 +52,6 @@ func DropCollection(t *testing.T, dbname, colname string) {
 	if de, ok := err.(driver.Error); err != nil && !(ok && de.NamespaceNotFound()) {
 		require.NoError(t, err)
 	}
-}
-
-func autoDropDB(t *testing.T, topo *topology.Topology) {
-	err := operation.NewCommand(bsoncore.BuildDocument(nil, bsoncore.AppendInt32Element(nil, "dropDatabase", 1))).
-		Database(DBName(t)).ServerSelector(description.WriteSelector()).Deployment(topo).
-		Execute(context.Background())
-	require.NoError(t, err)
 }
 
 // AutoInsertDocs inserts the docs into the test cluster.
@@ -94,10 +89,17 @@ func DisableMaxTimeFailPoint(t *testing.T, s *topology.Server) {
 }
 
 // RunCommand runs an arbitrary command on a given database of target server
-func RunCommand(t *testing.T, s *topology.Server, db string, cmd bsoncore.Document) (bsoncore.Document, error) {
+func RunCommand(t *testing.T, s driver.Server, db string, cmd bsoncore.Document) (bsoncore.Document, error) {
 	op := operation.NewCommand(cmd).
 		Database(db).Deployment(driver.SingleServerDeployment{Server: s})
 	err := op.Execute(context.Background())
 	res := op.Result()
 	return res, err
+}
+
+// AddTestServerAPIVersion adds the latest server API version in a ServerAPIOptions to passed-in opts.
+func AddTestServerAPIVersion(opts *options.ClientOptions) {
+	if os.Getenv("REQUIRE_API_VERSION") == "true" {
+		opts.SetServerAPIOptions(options.ServerAPI(driver.TestServerAPIVersion))
+	}
 }

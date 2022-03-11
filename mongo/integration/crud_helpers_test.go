@@ -12,15 +12,18 @@ import (
 	"fmt"
 	"math"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/pritunl/mongo-go-driver/bson"
 	"github.com/pritunl/mongo-go-driver/bson/bsontype"
 	"github.com/pritunl/mongo-go-driver/bson/primitive"
+	"github.com/pritunl/mongo-go-driver/internal/testutil"
 	"github.com/pritunl/mongo-go-driver/internal/testutil/assert"
 	"github.com/pritunl/mongo-go-driver/mongo"
 	"github.com/pritunl/mongo-go-driver/mongo/gridfs"
 	"github.com/pritunl/mongo-go-driver/mongo/integration/mtest"
+	"github.com/pritunl/mongo-go-driver/mongo/integration/unified"
 	"github.com/pritunl/mongo-go-driver/mongo/options"
 	"github.com/pritunl/mongo-go-driver/mongo/readconcern"
 	"github.com/pritunl/mongo-go-driver/mongo/readpref"
@@ -84,7 +87,9 @@ func isExpectedKillAllSessionsError(err error) bool {
 	}
 
 	_, ok = killAllSessionsErrorCodes[cmdErr.Code]
-	return ok
+	// for SERVER-54216 on atlas
+	atlasUnauthorized := strings.Contains(err.Error(), "(AtlasError) (Unauthorized)")
+	return ok || atlasUnauthorized
 }
 
 // kill all open sessions on the server. This function uses mt.GlobalClient() because killAllSessions is not allowed
@@ -114,8 +119,8 @@ func killSessions(mt *mtest.T) {
 // Utility function to run a command on all servers. For standalones, the command is run against the one server. For
 // replica sets, the command is run against the primary. sharded clusters, the command is run against each mongos.
 func runCommandOnAllServers(mt *mtest.T, commandFn func(client *mongo.Client) error) error {
-	opts := options.Client().
-		ApplyURI(mtest.ClusterURI())
+	opts := options.Client().ApplyURI(mtest.ClusterURI())
+	testutil.AddTestServerAPIVersion(opts)
 
 	if mtest.ClusterTopologyKind() != mtest.Sharded {
 		client, err := mongo.Connect(mtest.Background, opts)
@@ -135,7 +140,9 @@ func runCommandOnAllServers(mt *mtest.T, commandFn func(client *mongo.Client) er
 
 		err = commandFn(shardClient)
 		_ = shardClient.Disconnect(mtest.Background)
-		return err
+		if err != nil {
+			return err
+		}
 	}
 
 	return nil
@@ -1404,8 +1411,9 @@ func executeCreateCollection(mt *mtest.T, sess mongo.Session, args bson.Raw) err
 }
 
 func executeAdminCommand(mt *mtest.T, op *operation) {
-	// Per the streamable isMaster test format description, a separate client must be used to execute this operation.
+	// Per the streamable hello test format description, a separate client must be used to execute this operation.
 	clientOpts := options.Client().ApplyURI(mtest.ClusterURI())
+	testutil.AddTestServerAPIVersion(clientOpts)
 	client, err := mongo.Connect(mtest.Background, clientOpts)
 	assert.Nil(mt, err, "Connect error: %v", err)
 	defer func() {
@@ -1420,8 +1428,20 @@ func executeAdminCommand(mt *mtest.T, op *operation) {
 		return
 	}
 
+	rco := options.RunCmd()
+	rpVal, err := op.Arguments.LookupErr("readPreference")
+	if err == nil {
+		var temp unified.ReadPreference
+		err = bson.Unmarshal(rpVal.Document(), &temp)
+		assert.Nil(mt, err, "error unmarshalling readPreference option: %v", err)
+
+		rp, err := temp.ToReadPrefOption()
+		assert.Nil(mt, err, "error creating readpref.ReadPref object: %v", err)
+		rco.SetReadPreference(rp)
+	}
+
 	db := client.Database("admin")
-	err = db.RunCommand(mtest.Background, cmd).Err()
+	err = db.RunCommand(mtest.Background, cmd, rco).Err()
 	assert.Nil(mt, err, "RunCommand error for command %q: %v", op.CommandName, err)
 }
 

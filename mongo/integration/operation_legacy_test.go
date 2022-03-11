@@ -197,7 +197,7 @@ func runFindWithOptions(mt *mtest.T) opQuery {
 		{"$orderby", sort},
 	}
 	return opQuery{
-		flags:                wiremessage.QueryFlag(wiremessage.Partial | wiremessage.TailableCursor | wiremessage.NoCursorTimeout | wiremessage.OplogReplay | wiremessage.SlaveOK),
+		flags:                wiremessage.Partial | wiremessage.TailableCursor | wiremessage.NoCursorTimeout | wiremessage.OplogReplay | wiremessage.SecondaryOK,
 		fullCollectionName:   fullCollName(mt, mt.Coll.Name()),
 		numToSkip:            1,
 		numToReturn:          2,
@@ -215,7 +215,7 @@ func runListCollectionsWithOptions(mt *mtest.T) opQuery {
 		{"$and", bson.A{regexDoc, modifiedFilterDoc}},
 	}
 	return opQuery{
-		flags:              wiremessage.SlaveOK,
+		flags:              wiremessage.SecondaryOK,
 		fullCollectionName: fullCollName(mt, "system.namespaces"),
 		query:              listCollDoc,
 	}
@@ -229,7 +229,7 @@ func runListIndexesWithOptions(mt *mtest.T) opQuery {
 		{"$maxTimeMS", int64(10000)},
 	}
 	return opQuery{
-		flags:              wiremessage.SlaveOK,
+		flags:              wiremessage.SecondaryOK,
 		fullCollectionName: fullCollName(mt, "system.indexes"),
 		numToReturn:        2,
 		query:              listIndexesDoc,
@@ -281,6 +281,7 @@ func validateQueryWiremessage(mt *mtest.T, wm []byte, expected opQuery) {
 	query, wm, ok = wiremessage.ReadQueryQuery(wm)
 	assert.True(mt, ok, "could not read query document")
 	expectedQueryBytes, err := bson.Marshal(expected.query)
+	assert.Nil(mt, err, "Marshal error for query: %v", err)
 	assert.True(mt, bytes.Equal(query, expectedQueryBytes), "expected query %v, got %v", bsoncore.Document(expectedQueryBytes), query)
 
 	if len(expected.returnFieldsSelector) == 0 {

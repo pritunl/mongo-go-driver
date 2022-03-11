@@ -8,6 +8,7 @@ package mtest
 
 import (
 	"context"
+	"time"
 
 	"github.com/pkg/errors"
 	"github.com/pritunl/mongo-go-driver/bson"
@@ -88,6 +89,12 @@ func (*connection) ID() string {
 	return "<mock_connection>"
 }
 
+// ServerConnectionID returns a fixed identifier for the server connection.
+func (*connection) ServerConnectionID() *int32 {
+	serverConnectionID := int32(42)
+	return &serverConnectionID
+}
+
 // Address returns a fixed address for the connection.
 func (*connection) Address() address.Address {
 	return serverAddress
@@ -125,6 +132,11 @@ func (md *mockDeployment) Kind() description.TopologyKind {
 // Connection implements the driver.Server interface.
 func (md *mockDeployment) Connection(context.Context) (driver.Connection, error) {
 	return md.conn, nil
+}
+
+// MinRTT always returns 0. It implements the driver.Server interface.
+func (md *mockDeployment) MinRTT() time.Duration {
+	return 0
 }
 
 // Connect is a no-op method which implements the driver.Connector interface.

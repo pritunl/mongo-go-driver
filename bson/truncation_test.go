@@ -3,8 +3,8 @@ package bson
 import (
 	"testing"
 
-	"github.com/stretchr/testify/assert"
 	"github.com/pritunl/mongo-go-driver/bson/bsoncodec"
+	"github.com/stretchr/testify/assert"
 )
 
 type inputArgs struct {

@@ -9,8 +9,8 @@ package topology
 import (
 	"testing"
 
-	"github.com/stretchr/testify/assert"
 	"github.com/pritunl/mongo-go-driver/mongo/description"
+	"github.com/stretchr/testify/assert"
 )
 
 func TestDiffHostList(t *testing.T) {

@@ -22,7 +22,6 @@ import (
 	"github.com/pritunl/mongo-go-driver/mongo/integration/mtest"
 	"github.com/pritunl/mongo-go-driver/mongo/options"
 	"github.com/pritunl/mongo-go-driver/x/bsonx"
-	"github.com/pritunl/mongo-go-driver/x/bsonx/bsoncore"
 )
 
 type gridfsTestFile struct {
@@ -312,6 +311,7 @@ func executeGridfsUpload(mt *mtest.T, test gridfsTest, bucket *gridfs.Bucket) {
 	hexBytes := hexStringToBytes(mt, args.Lookup("source", "$hex").StringValue())
 	fileID := primitive.NewObjectID()
 	stream, err := bucket.OpenUploadStreamWithID(fileID, args.Lookup("filename").StringValue(), uploadOpts)
+	assert.Nil(mt, err, "OpenUploadStreamWithID error: %v", err)
 	err = stream.SetWriteDeadline(gridfsDeadline)
 	assert.Nil(mt, err, "SetWriteDeadline error: %v", err)
 
@@ -458,21 +458,6 @@ func hexStringToBytes(mt *mtest.T, hexStr string) []byte {
 	hexBytes, err := hex.DecodeString(hexStr)
 	assert.Nil(mt, err, "DecodeString error for %v: %v", hexStr, err)
 	return hexBytes
-}
-
-func replaceBsonValue(original bson.Raw, key string, newValue bson.RawValue) bson.Raw {
-	idx, newDoc := bsoncore.AppendDocumentStart(nil)
-	elems, _ := original.Elements()
-	for _, elem := range elems {
-		rawValue := elem.Value()
-		if elem.Key() == key {
-			rawValue = newValue
-		}
-
-		newDoc = bsoncore.AppendValueElement(newDoc, elem.Key(), bsoncore.Value{Type: rawValue.Type, Data: rawValue.Value})
-	}
-	newDoc, _ = bsoncore.AppendDocumentEnd(newDoc, idx)
-	return bson.Raw(newDoc)
 }
 
 func runCommands(mt *mtest.T, commands []interface{}) {

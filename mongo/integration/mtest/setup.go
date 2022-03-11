@@ -22,6 +22,7 @@ import (
 	"github.com/pritunl/mongo-go-driver/mongo/options"
 	"github.com/pritunl/mongo-go-driver/mongo/readpref"
 	"github.com/pritunl/mongo-go-driver/mongo/writeconcern"
+	"github.com/pritunl/mongo-go-driver/x/mongo/driver"
 	"github.com/pritunl/mongo-go-driver/x/mongo/driver/connstring"
 	"github.com/pritunl/mongo-go-driver/x/mongo/driver/ocsp"
 	"github.com/pritunl/mongo-go-driver/x/mongo/driver/topology"
@@ -42,29 +43,48 @@ var testContext struct {
 	// shardedReplicaSet will be true if we're connected to a sharded cluster and each shard is backed by a replica set.
 	// We track this as a separate boolean rather than setting topoKind to ShardedReplicaSet because a general
 	// "Sharded" constraint in a test should match both Sharded and ShardedReplicaSet.
-	shardedReplicaSet bool
-	client            *mongo.Client // client used for setup and teardown
-	serverVersion     string
-	authEnabled       bool
-	sslEnabled        bool
-	enterpriseServer  bool
-	dataLake          bool
+	shardedReplicaSet           bool
+	client                      *mongo.Client // client used for setup and teardown
+	serverVersion               string
+	authEnabled                 bool
+	sslEnabled                  bool
+	enterpriseServer            bool
+	dataLake                    bool
+	requireAPIVersion           bool
+	serverParameters            bson.Raw
+	singleMongosLoadBalancerURI string
+	multiMongosLoadBalancerURI  string
+	serverless                  bool
 }
 
 func setupClient(cs connstring.ConnString, opts *options.ClientOptions) (*mongo.Client, error) {
 	wcMajority := writeconcern.New(writeconcern.WMajority())
-	return mongo.Connect(Background, opts.ApplyURI(cs.Original).SetWriteConcern(wcMajority))
+	// set ServerAPIOptions to latest version if required
+	if opts.ServerAPIOptions == nil && testContext.requireAPIVersion {
+		opts.SetServerAPIOptions(options.ServerAPI(driver.TestServerAPIVersion))
+	}
+	// for sharded clusters, pin to one host. Due to how the cache is implemented on 4.0 and 4.2, behavior
+	// can be inconsistent when multiple mongoses are used
+	return mongo.Connect(Background, opts.ApplyURI(cs.Original).SetWriteConcern(wcMajority).SetHosts(cs.Hosts[:1]))
 }
 
 // Setup initializes the current testing context.
 // This function must only be called one time and must be called before any tests run.
-func Setup() error {
+func Setup(setupOpts ...*SetupOptions) error {
+	opts := MergeSetupOptions(setupOpts...)
 	var err error
-	testContext.connString, err = getConnString()
+
+	switch {
+	case opts.URI != nil:
+		testContext.connString, err = connstring.ParseAndValidate(*opts.URI)
+	default:
+		testContext.connString, err = getClusterConnString()
+	}
 	if err != nil {
 		return fmt.Errorf("error getting connection string: %v", err)
 	}
 	testContext.dataLake = os.Getenv("ATLAS_DATA_LAKE_INTEGRATION_TEST") == "true"
+	testContext.requireAPIVersion = os.Getenv("REQUIRE_API_VERSION") == "true"
 
 	connectionOpts := []topology.ConnectionOption{
 		topology.WithOCSPCache(func(ocsp.Cache) ocsp.Cache {
@@ -76,6 +96,14 @@ func Setup() error {
 			return append(opts, connectionOpts...)
 		}),
 	}
+	if testContext.requireAPIVersion {
+		serverOpts = append(serverOpts,
+			topology.WithServerAPI(func(*driver.ServerAPIOptions) *driver.ServerAPIOptions {
+				return driver.NewServerAPIOptions(driver.TestServerAPIVersion)
+			}),
+		)
+	}
+
 	testContext.topo, err = topology.New(
 		topology.WithConnString(func(connstring.ConnString) connstring.ConnString {
 			return testContext.connString
@@ -114,6 +142,8 @@ func Setup() error {
 		testContext.topoKind = ReplicaSet
 	case description.Sharded:
 		testContext.topoKind = Sharded
+	case description.LoadBalanced:
+		testContext.topoKind = LoadBalanced
 	default:
 		return fmt.Errorf("could not detect topology kind; current topology: %s", testContext.topo.String())
 	}
@@ -139,7 +169,7 @@ func Setup() error {
 		// the shard is a standalone if the "/" character isn't present.
 		var foundStandalone bool
 		for _, shard := range shards {
-			if strings.Index(shard.Host, "/") == -1 {
+			if !strings.Contains(shard.Host, "/") {
 				foundStandalone = true
 				break
 			}
@@ -149,18 +179,31 @@ func Setup() error {
 		}
 	}
 
-	if testContext.topoKind == ReplicaSet && CompareServerVersions(testContext.serverVersion, "4.0") >= 0 {
-		err = testContext.client.Database("admin").RunCommand(Background, bson.D{
-			{"setParameter", 1},
-			{"transactionLifetimeLimitSeconds", 3},
-		}).Err()
+	// For load balanced clusters, retrieve the required LB URIs and add additional information (e.g. TLS options) to
+	// them if necessary.
+	if testContext.topoKind == LoadBalanced {
+		singleMongosURI := os.Getenv("SINGLE_MONGOS_LB_URI")
+		if singleMongosURI == "" {
+			return errors.New("SINGLE_MONGOS_LB_URI must be set when running against load balanced clusters")
+		}
+		testContext.singleMongosLoadBalancerURI, err = addNecessaryParamsToURI(singleMongosURI)
 		if err != nil {
-			return fmt.Errorf("error setting transactionLifetimeLimitSeconds: %v", err)
+			return fmt.Errorf("error getting single mongos load balancer uri: %v", err)
+		}
+
+		multiMongosURI := os.Getenv("MULTI_MONGOS_LB_URI")
+		if multiMongosURI == "" {
+			return errors.New("MULTI_MONGOS_LB_URI must be set when running against load balanced clusters")
+		}
+		testContext.multiMongosLoadBalancerURI, err = addNecessaryParamsToURI(multiMongosURI)
+		if err != nil {
+			return fmt.Errorf("error getting multi mongos load balancer uri: %v", err)
 		}
 	}
 
 	testContext.authEnabled = os.Getenv("AUTH") == "auth"
 	testContext.sslEnabled = os.Getenv("SSL") == "ssl"
+	testContext.serverless = os.Getenv("SERVERLESS") == "serverless"
 	biRes, err := testContext.client.Database("admin").RunCommand(Background, bson.D{{"buildInfo", 1}}).DecodeBytes()
 	if err != nil {
 		return fmt.Errorf("buildInfo error: %v", err)
@@ -174,6 +217,15 @@ func Setup() error {
 				testContext.enterpriseServer = true
 				break
 			}
+		}
+	}
+
+	// Get server parameters if test is not running against ADL; ADL does not have "getParameter" command.
+	if !testContext.dataLake {
+		db := testContext.client.Database("admin")
+		testContext.serverParameters, err = db.RunCommand(Background, bson.D{{"getParameter", "*"}}).DecodeBytes()
+		if err != nil {
+			return fmt.Errorf("error getting serverParameters: %v", err)
 		}
 	}
 	return nil
@@ -237,12 +289,15 @@ func addOptions(uri string, opts ...string) string {
 // addTLSConfig checks for the environmental variable indicating that the tests are being run
 // on an SSL-enabled server, and if so, returns a new URI with the necessary configuration.
 func addTLSConfig(uri string) string {
+	if os.Getenv("SSL") == "ssl" {
+		uri = addOptions(uri, "ssl=", "true")
+	}
 	caFile := os.Getenv("MONGO_GO_DRIVER_CA_FILE")
 	if len(caFile) == 0 {
 		return uri
 	}
 
-	return addOptions(uri, "ssl=true&sslCertificateAuthorityFile=", caFile)
+	return addOptions(uri, "sslCertificateAuthorityFile=", caFile)
 }
 
 // addCompressors checks for the environment variable indicating that the tests are being run with compression
@@ -256,15 +311,50 @@ func addCompressors(uri string) string {
 	return addOptions(uri, "compressors=", comp)
 }
 
-// ConnString gets the globally configured connection string.
-func getConnString() (connstring.ConnString, error) {
+func addServerlessAuthCredentials(uri string) (string, error) {
+	if os.Getenv("SERVERLESS") != "serverless" {
+		return uri, nil
+	}
+	user := os.Getenv("SERVERLESS_ATLAS_USER")
+	if user == "" {
+		return "", fmt.Errorf("serverless expects SERVERLESS_ATLAS_USER to be set")
+	}
+	password := os.Getenv("SERVERLESS_ATLAS_PASSWORD")
+	if password == "" {
+		return "", fmt.Errorf("serverless expects SERVERLESS_ATLAS_PASSWORD to be set")
+	}
+
+	var scheme string
+	// remove the scheme
+	if strings.HasPrefix(uri, "mongodb+srv://") {
+		scheme = "mongodb+srv://"
+	} else if strings.HasPrefix(uri, "mongodb://") {
+		scheme = "mongodb://"
+	} else {
+		return "", fmt.Errorf("scheme must be \"mongodb\" or \"mongodb+srv\"")
+	}
+
+	uri = scheme + user + ":" + password + "@" + uri[len(scheme):]
+	return uri, nil
+}
+
+// getClusterConnString gets the globally configured connection string.
+func getClusterConnString() (connstring.ConnString, error) {
 	uri := os.Getenv("MONGODB_URI")
 	if uri == "" {
 		uri = "mongodb://localhost:27017"
 	}
+	uri, err := addNecessaryParamsToURI(uri)
+	if err != nil {
+		return connstring.ConnString{}, err
+	}
+	return connstring.ParseAndValidate(uri)
+}
+
+func addNecessaryParamsToURI(uri string) (string, error) {
 	uri = addTLSConfig(uri)
 	uri = addCompressors(uri)
-	return connstring.ParseAndValidate(uri)
+	return addServerlessAuthCredentials(uri)
 }
 
 // CompareServerVersions compares two version number strings (i.e. positive integers separated by

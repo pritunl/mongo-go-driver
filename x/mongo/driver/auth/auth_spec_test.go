@@ -16,7 +16,6 @@ import (
 	"github.com/stretchr/testify/require"
 	testhelpers "github.com/pritunl/mongo-go-driver/internal/testutil/helpers"
 	"github.com/pritunl/mongo-go-driver/mongo/options"
-	"github.com/pritunl/mongo-go-driver/x/mongo/driver/connstring"
 )
 
 type credential struct {
@@ -53,11 +52,11 @@ func runTestsInFile(t *testing.T, dirname string, filename string) {
 	filename = filename[:len(filename)-5]
 
 	for _, testCase := range container.Tests {
-		runTest(t, filename, &testCase)
+		runTest(t, filename, testCase)
 	}
 }
 
-func runTest(t *testing.T, filename string, test *testCase) {
+func runTest(t *testing.T, filename string, test testCase) {
 	t.Run(test.Description, func(t *testing.T) {
 		opts := options.Client().ApplyURI(test.URI)
 		if test.Valid {
@@ -102,13 +101,6 @@ func mapInterfaceToString(m map[string]interface{}) map[string]string {
 	}
 
 	return out
-}
-
-func verifyMechProperties(t *testing.T, cs connstring.ConnString, mechProps map[string]interface{}) {
-	// Check that all options are present.
-	for key, value := range mechProps {
-		require.Equal(t, value, cs.AuthMechanismProperties[key])
-	}
 }
 
 // Test case for all connection string spec tests.

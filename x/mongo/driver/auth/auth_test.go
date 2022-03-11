@@ -10,10 +10,10 @@ import (
 	"testing"
 
 	"github.com/google/go-cmp/cmp"
-	"github.com/stretchr/testify/require"
 	"github.com/pritunl/mongo-go-driver/x/bsonx/bsoncore"
 	. "github.com/pritunl/mongo-go-driver/x/mongo/driver/auth"
 	"github.com/pritunl/mongo-go-driver/x/mongo/driver/wiremessage"
+	"github.com/stretchr/testify/require"
 )
 
 func TestCreateAuthenticator(t *testing.T) {

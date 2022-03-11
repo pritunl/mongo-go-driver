@@ -69,6 +69,7 @@ func TestClientOptions(t *testing.T) {
 			{"MaxConnIdleTime", (*ClientOptions).SetMaxConnIdleTime, 5 * time.Second, "MaxConnIdleTime", true},
 			{"MaxPoolSize", (*ClientOptions).SetMaxPoolSize, uint64(250), "MaxPoolSize", true},
 			{"MinPoolSize", (*ClientOptions).SetMinPoolSize, uint64(10), "MinPoolSize", true},
+			{"MaxConnecting", (*ClientOptions).SetMaxConnecting, uint64(10), "MaxConnecting", true},
 			{"PoolMonitor", (*ClientOptions).SetPoolMonitor, &event.PoolMonitor{}, "PoolMonitor", false},
 			{"Monitor", (*ClientOptions).SetMonitor, &event.CommandMonitor{}, "Monitor", false},
 			{"ReadConcern", (*ClientOptions).SetReadConcern, readconcern.Majority(), "ReadConcern", false},
@@ -83,6 +84,7 @@ func TestClientOptions(t *testing.T) {
 			{"WriteConcern", (*ClientOptions).SetWriteConcern, writeconcern.New(writeconcern.WMajority()), "WriteConcern", false},
 			{"ZlibLevel", (*ClientOptions).SetZlibLevel, 6, "ZlibLevel", true},
 			{"DisableOCSPEndpointCheck", (*ClientOptions).SetDisableOCSPEndpointCheck, true, "DisableOCSPEndpointCheck", true},
+			{"LoadBalanced", (*ClientOptions).SetLoadBalanced, true, "LoadBalanced", true},
 		}
 
 		opt1, opt2, optResult := Client(), Client(), Client()
@@ -172,6 +174,16 @@ func TestClientOptions(t *testing.T) {
 			got := MergeClientOptions(nil, opt1, opt2)
 			if got.err.Error() != "Test error" {
 				t.Errorf("Merged client options do not match. got %v; want %v", got.err.Error(), opt1.err.Error())
+			}
+		})
+
+		t.Run("MergeClientOptions/uri", func(t *testing.T) {
+			opt1, opt2 := Client(), Client()
+			opt1.uri = "Test URI"
+
+			got := MergeClientOptions(nil, opt1, opt2)
+			if got.uri != "Test URI" {
+				t.Errorf("Merged client options do not match. got %v; want %v", got.uri, opt1.uri)
 			}
 		})
 	})
@@ -326,6 +338,16 @@ func TestClientOptions(t *testing.T) {
 				"MaxPoolSize",
 				"mongodb://localhost/?maxPoolSize=256",
 				baseClient().SetMaxPoolSize(256),
+			},
+			{
+				"MinPoolSize",
+				"mongodb://localhost/?minPoolSize=256",
+				baseClient().SetMinPoolSize(256),
+			},
+			{
+				"MaxConnecting",
+				"mongodb://localhost/?maxConnecting=10",
+				baseClient().SetMaxConnecting(10),
 			},
 			{
 				"ReadConcern",
@@ -494,6 +516,33 @@ func TestClientOptions(t *testing.T) {
 					err:   errors.New("the specified CA file does not contain any valid certificates"),
 				},
 			},
+			{
+				"loadBalanced=true",
+				"mongodb://localhost/?loadBalanced=true",
+				baseClient().SetLoadBalanced(true),
+			},
+			{
+				"loadBalanced=false",
+				"mongodb://localhost/?loadBalanced=false",
+				baseClient().SetLoadBalanced(false),
+			},
+			{
+				"srvServiceName",
+				"mongodb+srv://test22.test.build.10gen.cc/?srvServiceName=customname",
+				baseClient().SetSRVServiceName("customname").
+					SetHosts([]string{"localhost.test.build.10gen.cc:27017", "localhost.test.build.10gen.cc:27018"}),
+			},
+			{
+				"srvMaxHosts",
+				"mongodb+srv://test1.test.build.10gen.cc/?srvMaxHosts=2",
+				baseClient().SetSRVMaxHosts(2).
+					SetHosts([]string{"localhost.test.build.10gen.cc:27017", "localhost.test.build.10gen.cc:27018"}),
+			},
+			{
+				"GODRIVER-2263 regression test",
+				"mongodb://localhost/?tlsCertificateKeyFile=testdata/one-pk-multiple-certs.pem",
+				baseClient().SetTLSConfig(&tls.Config{Certificates: make([]tls.Certificate, 1)}),
+			},
 		}
 
 		for _, tc := range testCases {
@@ -508,12 +557,15 @@ func TestClientOptions(t *testing.T) {
 					tc.result.cs = &cs
 				}
 
+				// We have to sort string slices in comparison, as Hosts resolved from SRV URIs do not have a set order.
+				stringLess := func(a, b string) bool { return a < b }
 				if diff := cmp.Diff(
 					tc.result, result,
 					cmp.AllowUnexported(ClientOptions{}, readconcern.ReadConcern{}, writeconcern.WriteConcern{}, readpref.ReadPref{}),
 					cmp.Comparer(func(r1, r2 *bsoncodec.Registry) bool { return r1 == r2 }),
 					cmp.Comparer(compareTLSConfig),
 					cmp.Comparer(compareErrors),
+					cmpopts.SortSlices(stringLess),
 					cmpopts.IgnoreFields(connstring.ConnString{}, "SSLClientCertificateKeyPassword"),
 				); diff != "" {
 					t.Errorf("URI did not apply correctly: (-want +got)\n%s", diff)
@@ -550,6 +602,59 @@ func TestClientOptions(t *testing.T) {
 			assert.NotNil(t, err, "expected errror, got nil")
 			assert.Equal(t, expectedErr.Error(), err.Error(), "expected error %v, got %v", expectedErr, err)
 		})
+	})
+	t.Run("loadBalanced validation", func(t *testing.T) {
+		testCases := []struct {
+			name string
+			opts *ClientOptions
+			err  error
+		}{
+			{"multiple hosts in URI", Client().ApplyURI("mongodb://foo,bar"), internal.ErrLoadBalancedWithMultipleHosts},
+			{"multiple hosts in options", Client().SetHosts([]string{"foo", "bar"}), internal.ErrLoadBalancedWithMultipleHosts},
+			{"replica set name", Client().SetReplicaSet("foo"), internal.ErrLoadBalancedWithReplicaSet},
+			{"directConnection=true", Client().SetDirect(true), internal.ErrLoadBalancedWithDirectConnection},
+			{"directConnection=false", Client().SetDirect(false), internal.ErrLoadBalancedWithDirectConnection},
+		}
+		for _, tc := range testCases {
+			t.Run(tc.name, func(t *testing.T) {
+				// The loadBalanced option should not be validated if it is unset or false.
+				err := tc.opts.Validate()
+				assert.Nil(t, err, "Validate error when loadBalanced is unset: %v", err)
+
+				tc.opts.SetLoadBalanced(false)
+				err = tc.opts.Validate()
+				assert.Nil(t, err, "Validate error when loadBalanced=false: %v", err)
+
+				tc.opts.SetLoadBalanced(true)
+				err = tc.opts.Validate()
+				assert.Equal(t, tc.err, err, "expected error %v when loadBalanced=true, got %v", tc.err, err)
+			})
+		}
+	})
+	t.Run("srvMaxHosts validation", func(t *testing.T) {
+		testCases := []struct {
+			name string
+			opts *ClientOptions
+			err  error
+		}{
+			{"replica set name", Client().SetReplicaSet("foo"), internal.ErrSRVMaxHostsWithReplicaSet},
+			{"loadBalanced=true", Client().SetLoadBalanced(true), internal.ErrSRVMaxHostsWithLoadBalanced},
+			{"loadBalanced=false", Client().SetLoadBalanced(false), nil},
+		}
+		for _, tc := range testCases {
+			t.Run(tc.name, func(t *testing.T) {
+				err := tc.opts.Validate()
+				assert.Nil(t, err, "Validate error when srvMxaHosts is unset: %v", err)
+
+				tc.opts.SetSRVMaxHosts(0)
+				err = tc.opts.Validate()
+				assert.Nil(t, err, "Validate error when srvMaxHosts is 0: %v", err)
+
+				tc.opts.SetSRVMaxHosts(2)
+				err = tc.opts.Validate()
+				assert.Equal(t, tc.err, err, "expected error %v when srvMaxHosts > 0, got %v", tc.err, err)
+			})
+		}
 	})
 }
 

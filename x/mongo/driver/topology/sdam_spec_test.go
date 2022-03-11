@@ -13,7 +13,6 @@ import (
 	"net"
 	"path"
 	"sync"
-	"sync/atomic"
 	"testing"
 	"time"
 
@@ -30,11 +29,11 @@ import (
 )
 
 type response struct {
-	Host     string
-	IsMaster IsMaster
+	Host  string
+	Hello Hello
 }
 
-type IsMaster struct {
+type Hello struct {
 	Arbiters                     []string           `bson:"arbiters,omitempty"`
 	ArbiterOnly                  bool               `bson:"arbiterOnly,omitempty"`
 	ClusterTime                  bson.Raw           `bson:"$clusterTime,omitempty"`
@@ -42,7 +41,8 @@ type IsMaster struct {
 	ElectionID                   primitive.ObjectID `bson:"electionId,omitempty"`
 	Hidden                       bool               `bson:"hidden,omitempty"`
 	Hosts                        []string           `bson:"hosts,omitempty"`
-	IsMaster                     bool               `bson:"ismaster,omitempty"`
+	HelloOK                      bool               `bson:"helloOk,omitempty"`
+	IsWritablePrimary            bool               `bson:"isWritablePrimary,omitempty"`
 	IsReplicaSet                 bool               `bson:"isreplicaset,omitempty"`
 	LastWrite                    *lastWriteDate     `bson:"lastWrite,omitempty"`
 	LogicalSessionTimeoutMinutes uint32             `bson:"logicalSessionTimeoutMinutes,omitempty"`
@@ -214,8 +214,8 @@ func (r *response) UnmarshalBSON(buf []byte) error {
 		return fmt.Errorf("error unmarshalling Host: %v", err)
 	}
 
-	if err := doc.Index(1).Value().Unmarshal(&r.IsMaster); err != nil {
-		return fmt.Errorf("error unmarshalling IsMaster: %v", err)
+	if err := doc.Index(1).Value().Unmarshal(&r.Hello); err != nil {
+		return fmt.Errorf("error unmarshalling Hello: %v", err)
 	}
 
 	return nil
@@ -266,7 +266,7 @@ func applyResponses(t *testing.T, topo *Topology, responses []response, sub *dri
 	default:
 	}
 	for _, response := range responses {
-		doc, err := bson.Marshal(response.IsMaster)
+		doc, err := bson.Marshal(response.Hello)
 		assert.Nil(t, err, "Marshal error: %v", err)
 
 		addr := address.Address(response.Host)
@@ -304,147 +304,12 @@ func (n netErr) Temporary() bool {
 
 var _ net.Error = (*netErr)(nil)
 
-// helper method to create an error from the test response
-func getError(rdr bsoncore.Document) error {
-	var errmsg, codeName string
-	var code int32
-	var labels []string
-	var tv *description.TopologyVersion
-	var wcError driver.WriteCommandError
-	elems, err := rdr.Elements()
-	if err != nil {
-		return err
-	}
-
-	for _, elem := range elems {
-		switch elem.Key() {
-		case "ok":
-			switch elem.Value().Type {
-			case bson.TypeInt32:
-				if elem.Value().Int32() == 1 {
-					return nil
-				}
-			case bson.TypeInt64:
-				if elem.Value().Int64() == 1 {
-					return nil
-				}
-			case bson.TypeDouble:
-				if elem.Value().Double() == 1 {
-					return nil
-				}
-			}
-		case "errmsg":
-			if str, okay := elem.Value().StringValueOK(); okay {
-				errmsg = str
-			}
-		case "codeName":
-			if str, okay := elem.Value().StringValueOK(); okay {
-				codeName = str
-			}
-		case "code":
-			if c, okay := elem.Value().Int32OK(); okay {
-				code = c
-			}
-		case "errorLabels":
-			if arr, okay := elem.Value().ArrayOK(); okay {
-				vals, err := arr.Values()
-				if err != nil {
-					continue
-				}
-				for _, val := range vals {
-					if str, ok := val.StringValueOK(); ok {
-						labels = append(labels, str)
-					}
-				}
-
-			}
-		case "writeErrors":
-			arr, exists := elem.Value().ArrayOK()
-			if !exists {
-				break
-			}
-			vals, err := arr.Values()
-			if err != nil {
-				continue
-			}
-			for _, val := range vals {
-				var we driver.WriteError
-				doc, exists := val.DocumentOK()
-				if !exists {
-					continue
-				}
-				if index, exists := doc.Lookup("index").AsInt64OK(); exists {
-					we.Index = index
-				}
-				if code, exists := doc.Lookup("code").AsInt64OK(); exists {
-					we.Code = code
-				}
-				if msg, exists := doc.Lookup("errmsg").StringValueOK(); exists {
-					we.Message = msg
-				}
-				wcError.WriteErrors = append(wcError.WriteErrors, we)
-			}
-		case "writeConcernError":
-			doc, exists := elem.Value().DocumentOK()
-			if !exists {
-				break
-			}
-			wcError.WriteConcernError = new(driver.WriteConcernError)
-			if code, exists := doc.Lookup("code").AsInt64OK(); exists {
-				wcError.WriteConcernError.Code = code
-			}
-			if name, exists := doc.Lookup("codeName").StringValueOK(); exists {
-				wcError.WriteConcernError.Name = name
-			}
-			if msg, exists := doc.Lookup("errmsg").StringValueOK(); exists {
-				wcError.WriteConcernError.Message = msg
-			}
-			if info, exists := doc.Lookup("errInfo").DocumentOK(); exists {
-				wcError.WriteConcernError.Details = make([]byte, len(info))
-				copy(wcError.WriteConcernError.Details, info)
-			}
-			if errLabels, exists := doc.Lookup("errorLabels").ArrayOK(); exists {
-				vals, err := errLabels.Values()
-				if err != nil {
-					continue
-				}
-				for _, val := range vals {
-					if str, ok := val.StringValueOK(); ok {
-						labels = append(labels, str)
-					}
-				}
-			}
-		case "topologyVersion":
-			doc, ok := elem.Value().DocumentOK()
-			if !ok {
-				break
-			}
-			version, err := description.NewTopologyVersion(bson.Raw(doc))
-			if err == nil {
-				tv = version
-			}
-		}
-	}
-
-	if errmsg == "" {
-		errmsg = "command failed"
-	}
-
-	return driver.Error{
-		Code:            code,
-		Message:         errmsg,
-		Name:            codeName,
-		Labels:          labels,
-		TopologyVersion: tv,
-	}
-}
-
 func applyErrors(t *testing.T, topo *Topology, errors []applicationError) {
 	for _, appErr := range errors {
 		var currError error
 		switch appErr.Type {
 		case "command":
-			currError = getError(appErr.Response)
+			currError = driver.ExtractErrorFromServerResponse(appErr.Response)
 		case "network":
 			currError = driver.Error{
 				Labels:  []string{driver.NetworkError},
@@ -465,9 +330,9 @@ func applyErrors(t *testing.T, topo *Topology, errors []applicationError) {
 		versionRange := description.NewVersionRange(0, *appErr.MaxWireVersion)
 		desc.WireVersion = &versionRange
 
-		generation := atomic.LoadUint64(&server.pool.generation)
+		generation := server.pool.generation.getGeneration(nil)
 		if appErr.Generation != nil {
-			generation = uint64(*appErr.Generation)
+			generation = *appErr.Generation
 		}
 		//use generation number to check conn stale
 		innerConn := connection{
@@ -479,7 +344,7 @@ func applyErrors(t *testing.T, topo *Topology, errors []applicationError) {
 
 		switch appErr.When {
 		case "beforeHandshakeCompletes":
-			server.ProcessHandshakeError(currError, generation)
+			server.ProcessHandshakeError(currError, generation, nil)
 		case "afterHandshakeCompletes":
 			_ = server.ProcessError(currError, &conn)
 		default:
@@ -499,14 +364,14 @@ func compareServerDescriptions(t *testing.T,
 		"%v: expected %d hosts, got %d", idx, len(expected.Hosts), len(actual.Hosts))
 	for idx, expectedHost := range expected.Hosts {
 		actualHost := actual.Hosts[idx]
-		assert.Equal(t, expectedHost, string(actualHost), "%v: expected host %s, got %s", idx, expectedHost, actualHost)
+		assert.Equal(t, expectedHost, actualHost, "%v: expected host %s, got %s", idx, expectedHost, actualHost)
 	}
 
 	assert.Equal(t, len(expected.Passives), len(actual.Passives),
 		"%v: expected %d hosts, got %d", idx, len(expected.Passives), len(actual.Passives))
 	for idx, expectedPassive := range expected.Passives {
 		actualPassive := actual.Passives[idx]
-		assert.Equal(t, expectedPassive, string(actualPassive), "%v: expected passive %s, got %s", idx, expectedPassive, actualPassive)
+		assert.Equal(t, expectedPassive, actualPassive, "%v: expected passive %s, got %s", idx, expectedPassive, actualPassive)
 	}
 
 	assert.Equal(t, expected.Primary, string(actual.Primary),
@@ -554,7 +419,7 @@ func compareEvents(t *testing.T, events []monitoringEvent) {
 		if me.TopologyOpeningEvent != nil {
 			actual, ok := publishedEvents[idx].(event.TopologyOpeningEvent)
 			assert.True(t, ok, "%v: expected type %T, got %T", idx, event.TopologyOpeningEvent{}, publishedEvents[idx])
-			assert.False(t, primitive.ObjectID(actual.TopologyID).IsZero(), "%v: expected topology id", idx)
+			assert.False(t, actual.TopologyID.IsZero(), "%v: expected topology id", idx)
 		}
 		if me.ServerOpeningEvent != nil {
 			actual, ok := publishedEvents[idx].(event.ServerOpeningEvent)
@@ -563,7 +428,7 @@ func compareEvents(t *testing.T, events []monitoringEvent) {
 			evt := me.ServerOpeningEvent
 			assert.Equal(t, evt.Address, string(actual.Address),
 				"%v: expected address %s, got %s", idx, evt.Address, actual.Address)
-			assert.False(t, primitive.ObjectID(actual.TopologyID).IsZero(), "%v: expected topology id", idx)
+			assert.False(t, actual.TopologyID.IsZero(), "%v: expected topology id", idx)
 		}
 		if me.TopologyDescriptionChangedEvent != nil {
 			actual, ok := publishedEvents[idx].(event.TopologyDescriptionChangedEvent)
@@ -572,7 +437,7 @@ func compareEvents(t *testing.T, events []monitoringEvent) {
 			evt := me.TopologyDescriptionChangedEvent
 			compareTopologyDescriptions(t, evt.PreviousDescription, actual.PreviousDescription, idx)
 			compareTopologyDescriptions(t, evt.NewDescription, actual.NewDescription, idx)
-			assert.False(t, primitive.ObjectID(actual.TopologyID).IsZero(), "%v: expected topology id", idx)
+			assert.False(t, actual.TopologyID.IsZero(), "%v: expected topology id", idx)
 		}
 		if me.ServerDescriptionChangedEvent != nil {
 			actual, ok := publishedEvents[idx].(event.ServerDescriptionChangedEvent)
@@ -583,7 +448,7 @@ func compareEvents(t *testing.T, events []monitoringEvent) {
 				"%v: expected server address %s, got %s", idx, evt.Address, actual.Address)
 			compareServerDescriptions(t, evt.PreviousDescription, actual.PreviousDescription, idx)
 			compareServerDescriptions(t, evt.NewDescription, actual.NewDescription, idx)
-			assert.False(t, primitive.ObjectID(actual.TopologyID).IsZero(), "%v: expected topology id", idx)
+			assert.False(t, actual.TopologyID.IsZero(), "%v: expected topology id", idx)
 		}
 		if me.ServerClosedEvent != nil {
 			actual, ok := publishedEvents[idx].(event.ServerClosedEvent)
@@ -592,7 +457,7 @@ func compareEvents(t *testing.T, events []monitoringEvent) {
 			evt := me.ServerClosedEvent
 			assert.Equal(t, evt.Address, string(actual.Address),
 				"%v: expected server address %s, got %s", idx, evt.Address, actual.Address)
-			assert.False(t, primitive.ObjectID(actual.TopologyID).IsZero(), "%v: expected topology id", idx)
+			assert.False(t, actual.TopologyID.IsZero(), "%v: expected topology id", idx)
 		}
 	}
 }
@@ -693,7 +558,7 @@ func runTest(t *testing.T, directory string, filename string) {
 					topo.serversLock.Lock()
 					actualServer := topo.servers[address.Address(addr)]
 					topo.serversLock.Unlock()
-					actualGeneration := atomic.LoadUint64(&actualServer.pool.generation)
+					actualGeneration := actualServer.pool.generation.getGeneration(nil)
 					assert.Equal(t, server.Pool.Generation, actualGeneration,
 						"expected server pool generation to be %v, got %v", server.Pool.Generation, actualGeneration)
 				}
@@ -704,7 +569,7 @@ func runTest(t *testing.T, directory string, filename string) {
 
 // Test case for all SDAM spec tests.
 func TestSDAMSpec(t *testing.T) {
-	for _, subdir := range []string{"single", "rs", "sharded", "errors", "monitoring"} {
+	for _, subdir := range []string{"single", "rs", "sharded", "load-balanced", "errors", "monitoring"} {
 		for _, file := range testhelpers.FindJSONFilesInDir(t, path.Join(testsDir, subdir)) {
 			runTest(t, subdir, file)
 		}

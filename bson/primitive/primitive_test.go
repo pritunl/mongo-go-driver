@@ -11,8 +11,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/stretchr/testify/require"
 	"github.com/pritunl/mongo-go-driver/internal/testutil/assert"
+	"github.com/stretchr/testify/require"
 )
 
 // The same interface as bsoncodec.Zeroer implemented for tests.

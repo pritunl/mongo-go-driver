@@ -10,8 +10,8 @@ import (
 	"strconv"
 	"testing"
 
-	"github.com/stretchr/testify/assert"
 	"github.com/pritunl/mongo-go-driver/x/mongo/driver/wiremessage"
+	"github.com/stretchr/testify/assert"
 )
 
 func TestCompression(t *testing.T) {

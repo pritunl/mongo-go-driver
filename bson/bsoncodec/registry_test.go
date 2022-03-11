@@ -328,7 +328,7 @@ func TestRegistry(t *testing.T) {
 					t.Run("Decoder", func(t *testing.T) {
 						var wanterr error
 						if ene, ok := tc.wanterr.(ErrNoEncoder); ok {
-							wanterr = ErrNoDecoder{Type: ene.Type}
+							wanterr = ErrNoDecoder(ene)
 						} else {
 							wanterr = tc.wanterr
 						}
@@ -377,13 +377,13 @@ func TestRegistry(t *testing.T) {
 	})
 	t.Run("Type Map", func(t *testing.T) {
 		reg := NewRegistryBuilder().
-			RegisterTypeMapEntry(bsontype.String, reflect.TypeOf(string(""))).
+			RegisterTypeMapEntry(bsontype.String, reflect.TypeOf("")).
 			RegisterTypeMapEntry(bsontype.Int32, reflect.TypeOf(int(0))).
 			Build()
 
 		var got, want reflect.Type
 
-		want = reflect.TypeOf(string(""))
+		want = reflect.TypeOf("")
 		got, err := reg.LookupTypeMapEntry(bsontype.String)
 		noerr(t, err)
 		if got != want {
@@ -409,10 +409,9 @@ func TestRegistry(t *testing.T) {
 	})
 }
 
-type fakeType1 struct{ b bool }
-type fakeType2 struct{ b bool }
-type fakeType3 struct{ b bool }
-type fakeType4 struct{ b bool }
+type fakeType1 struct{}
+type fakeType2 struct{}
+type fakeType4 struct{}
 type fakeType5 func(string, string) string
 type fakeStructCodec struct{ fakeCodec }
 type fakeSliceCodec struct{ fakeCodec }

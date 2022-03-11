@@ -12,6 +12,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 	"github.com/pritunl/mongo-go-driver/bson/primitive"
+	"github.com/pritunl/mongo-go-driver/internal/testutil/assert"
 	testhelpers "github.com/pritunl/mongo-go-driver/internal/testutil/helpers"
 	"github.com/pritunl/mongo-go-driver/mongo/description"
 	"github.com/pritunl/mongo-go-driver/x/bsonx/bsoncore"
@@ -149,7 +150,8 @@ func TestClientSession(t *testing.T) {
 			t.Errorf("expected error, got %v", err)
 		}
 
-		sess.ApplyCommand(description.Server{Kind: description.Standalone})
+		err = sess.ApplyCommand(description.Server{Kind: description.Standalone})
+		assert.Nil(t, err, "ApplyCommand error: %v", err)
 		if sess.TransactionState != InProgress {
 			t.Errorf("incorrect session state, expected InProgress, received %v", sess.TransactionState)
 		}
@@ -190,6 +192,96 @@ func TestClientSession(t *testing.T) {
 		err = sess.CommitTransaction()
 		if err != ErrCommitAfterAbort {
 			t.Errorf("expected error, got %v", err)
+		}
+	})
+
+	t.Run("causal consistency and snapshot", func(t *testing.T) {
+		falseVal := false
+		trueVal := true
+
+		// A test for Consistent and Snapshot both being true and causing an error can be found
+		// in TestSessionsProse.
+		testCases := []struct {
+			description        string
+			consistent         *bool
+			snapshot           *bool
+			expectedConsistent bool
+			expectedSnapshot   bool
+		}{
+			{
+				"both unset",
+				nil,
+				nil,
+				true,
+				false,
+			},
+			{
+				"both false",
+				&falseVal,
+				&falseVal,
+				false,
+				false,
+			},
+			{
+				"cc unset snapshot true",
+				nil,
+				&trueVal,
+				false,
+				true,
+			},
+			{
+				"cc unset snapshot false",
+				nil,
+				&falseVal,
+				true,
+				false,
+			},
+			{
+				"cc true snapshot unset",
+				&trueVal,
+				nil,
+				true,
+				false,
+			},
+			{
+				"cc false snapshot unset",
+				&falseVal,
+				nil,
+				false,
+				false,
+			},
+			{
+				"cc false snapshot true",
+				&falseVal,
+				&trueVal,
+				false,
+				true,
+			},
+			{
+				"cc true snapshot false",
+				&trueVal,
+				&falseVal,
+				true,
+				false,
+			},
+		}
+
+		for _, tc := range testCases {
+			t.Run(tc.description, func(t *testing.T) {
+				sessOpts := &ClientOptions{
+					CausalConsistency: tc.consistent,
+					Snapshot:          tc.snapshot,
+				}
+
+				id, _ := uuid.New()
+				sess, err := NewClientSession(&Pool{}, id, Explicit, sessOpts)
+				require.Nil(t, err, "unexpected NewClientSession error %v", err)
+
+				require.Equal(t, tc.expectedConsistent, sess.Consistent,
+					"expected Consistent to be %v, got %v", tc.expectedConsistent, sess.Consistent)
+				require.Equal(t, tc.expectedSnapshot, sess.Snapshot,
+					"expected Snapshot to be %v, got %v", tc.expectedSnapshot, sess.Snapshot)
+			})
 		}
 	})
 }

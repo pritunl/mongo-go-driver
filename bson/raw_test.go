@@ -14,9 +14,9 @@ import (
 	"testing"
 
 	"github.com/google/go-cmp/cmp"
-	"github.com/stretchr/testify/require"
 	"github.com/pritunl/mongo-go-driver/bson/bsontype"
 	"github.com/pritunl/mongo-go-driver/x/bsonx/bsoncore"
+	"github.com/stretchr/testify/require"
 )
 
 func ExampleRaw_Validate() {

@@ -7,8 +7,10 @@
 package integration
 
 import (
+	"context"
 	"fmt"
-	"path"
+	"net"
+	"os"
 	"reflect"
 	"strings"
 	"testing"
@@ -17,6 +19,10 @@ import (
 	"github.com/pritunl/mongo-go-driver/bson"
 	"github.com/pritunl/mongo-go-driver/bson/bsoncodec"
 	"github.com/pritunl/mongo-go-driver/bson/bsonrw"
+	"github.com/pritunl/mongo-go-driver/bson/primitive"
+	"github.com/pritunl/mongo-go-driver/event"
+	"github.com/pritunl/mongo-go-driver/internal"
+	"github.com/pritunl/mongo-go-driver/internal/testutil"
 	"github.com/pritunl/mongo-go-driver/internal/testutil/assert"
 	"github.com/pritunl/mongo-go-driver/mongo"
 	"github.com/pritunl/mongo-go-driver/mongo/integration/mtest"
@@ -24,10 +30,8 @@ import (
 	"github.com/pritunl/mongo-go-driver/mongo/readpref"
 	"github.com/pritunl/mongo-go-driver/x/bsonx/bsoncore"
 	"github.com/pritunl/mongo-go-driver/x/mongo/driver"
-	"github.com/pritunl/mongo-go-driver/x/mongo/driver/wiremessage"
+	"golang.org/x/sync/errgroup"
 )
-
-const certificatesDir = "../../data/certificates"
 
 var noClientOpts = mtest.NewOptions().CreateClient(false)
 
@@ -48,6 +52,46 @@ func (e *negateCodec) DecodeValue(ectx bsoncodec.DecodeContext, vr bsonrw.ValueR
 
 	val.SetInt(i * -1)
 	return nil
+}
+
+var _ options.ContextDialer = &slowConnDialer{}
+
+// A slowConnDialer dials connections that delay network round trips by the given delay duration.
+type slowConnDialer struct {
+	dialer *net.Dialer
+	delay  time.Duration
+}
+
+func newSlowConnDialer(delay time.Duration) *slowConnDialer {
+	return &slowConnDialer{
+		dialer: &net.Dialer{},
+		delay:  delay,
+	}
+}
+
+func (scd *slowConnDialer) DialContext(ctx context.Context, network, address string) (net.Conn, error) {
+	conn, err := scd.dialer.DialContext(ctx, network, address)
+	if err != nil {
+		return nil, err
+	}
+	return &slowConn{
+		Conn:  conn,
+		delay: scd.delay,
+	}, nil
+}
+
+var _ net.Conn = &slowConn{}
+
+// slowConn is a net.Conn that delays all calls to Read() by given delay durations. All other
+// net.Conn functions behave identically to the embedded net.Conn.
+type slowConn struct {
+	net.Conn
+	delay time.Duration
+}
+
+func (sc *slowConn) Read(b []byte) (n int, err error) {
+	time.Sleep(sc.delay)
+	return sc.Conn.Read(b)
 }
 
 func TestClient(t *testing.T) {
@@ -86,21 +130,21 @@ func TestClient(t *testing.T) {
 			password    string
 		}{
 			{
-				"client.pem",
+				"MONGO_GO_DRIVER_KEY_FILE",
 				"",
 			},
 			{
-				"client-pkcs8-encrypted.pem",
+				"MONGO_GO_DRIVER_PKCS8_ENCRYPTED_KEY_FILE",
 				"&sslClientCertificateKeyPassword=password",
 			},
 			{
-				"client-pkcs8-unencrypted.pem",
+				"MONGO_GO_DRIVER_PKCS8_UNENCRYPTED_KEY_FILE",
 				"",
 			},
 		}
 		for _, tc := range testCases {
 			mt.Run(tc.certificate, func(mt *mtest.T) {
-				const user = "C=US,ST=New York,L=New York City,O=MongoDB,OU=other,CN=external"
+				const user = "C=US,ST=New York,L=New York City,O=MDB,OU=Drivers,CN=client"
 				db := mt.Client.Database("$external")
 
 				// We don't care if the user doesn't already exist.
@@ -129,10 +173,12 @@ func TestClient(t *testing.T) {
 				cs := fmt.Sprintf(
 					"%s&sslClientCertificateKeyFile=%s&authMechanism=MONGODB-X509&authSource=$external%s",
 					revisedConnString,
-					path.Join(certificatesDir, tc.certificate),
+					os.Getenv(tc.certificate),
 					tc.password,
 				)
-				authClient, err := mongo.Connect(mtest.Background, options.Client().ApplyURI(cs))
+				authClientOpts := options.Client().ApplyURI(cs)
+				testutil.AddTestServerAPIVersion(authClientOpts)
+				authClient, err := mongo.Connect(mtest.Background, authClientOpts)
 				assert.Nil(mt, err, "authClient Connect error: %v", err)
 				defer func() { _ = authClient.Disconnect(mtest.Background) }()
 
@@ -276,6 +322,7 @@ func TestClient(t *testing.T) {
 			invalidClientOpts := options.Client().
 				SetServerSelectionTimeout(100 * time.Millisecond).SetHosts([]string{"invalid:123"}).
 				SetConnectTimeout(500 * time.Millisecond).SetSocketTimeout(500 * time.Millisecond)
+			testutil.AddTestServerAPIVersion(invalidClientOpts)
 			client, err := mongo.Connect(mtest.Background, invalidClientOpts)
 			assert.Nil(mt, err, "Connect error: %v", err)
 			err = client.Ping(mtest.Background, readpref.Primary())
@@ -308,7 +355,7 @@ func TestClient(t *testing.T) {
 		started := mt.GetStartedEvent()
 		assert.Equal(mt, "endSessions", started.CommandName, "expected cmd name endSessions, got %v", started.CommandName)
 	})
-	mt.RunOpts("isMaster lastWriteDate", mtest.NewOptions().Topologies(mtest.ReplicaSet), func(mt *mtest.T) {
+	mt.RunOpts("hello lastWriteDate", mtest.NewOptions().Topologies(mtest.ReplicaSet), func(mt *mtest.T) {
 		_, err := mt.Coll.InsertOne(mtest.Background, bson.D{{"x", 1}})
 		assert.Nil(mt, err, "InsertOne error: %v", err)
 	})
@@ -413,7 +460,12 @@ func TestClient(t *testing.T) {
 		// First two messages should be connection handshakes: one for the heartbeat connection and the other for the
 		// application connection.
 		for idx, pair := range msgPairs[:2] {
-			assert.Equal(mt, pair.CommandName, "isMaster", "expected command name isMaster at index %d, got %s", idx,
+			helloCommand := internal.LegacyHello
+			//  Expect "hello" command name with API version.
+			if os.Getenv("REQUIRE_API_VERSION") == "true" {
+				helloCommand = "hello"
+			}
+			assert.Equal(mt, pair.CommandName, helloCommand, "expected command name %s at index %d, got %s", helloCommand, idx,
 				pair.CommandName)
 
 			sent := pair.Sent
@@ -449,10 +501,223 @@ func TestClient(t *testing.T) {
 		mode := modeVal.StringValue()
 		assert.Equal(mt, mode, "primaryPreferred", "expected read preference mode primaryPreferred, got %v", mode)
 	})
+
+	// Test that using a client with minPoolSize set doesn't cause a data race.
+	mtOpts = mtest.NewOptions().ClientOptions(options.Client().SetMinPoolSize(5))
+	mt.RunOpts("minPoolSize", mtOpts, func(mt *mtest.T) {
+		err := mt.Client.Ping(context.Background(), readpref.Primary())
+		assert.Nil(t, err, "unexpected error calling Ping: %v", err)
+	})
+
+	mt.Run("minimum RTT is monitored", func(mt *mtest.T) {
+		if testing.Short() {
+			t.Skip("skipping integration test in short mode")
+		}
+
+		// Reset the client with a dialer that delays all network round trips by 300ms and set the
+		// heartbeat interval to 100ms to reduce the time it takes to collect RTT samples.
+		mt.ResetClient(options.Client().
+			SetDialer(newSlowConnDialer(300 * time.Millisecond)).
+			SetHeartbeatInterval(100 * time.Millisecond))
+
+		// Assert that the minimum RTT is eventually >250ms.
+		topo := getTopologyFromClient(mt.Client)
+		assert.Soon(mt, func() {
+			for {
+				time.Sleep(100 * time.Millisecond)
+
+				// Wait for all of the server's minimum RTTs to be >250ms.
+				done := true
+				for _, desc := range topo.Description().Servers {
+					server, err := topo.FindServer(desc)
+					assert.Nil(mt, err, "FindServer error: %v", err)
+					if server.MinRTT() <= 250*time.Millisecond {
+						done = false
+					}
+				}
+				if done {
+					return
+				}
+			}
+		}, 10*time.Second)
+	})
+
+	// Test that if the minimum RTT is greater than the remaining timeout for an operation, the
+	// operation is not sent to the server and no connections are closed.
+	mt.Run("minimum RTT used to prevent sending requests", func(mt *mtest.T) {
+		if testing.Short() {
+			t.Skip("skipping integration test in short mode")
+		}
+
+		// Assert that we can call Ping with a 250ms timeout.
+		ctx, cancel := context.WithTimeout(context.Background(), 250*time.Millisecond)
+		defer cancel()
+		err := mt.Client.Ping(ctx, nil)
+		assert.Nil(mt, err, "Ping error: %v", err)
+
+		// Reset the client with a dialer that delays all network round trips by 300ms and set the
+		// heartbeat interval to 100ms to reduce the time it takes to collect RTT samples.
+		tpm := newTestPoolMonitor()
+		mt.ResetClient(options.Client().
+			SetPoolMonitor(tpm.PoolMonitor).
+			SetDialer(newSlowConnDialer(300 * time.Millisecond)).
+			SetHeartbeatInterval(100 * time.Millisecond))
+
+		// Assert that the minimum RTT is eventually >250ms.
+		topo := getTopologyFromClient(mt.Client)
+		assert.Soon(mt, func() {
+			for {
+				time.Sleep(100 * time.Millisecond)
+
+				// Wait for all of the server's minimum RTTs to be >250ms.
+				done := true
+				for _, desc := range topo.Description().Servers {
+					server, err := topo.FindServer(desc)
+					assert.Nil(mt, err, "FindServer error: %v", err)
+					if server.MinRTT() <= 250*time.Millisecond {
+						done = false
+					}
+				}
+				if done {
+					return
+				}
+			}
+		}, 10*time.Second)
+
+		// Once we've waited for the minimum RTT for the single server to be >250ms, run a bunch of
+		// Ping operations with a timeout of 250ms and expect that they return errors.
+		for i := 0; i < 10; i++ {
+			ctx, cancel = context.WithTimeout(context.Background(), 250*time.Millisecond)
+			err := mt.Client.Ping(ctx, nil)
+			cancel()
+			assert.NotNil(mt, err, "expected Ping to return an error")
+		}
+
+		// Assert that the Ping timeouts result in no connections being closed.
+		closed := len(tpm.Events(func(e *event.PoolEvent) bool { return e.Type == event.ConnectionClosed }))
+		assert.Equal(t, 0, closed, "expected no connections to be closed")
+	})
 }
 
-type proxyMessage struct {
-	serverAddress string
-	sent          wiremessage.WireMessage
-	received      wiremessage.WireMessage
+func TestClientStress(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
+
+	mtOpts := mtest.NewOptions().CreateClient(false)
+	mt := mtest.New(t, mtOpts)
+	defer mt.Close()
+
+	// Test that a Client can recover from a massive traffic spike after the traffic spike is over.
+	mt.Run("Client recovers from traffic spike", func(mt *mtest.T) {
+		oid := primitive.NewObjectID()
+		doc := bson.D{{Key: "_id", Value: oid}, {Key: "key", Value: "value"}}
+		_, err := mt.Coll.InsertOne(context.Background(), doc)
+		assert.Nil(mt, err, "InsertOne error: %v", err)
+
+		// findOne calls FindOne("_id": oid) on the given collection and with the given timeout. It
+		// returns any errors.
+		findOne := func(coll *mongo.Collection, timeout time.Duration) error {
+			ctx, cancel := context.WithTimeout(context.Background(), timeout)
+			defer cancel()
+			var res map[string]interface{}
+			return coll.FindOne(ctx, bson.D{{Key: "_id", Value: oid}}).Decode(&res)
+		}
+
+		// findOneFor calls FindOne on the given collection and with the given timeout in a loop for
+		// the given duration and returns any errors returned by FindOne.
+		findOneFor := func(coll *mongo.Collection, timeout time.Duration, d time.Duration) []error {
+			errs := make([]error, 0)
+			start := time.Now()
+			for time.Since(start) <= d {
+				err := findOne(coll, timeout)
+				if err != nil {
+					errs = append(errs, err)
+				}
+				time.Sleep(10 * time.Microsecond)
+			}
+			return errs
+		}
+
+		// Calculate the maximum observed round-trip time by measuring the duration of some FindOne
+		// operations and picking the max.
+		var maxRTT time.Duration
+		for i := 0; i < 50; i++ {
+			start := time.Now()
+			err := findOne(mt.Coll, 10*time.Second)
+			assert.Nil(t, err, "FindOne error: %v", err)
+			duration := time.Since(start)
+			if duration > maxRTT {
+				maxRTT = duration
+			}
+		}
+		assert.True(mt, maxRTT > 0, "RTT must be greater than 0")
+
+		// Run tests with various "maxPoolSize" values, including 1-connection pools and the default
+		// size of 100, to test how the client handles traffic spikes using different connection
+		// pool configurations.
+		maxPoolSizes := []uint64{1, 10, 100}
+		for _, maxPoolSize := range maxPoolSizes {
+			tpm := newTestPoolMonitor()
+			maxPoolSizeOpt := mtest.NewOptions().ClientOptions(
+				options.Client().
+					SetPoolMonitor(tpm.PoolMonitor).
+					SetMaxPoolSize(maxPoolSize))
+			mt.RunOpts(fmt.Sprintf("maxPoolSize %d", maxPoolSize), maxPoolSizeOpt, func(mt *mtest.T) {
+				// Print the count of connection created, connection closed, and pool clear events
+				// collected during the test to help with debugging.
+				defer func() {
+					created := len(tpm.Events(func(e *event.PoolEvent) bool { return e.Type == event.ConnectionCreated }))
+					closed := len(tpm.Events(func(e *event.PoolEvent) bool { return e.Type == event.ConnectionClosed }))
+					poolCleared := len(tpm.Events(func(e *event.PoolEvent) bool { return e.Type == event.PoolCleared }))
+					mt.Logf("Connections created: %d, connections closed: %d, pool clears: %d", created, closed, poolCleared)
+				}()
+
+				doc := bson.D{{Key: "_id", Value: oid}, {Key: "key", Value: "value"}}
+				_, err := mt.Coll.InsertOne(context.Background(), doc)
+				assert.Nil(mt, err, "InsertOne error: %v", err)
+
+				// Set the timeout to be 100x the maximum observed RTT. Use a minimum 100ms timeout to
+				// prevent spurious test failures due to extremely low timeouts.
+				timeout := maxRTT * 100
+				minTimeout := 100 * time.Millisecond
+				if timeout < minTimeout {
+					timeout = minTimeout
+				}
+				mt.Logf("Max RTT %v; using a timeout of %v", maxRTT, timeout)
+
+				// Warm up the client for 1 second to allow connections to be established. Ignore
+				// any errors.
+				_ = findOneFor(mt.Coll, timeout, 1*time.Second)
+
+				// Simulate normal traffic by running one FindOne loop for 1 second and assert that there
+				// are no errors.
+				errs := findOneFor(mt.Coll, timeout, 1*time.Second)
+				assert.True(mt, len(errs) == 0, "expected no errors, but got %d (%v)", len(errs), errs)
+
+				// Simulate an extreme traffic spike by running 1,000 FindOne loops in parallel for 10
+				// seconds and expect at least some errors to occur.
+				g := new(errgroup.Group)
+				for i := 0; i < 1000; i++ {
+					g.Go(func() error {
+						errs := findOneFor(mt.Coll, timeout, 10*time.Second)
+						if len(errs) == 0 {
+							return nil
+						}
+						return errs[len(errs)-1]
+					})
+				}
+				err = g.Wait()
+				mt.Logf("Error from extreme traffic spike (errors are expected): %v", err)
+
+				// Simulate normal traffic again for 5 second. Ignore any errors to allow any outstanding
+				// connection errors to stop.
+				_ = findOneFor(mt.Coll, timeout, 5*time.Second)
+
+				// Simulate normal traffic again for 1 second and assert that there are no errors.
+				errs = findOneFor(mt.Coll, timeout, 1*time.Second)
+				assert.True(mt, len(errs) == 0, "expected no errors, but got %d (%v)", len(errs), errs)
+			})
+		}
+	})
 }

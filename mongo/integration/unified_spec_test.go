@@ -22,6 +22,7 @@ import (
 	"github.com/pritunl/mongo-go-driver/bson/bsonrw"
 	"github.com/pritunl/mongo-go-driver/bson/bsontype"
 	"github.com/pritunl/mongo-go-driver/event"
+	"github.com/pritunl/mongo-go-driver/internal/testutil"
 	"github.com/pritunl/mongo-go-driver/internal/testutil/assert"
 	"github.com/pritunl/mongo-go-driver/mongo"
 	"github.com/pritunl/mongo-go-driver/mongo/address"
@@ -35,13 +36,25 @@ import (
 )
 
 const (
-	gridFSFiles       = "fs.files"
-	gridFSChunks      = "fs.chunks"
-	cseMaxVersionTest = "operation fails with maxWireVersion < 8"
+	gridFSFiles            = "fs.files"
+	gridFSChunks           = "fs.chunks"
+	spec1403SkipReason     = "servers less than 4.2 do not have mongocryptd; see SPEC-1403"
+	godriver2123SkipReason = "failpoints and timeouts together cause failures; see GODRIVER-2123"
 )
 
 var (
 	defaultHeartbeatInterval = 50 * time.Millisecond
+	skippedTestDescriptions  = map[string]string{
+		// SPEC-1403: This test checks to see if the correct error is thrown when auto encrypting with a server < 4.2.
+		// Currently, the test will fail because a server < 4.2 wouldn't have mongocryptd, so Client construction
+		// would fail with a mongocryptd spawn error.
+		"operation fails with maxWireVersion < 8": spec1403SkipReason,
+		// GODRIVER-2123: The two tests below use a failpoint and a socket or server selection timeout.
+		// The timeout causes the eventual clearing of the failpoint in the test runner to fail with an
+		// i/o timeout.
+		"Ignore network timeout error on find":             godriver2123SkipReason,
+		"Network error on minPoolSize background creation": godriver2123SkipReason,
+	}
 )
 
 type testFile struct {
@@ -156,11 +169,10 @@ type operationError struct {
 const dataPath string = "../../data/"
 
 var directories = []string{
-	"transactions",
+	"transactions/legacy",
 	"convenient-transactions",
-	"crud/v2",
 	"retryable-reads",
-	"sessions",
+	"sessions/legacy",
 	"read-write-concern/operation",
 	"server-discovery-and-monitoring/integration",
 	"atlas-data-lake-testing",
@@ -229,11 +241,8 @@ func runSpecTestCase(mt *mtest.T, test *testCase, testFile testFile) {
 		if len(test.SkipReason) > 0 {
 			mt.Skip(test.SkipReason)
 		}
-		if test.Description == cseMaxVersionTest {
-			// This test checks to see if the correct error is thrown when auto encrypting with a server < 4.2.
-			// Currently, the test will fail because a server < 4.2 wouldn't have mongocryptd, so Client construction
-			// would fail with a mongocryptd spawn error. SPEC-1403 tracks the work to fix this.
-			mt.Skip("skipping maxWireVersion test")
+		if skipReason, ok := skippedTestDescriptions[test.Description]; ok {
+			mt.Skipf("skipping due to known failure: %v", skipReason)
 		}
 
 		// work around for SERVER-39704: run a non-transactional distinct against each shard in a sharded cluster
@@ -263,6 +272,7 @@ func runSpecTestCase(mt *mtest.T, test *testCase, testFile testFile) {
 		testClientOpts.SetPoolMonitor(&event.PoolMonitor{
 			Event: test.monitor.handlePoolEvent,
 		})
+		testClientOpts.SetServerMonitor(test.monitor.sdamMonitor)
 		if testClientOpts.HeartbeatInterval == nil {
 			// If one isn't specified in the test, use a low heartbeat frequency so the Client will quickly recover when
 			// using failpoints that cause SDAM state changes.
@@ -422,6 +432,7 @@ func executeTestRunnerOperation(mt *mtest.T, testCase *testCase, op *operation, 
 
 		targetHost := clientSession.PinnedServer.Addr.String()
 		opts := options.Client().ApplyURI(mtest.ClusterURI()).SetHosts([]string{targetHost})
+		testutil.AddTestServerAPIVersion(opts)
 		client, err := mongo.Connect(mtest.Background, opts)
 		if err != nil {
 			return fmt.Errorf("Connect error for targeted client: %v", err)
@@ -436,6 +447,21 @@ func executeTestRunnerOperation(mt *mtest.T, testCase *testCase, op *operation, 
 		fp, err := op.Arguments.LookupErr("failPoint")
 		assert.Nil(mt, err, "failPoint not found in arguments")
 		mt.SetFailPointFromDocument(fp.Document())
+	case "assertSessionTransactionState":
+		stateVal, err := op.Arguments.LookupErr("state")
+		assert.Nil(mt, err, "state not found in arguments")
+		expectedState, ok := stateVal.StringValueOK()
+		assert.True(mt, ok, "state argument is not a string")
+
+		assert.NotNil(mt, clientSession, "expected valid session, got nil")
+		actualState := clientSession.TransactionState.String()
+
+		// actualState should match expectedState, but "in progress" is the same as
+		// "in_progress".
+		stateMatch := actualState == expectedState ||
+			actualState == "in progress" && expectedState == "in_progress"
+		assert.True(mt, stateMatch, "expected transaction state %v, got %v",
+			expectedState, actualState)
 	case "assertSessionPinned":
 		if clientSession.PinnedServer == nil {
 			return errors.New("expected pinned server, got nil")

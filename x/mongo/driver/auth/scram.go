@@ -16,9 +16,9 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/pritunl/mongo-go-driver/x/bsonx/bsoncore"
 	"github.com/xdg-go/scram"
 	"github.com/xdg-go/stringprep"
-	"github.com/pritunl/mongo-go-driver/x/bsonx/bsoncore"
 )
 
 const (

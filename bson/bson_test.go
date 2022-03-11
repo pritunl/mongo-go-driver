@@ -15,7 +15,6 @@ import (
 	"time"
 
 	"github.com/google/go-cmp/cmp"
-	"github.com/stretchr/testify/require"
 	"github.com/pritunl/mongo-go-driver/bson/bsoncodec"
 	"github.com/pritunl/mongo-go-driver/bson/bsonoptions"
 	"github.com/pritunl/mongo-go-driver/bson/bsontype"
@@ -29,10 +28,6 @@ func noerr(t *testing.T, err error) {
 		t.Errorf("Unexpected error: (%T)%v", err, err)
 		t.FailNow()
 	}
-}
-
-func requireErrEqual(t *testing.T, err1 error, err2 error) {
-	require.True(t, compareErrors(err1, err2))
 }
 
 func TestTimeRoundTrip(t *testing.T) {
@@ -133,12 +128,12 @@ func (kb keyBool) MarshalKey() (string, error) {
 	return fmt.Sprintf("%v", kb), nil
 }
 
-func (kb keyBool) UnmarshalKey(key string) error {
+func (kb *keyBool) UnmarshalKey(key string) error {
 	switch key {
 	case "true":
-		kb = true
+		*kb = true
 	case "false":
-		kb = false
+		*kb = false
 	default:
 		return fmt.Errorf("invalid bool value %v", key)
 	}
@@ -169,12 +164,12 @@ func TestMapCodec(t *testing.T) {
 		}
 	})
 	t.Run("keys implements keyMarshaler and keyUnmarshaler", func(t *testing.T) {
-		mapObj := map[keyBool]int{keyBool(false): 1}
+		mapObj := map[keyBool]int{keyBool(true): 1}
 
 		doc, err := Marshal(mapObj)
 		assert.Nil(t, err, "Marshal error: %v", err)
 		idx, want := bsoncore.AppendDocumentStart(nil)
-		want = bsoncore.AppendInt32Element(want, "false", 1)
+		want = bsoncore.AppendInt32Element(want, "true", 1)
 		want, _ = bsoncore.AppendDocumentEnd(want, idx)
 		assert.Equal(t, want, doc, "expected result %v, got %v", string(want), string(doc))
 

@@ -3,7 +3,7 @@
   <a href="https://goreportcard.com/report/github.com/pritunl/mongo-go-driver"><img src="https://goreportcard.com/badge/github.com/pritunl/mongo-go-driver"></a>
   <a href="https://pkg.go.dev/github.com/pritunl/mongo-go-driver/mongo"><img src="etc/assets/godev-mongo-blue.svg" alt="docs"></a>
   <a href="https://pkg.go.dev/github.com/pritunl/mongo-go-driver/bson"><img src="etc/assets/godev-bson-blue.svg" alt="docs"></a>
-  <a href="https://docs.mongodb.com/drivers/go/"><img src="etc/assets/docs-mongodb-green.svg"></a>
+  <a href="https://docs.mongodb.com/drivers/go/current/"><img src="etc/assets/docs-mongodb-green.svg"></a>
 </p>
 
 # MongoDB Go Driver
@@ -14,7 +14,7 @@ The MongoDB supported driver for Go.
 - [Requirements](#requirements)
 - [Installation](#installation)
 - [Usage](#usage)
-- [Bugs / Feature Reporting](#bugs--feature-reporting)
+- [Feedback](#feedback)
 - [Testing / Development](#testing--development)
 - [Continuous Integration](#continuous-integration)
 - [License](#license)
@@ -22,7 +22,7 @@ The MongoDB supported driver for Go.
 -------------------------
 ## Requirements
 
-- Go 1.10 or higher. We aim to support the latest supported versions of go.
+- Go 1.10 or higher if using the driver as a dependency. Go 1.16 or higher if building the driver yourself. We aim to support the latest supported versions of go.
 - MongoDB 2.6 and higher.
 
 -------------------------
@@ -117,13 +117,13 @@ cur, err := collection.Find(ctx, bson.D{})
 if err != nil { log.Fatal(err) }
 defer cur.Close(ctx)
 for cur.Next(ctx) {
-   var result bson.D
-   err := cur.Decode(&result)
-   if err != nil { log.Fatal(err) }
-   // do something with result....
+    var result bson.D
+    err := cur.Decode(&result)
+    if err != nil { log.Fatal(err) }
+    // do something with result....
 }
 if err := cur.Err(); err != nil {
-  log.Fatal(err)
+    log.Fatal(err)
 }
 ```
 
@@ -137,13 +137,16 @@ filter := bson.D{{"name", "pi"}}
 ctx, cancel = context.WithTimeout(context.Background(), 5*time.Second)
 defer cancel()
 err = collection.FindOne(ctx, filter).Decode(&result)
-if err != nil {
+if err == mongo.ErrNoDocuments {
+    // Do something when no record was found
+    fmt.Println("record does not exist")
+} else if err != nil {
     log.Fatal(err)
 }
 // Do something with result...
 ```
 
-Additional examples and documentation can be found under the examples directory and [on the MongoDB Documentation website](https://docs.mongodb.com/drivers/go/).
+Additional examples and documentation can be found under the examples directory and [on the MongoDB Documentation website](https://docs.mongodb.com/drivers/go/current/).
 
 -------------------------
 ## Feedback
@@ -163,26 +166,41 @@ To test a **replica set** or **sharded cluster**, set `MONGODB_URI="<connection-
 For example, for a local replica set named `rs1` comprised of three nodes on ports 27017, 27018, and 27019:
 
 ```
-MONGODB_URI="mongodb://localhost:27017,localhost:27018,localhost:27018/?replicaSet=rs1" make
+MONGODB_URI="mongodb://localhost:27017,localhost:27018,localhost:27019/?replicaSet=rs1" make
 ```
 
 ### Testing Auth and TLS
 
-To test authentication and TLS, first set up a MongoDB cluster with auth and TLS configured. Testing authentication requires a user with the `root` role on the `admin` database. The Go Driver repository comes with example certificates in the `data/certificates` directory. These certs can be used for testing. Here is an example command that would run a mongod with TLS correctly configured for tests:
+To test authentication and TLS, first set up a MongoDB cluster with auth and TLS configured. Testing authentication requires a user with the `root` role on the `admin` database. Here is an example command that would run a mongod with TLS correctly configured for tests. Either set or replace PATH_TO_SERVER_KEY_FILE and PATH_TO_CA_FILE with paths to their respective files:
 
 ```
 mongod \
 --auth \
 --tlsMode requireTLS \
---tlsCertificateKeyFile $(pwd)/data/certificates/server.pem \
---tlsCAFile $(pwd)/data/certificates/ca.pem \
+--tlsCertificateKeyFile $PATH_TO_SERVER_KEY_FILE \
+--tlsCAFile $PATH_TO_CA_FILE \
 --tlsAllowInvalidCertificates
 ```
 
-To run the tests with `make`, set `MONGO_GO_DRIVER_CA_FILE` to the location of the CA file used by the database, set `MONGODB_URI` to the connection string of the server, set `AUTH=auth`, and set `SSL=ssl`. For example:
+To run the tests with `make`, set:
+- `MONGO_GO_DRIVER_CA_FILE` to the location of the CA file used by the database
+- `MONGO_GO_DRIVER_KEY_FILE` to the location of the client key file
+- `MONGO_GO_DRIVER_PKCS8_ENCRYPTED_KEY_FILE` to the location of the pkcs8 client key file encrypted with the password string: `password`
+- `MONGO_GO_DRIVER_PKCS8_UNENCRYPTED_KEY_FILE` to the location of the unencrypted pkcs8 key file
+- `MONGODB_URI` to the connection string of the server
+- `AUTH=auth`
+- `SSL=ssl`
+
+For example:
 
 ```
-AUTH=auth SSL=ssl MONGO_GO_DRIVER_CA_FILE=$(pwd)/data/certificates/ca.pem  MONGODB_URI="mongodb://user:password@localhost:27017/?authSource=admin" make
+AUTH=auth SSL=ssl \
+MONGO_GO_DRIVER_CA_FILE=$PATH_TO_CA_FILE \
+MONGO_GO_DRIVER_KEY_FILE=$PATH_TO_CLIENT_KEY_FILE \
+MONGO_GO_DRIVER_PKCS8_ENCRYPTED_KEY_FILE=$PATH_TO_ENCRYPTED_KEY_FILE \
+MONGO_GO_DRIVER_PKCS8_UNENCRYPTED_KEY_FILE=$PATH_TO_UNENCRYPTED_KEY_FILE \
+MONGODB_URI="mongodb://user:password@localhost:27017/?authSource=admin" \
+make
 ```
 
 Notes:
@@ -210,7 +228,7 @@ Check out the [project page](https://jira.mongodb.org/browse/GODRIVER) for ticke
 Commits to master are run automatically on [evergreen](https://evergreen.mongodb.com/waterfall/mongo-go-driver).
 
 -------------------------
-## Thanks and Acknowledgement 
+## Thanks and Acknowledgement
 
 <a href="https://github.com/ashleymcnamara">@ashleymcnamara</a> - Mongo Gopher Artwork
 
