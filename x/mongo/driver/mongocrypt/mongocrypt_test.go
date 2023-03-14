@@ -4,6 +4,7 @@
 // not use this file except in compliance with the License. You may obtain
 // a copy of the License at http://www.apache.org/licenses/LICENSE-2.0
 
+//go:build cse
 // +build cse
 
 package mongocrypt
@@ -23,7 +24,7 @@ import (
 	"github.com/pritunl/mongo-go-driver/x/mongo/driver/mongocrypt/options"
 )
 
-const resourcesDir = "../../../../data/mongocrypt"
+const resourcesDir = "../../../../testdata/mongocrypt"
 
 func noerr(t *testing.T, err error) {
 	if err != nil {
@@ -126,8 +127,8 @@ func testKmsCtx(t *testing.T, ctx *Context, keyAltName bool) {
 	hostname, err := kmsCtx.HostName()
 	noerr(t, err)
 
-	// TODO GODRIVER-2217: Simply check if hostname != expectedHost once all OSes build the latest
-	// libmongocrypt versions.
+	// TODO GODRIVER-2217: Simply check if hostname != expectedHost once all OSes build the latest libmongocrypt
+	// TODO versions.
 	//
 	// Only check for the hostname. libmongocrypt versions that do not include MONGOCRYPT-352 will not
 	// include the default port "443".
@@ -139,8 +140,8 @@ func testKmsCtx(t *testing.T, ctx *Context, keyAltName bool) {
 	// get message to send to KMS
 	kmsMsg, err := kmsCtx.Message()
 	noerr(t, err)
-	if len(kmsMsg) != 781 {
-		t.Fatalf("message length mismatch; expected 781, got %d", len(kmsMsg))
+	if len(kmsMsg) != 790 {
+		t.Fatalf("message length mismatch; expected 790, got %d", len(kmsMsg))
 	}
 
 	// feed mock KMS response

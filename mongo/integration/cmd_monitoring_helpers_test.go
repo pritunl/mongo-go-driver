@@ -8,6 +8,7 @@ package integration
 
 import (
 	"bytes"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"strings"
@@ -95,7 +96,13 @@ func compareValues(mt *mtest.T, key string, expected, actual bson.RawValue) erro
 		return fmt.Errorf("type mismatch for key %s; expected %s, got %s", key, expected.Type, actual.Type)
 	}
 	if !bytes.Equal(expected.Value, actual.Value) {
-		return fmt.Errorf("value mismatch for key %s; expected %s, got %s", key, expected.Value, actual.Value)
+		return fmt.Errorf(
+			"value mismatch for key %s; expected %s (hex=%s), got %s (hex=%s)",
+			key,
+			expected.Value,
+			hex.EncodeToString(expected.Value),
+			actual.Value,
+			hex.EncodeToString(actual.Value))
 	}
 	return nil
 }
@@ -256,6 +263,11 @@ func compareStartedEvent(mt *mtest.T, expectation *expectation, id0, id1 bson.Ra
 	mt.Helper()
 
 	expected := expectation.CommandStartedEvent
+
+	if len(expected.Extra) > 0 {
+		return fmt.Errorf("unrecognized fields for CommandStartedEvent: %v", expected.Extra)
+	}
+
 	evt := mt.GetStartedEvent()
 	if evt == nil {
 		return errors.New("expected CommandStartedEvent, got nil")
@@ -363,6 +375,9 @@ func compareSucceededEvent(mt *mtest.T, expectation *expectation) error {
 	mt.Helper()
 
 	expected := expectation.CommandSucceededEvent
+	if len(expected.Extra) > 0 {
+		return fmt.Errorf("unrecognized fields for CommandSucceededEvent: %v", expected.Extra)
+	}
 	evt := mt.GetSucceededEvent()
 	if evt == nil {
 		return errors.New("expected CommandSucceededEvent, got nil")
@@ -400,6 +415,9 @@ func compareFailedEvent(mt *mtest.T, expectation *expectation) error {
 	mt.Helper()
 
 	expected := expectation.CommandFailedEvent
+	if len(expected.Extra) > 0 {
+		return fmt.Errorf("unrecognized fields for CommandFailedEvent: %v", expected.Extra)
+	}
 	evt := mt.GetFailedEvent()
 	if evt == nil {
 		return errors.New("expected CommandFailedEvent, got nil")

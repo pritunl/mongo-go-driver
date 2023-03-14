@@ -10,21 +10,6 @@ if [ "Windows_NT" = "$OS" ]; then
     export GOPATH=$(cygpath -m $GOPATH)
     export GOCACHE=$(cygpath -m $GOCACHE)
     export DRIVERS_TOOLS=$(cygpath -m $DRIVERS_TOOLS)
-
-    if [ ! -d "c:/libmongocrypt/include" ]; then
-        mkdir -p c:/libmongocrypt/include
-        mkdir -p c:/libmongocrypt/bin
-        curl https://s3.amazonaws.com/mciuploads/libmongocrypt/windows/latest_release/libmongocrypt.tar.gz --output libmongocrypt.tar.gz
-        tar -xvzf libmongocrypt.tar.gz
-        cp ./bin/mongocrypt.dll c:/libmongocrypt/bin
-        cp ./include/mongocrypt/*.h c:/libmongocrypt/include
-        export PATH=$PATH:/cygdrive/c/libmongocrypt/bin
-    fi
-else
-    if [ ! -d "libmongocrypt" ]; then
-        git clone https://github.com/mongodb/libmongocrypt
-        ./libmongocrypt/.evergreen/compile.sh
-    fi
 fi
 
 export GOROOT="${GOROOT}"
@@ -35,7 +20,7 @@ export LD_LIBRARY_PATH=$(pwd)/install/libmongocrypt/lib
 export GOFLAGS=-mod=vendor
 
 SSL=${SSL:-nossl}
-if [ "$SSL" != "nossl" ]; then
+if [ "$SSL" != "nossl" -a -z "${SERVERLESS+x}" ]; then
     export MONGO_GO_DRIVER_CA_FILE="${DRIVERS_TOOLS}/.evergreen/x509gen/ca.pem"
     export MONGO_GO_DRIVER_KEY_FILE="${DRIVERS_TOOLS}/.evergreen/x509gen/client.pem"
     export MONGO_GO_DRIVER_PKCS8_ENCRYPTED_KEY_FILE="${DRIVERS_TOOLS}/.evergreen/x509gen/client-pkcs8-encrypted.pem"
@@ -84,6 +69,45 @@ if [ -z ${GO_BUILD_TAGS+x} ]; then
   GO_BUILD_TAGS="cse"
 fi
 
+# Ensure mock KMS servers are running before starting tests.
+await_server() {
+  for i in $(seq 300); do
+      # Exit code 7: "Failed to connect to host".
+      if curl -s "localhost:$2"; test $? -ne 7; then
+        return 0
+      else
+        sleep 1
+      fi
+  done
+  echo "could not detect '$1' server on port $2"
+}
+# * List servers to await here ...
+await_server "KMS", 5698
+
+echo "finished awaiting servers"
+
+if [ "${SKIP_CRYPT_SHARED_LIB}" = "true" ]; then
+  CRYPT_SHARED_LIB_PATH=""
+  echo "crypt_shared library is skipped"
+elif [ -z "${CRYPT_SHARED_LIB_PATH}" ]; then
+  echo "crypt_shared library path is empty"
+else
+  CRYPT_SHARED_LIB_PATH=${CRYPT_SHARED_LIB_PATH}
+  echo "crypt_shared library will be loaded from path: $CRYPT_SHARED_LIB_PATH"
+fi
+
+CSFLE_TLS_CA_FILE="$(pwd)/testdata/kmip-certs/ca-ec.pem"
+CSFLE_TLS_CERTIFICATE_KEY_FILE="$(pwd)/testdata/kmip-certs/client-ec.pem"
+
+if [ "Windows_NT" = "$OS" ]; then
+  CSFLE_TLS_CA_FILE=$(cygpath -m $CSFLE_TLS_CA_FILE)
+  CSFLE_TLS_CERTIFICATE_KEY_FILE=$(cygpath -m $CSFLE_TLS_CERTIFICATE_KEY_FILE)
+fi
+
+if [ -z ${MAKEFILE_TARGET+x} ]; then
+  MAKEFILE_TARGET="evg-test"
+fi
+
 AUTH=${AUTH} \
 SSL=${SSL} \
 MONGO_GO_DRIVER_CA_FILE=${MONGO_GO_DRIVER_CA_FILE} \
@@ -105,6 +129,9 @@ AZURE_CLIENT_ID="${cse_azure_client_id}" \
 AZURE_CLIENT_SECRET="${cse_azure_client_secret}" \
 GCP_EMAIL="${cse_gcp_email}" \
 GCP_PRIVATE_KEY="${cse_gcp_private_key}" \
-make evg-test \
+CSFLE_TLS_CA_FILE="$CSFLE_TLS_CA_FILE" \
+CSFLE_TLS_CERTIFICATE_KEY_FILE="$CSFLE_TLS_CERTIFICATE_KEY_FILE" \
+CRYPT_SHARED_LIB_PATH=$CRYPT_SHARED_LIB_PATH \
+make $MAKEFILE_TARGET \
 PKG_CONFIG_PATH=$PKG_CONFIG_PATH \
 LD_LIBRARY_PATH=$LD_LIBRARY_PATH

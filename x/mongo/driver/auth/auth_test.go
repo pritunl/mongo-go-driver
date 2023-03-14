@@ -11,7 +11,6 @@ import (
 
 	"github.com/google/go-cmp/cmp"
 	"github.com/pritunl/mongo-go-driver/x/bsonx/bsoncore"
-	. "github.com/pritunl/mongo-go-driver/x/mongo/driver/auth"
 	"github.com/pritunl/mongo-go-driver/x/mongo/driver/wiremessage"
 	"github.com/stretchr/testify/require"
 )
@@ -21,14 +20,14 @@ func TestCreateAuthenticator(t *testing.T) {
 	tests := []struct {
 		name   string
 		source string
-		auther Authenticator
+		auth   Authenticator
 	}{
-		{name: "", auther: &DefaultAuthenticator{}},
-		{name: "SCRAM-SHA-1", auther: &ScramAuthenticator{}},
-		{name: "SCRAM-SHA-256", auther: &ScramAuthenticator{}},
-		{name: "MONGODB-CR", auther: &MongoDBCRAuthenticator{}},
-		{name: "PLAIN", auther: &PlainAuthenticator{}},
-		{name: "MONGODB-X509", auther: &MongoDBX509Authenticator{}},
+		{name: "", auth: &DefaultAuthenticator{}},
+		{name: "SCRAM-SHA-1", auth: &ScramAuthenticator{}},
+		{name: "SCRAM-SHA-256", auth: &ScramAuthenticator{}},
+		{name: "MONGODB-CR", auth: &MongoDBCRAuthenticator{}},
+		{name: "PLAIN", auth: &PlainAuthenticator{}},
+		{name: "MONGODB-X509", auth: &MongoDBX509Authenticator{}},
 	}
 
 	for _, test := range tests {
@@ -41,7 +40,7 @@ func TestCreateAuthenticator(t *testing.T) {
 
 			a, err := CreateAuthenticator(test.name, cred)
 			require.NoError(t, err)
-			require.IsType(t, test.auther, a)
+			require.IsType(t, test.auth, a)
 		})
 	}
 }

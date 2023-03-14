@@ -12,7 +12,7 @@ import (
 	"time"
 
 	"github.com/pritunl/mongo-go-driver/bson/primitive"
-	testhelpers "github.com/pritunl/mongo-go-driver/internal/testutil/helpers"
+	"github.com/pritunl/mongo-go-driver/internal/testutil/helpers"
 	"github.com/pritunl/mongo-go-driver/mongo"
 	"github.com/pritunl/mongo-go-driver/mongo/options"
 	"github.com/pritunl/mongo-go-driver/x/bsonx/bsoncore"
@@ -54,21 +54,42 @@ func executeCreateChangeStream(ctx context.Context, operation *operation) (*oper
 				return nil, fmt.Errorf("error creating collation: %v", err)
 			}
 			opts.SetCollation(*collation)
+		case "comment":
+			commentString, err := createCommentString(val)
+			if err != nil {
+				return nil, fmt.Errorf("error creating comment: %v", err)
+			}
+			opts.SetComment(commentString)
 		case "fullDocument":
 			switch fd := val.StringValue(); fd {
 			case "default":
 				opts.SetFullDocument(options.Default)
+			case "required":
+				opts.SetFullDocument(options.Required)
 			case "updateLookup":
 				opts.SetFullDocument(options.UpdateLookup)
+			case "whenAvailable":
+				opts.SetFullDocument(options.WhenAvailable)
 			default:
 				return nil, fmt.Errorf("unrecognized fullDocument value %q", fd)
+			}
+		case "fullDocumentBeforeChange":
+			switch fdbc := val.StringValue(); fdbc {
+			case "off":
+				opts.SetFullDocumentBeforeChange(options.Off)
+			case "required":
+				opts.SetFullDocumentBeforeChange(options.Required)
+			case "whenAvailable":
+				opts.SetFullDocumentBeforeChange(options.WhenAvailable)
 			}
 		case "maxAwaitTimeMS":
 			opts.SetMaxAwaitTime(time.Duration(val.Int32()) * time.Millisecond)
 		case "pipeline":
-			pipeline = testhelpers.RawToInterfaceSlice(val.Array())
+			pipeline = helpers.RawToInterfaces(helpers.RawToDocuments(val.Array())...)
 		case "resumeAfter":
 			opts.SetResumeAfter(val.Document())
+		case "showExpandedEvents":
+			opts.SetShowExpandedEvents(val.Boolean())
 		case "startAfter":
 			opts.SetStartAfter(val.Document())
 		case "startAtOperationTime":
@@ -87,16 +108,17 @@ func executeCreateChangeStream(ctx context.Context, operation *operation) (*oper
 		return newErrorResult(err), nil
 	}
 
-	if operation.ResultEntityID == nil {
-		return nil, fmt.Errorf("no entity name provided to store executeChangeStream result")
-	}
-	if err := entities(ctx).addCursorEntity(*operation.ResultEntityID, stream); err != nil {
-		return nil, fmt.Errorf("error storing result as cursor entity: %v", err)
+	// createChangeStream is sometimes used with no corresponding saveResultAsEntity field. Return an
+	// empty result in this case.
+	if operation.ResultEntityID != nil {
+		if err := entities(ctx).addCursorEntity(*operation.ResultEntityID, stream); err != nil {
+			return nil, fmt.Errorf("error storing result as cursor entity: %v", err)
+		}
 	}
 	return newEmptyResult(), nil
 }
 
-func executeListDatabases(ctx context.Context, operation *operation) (*operationResult, error) {
+func executeListDatabases(ctx context.Context, operation *operation, nameOnly bool) (*operationResult, error) {
 	client, err := entities(ctx).client(operation.Object)
 	if err != nil {
 		return nil, err
@@ -105,7 +127,7 @@ func executeListDatabases(ctx context.Context, operation *operation) (*operation
 	// We set a default filter rather than erroring if the Arguments doc doesn't have a "filter" field because the
 	// spec says drivers should support this field, not must.
 	filter := emptyDocument
-	opts := options.ListDatabases()
+	opts := options.ListDatabases().SetNameOnly(nameOnly)
 
 	elems, _ := operation.Arguments.Elements()
 	for _, elem := range elems {

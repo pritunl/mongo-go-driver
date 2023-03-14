@@ -749,8 +749,9 @@ func ExampleClient_StartSession_withTransaction() {
 	result, err := sess.WithTransaction(
 		context.TODO(),
 		func(sessCtx mongo.SessionContext) (interface{}, error) {
-			// Use sessCtx as the Context parameter for InsertOne and FindOne so
-			// both operations are run in a transaction.
+			// Use the mongo.SessionContext as the Context parameter for
+			// InsertOne and FindOne so both operations are run in the same
+			// transaction.
 
 			coll := client.Database("db").Collection("coll")
 			res, err := coll.InsertOne(sessCtx, bson.D{{"x", 1}})
@@ -874,7 +875,7 @@ func ExampleCursor_TryNext() {
 		}
 
 		// If TryNext returns false, the next document is not yet available, the
-		// cursor was exhausted and was closed, or an error occured. TryNext
+		// cursor was exhausted and was closed, or an error occurred. TryNext
 		// should only be called again for the empty batch case.
 		if err := cursor.Err(); err != nil {
 			log.Fatal(err)

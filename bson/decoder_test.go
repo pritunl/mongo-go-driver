@@ -17,11 +17,13 @@ import (
 	"github.com/pritunl/mongo-go-driver/bson/bsonrw"
 	"github.com/pritunl/mongo-go-driver/bson/bsonrw/bsonrwtest"
 	"github.com/pritunl/mongo-go-driver/bson/bsontype"
+	"github.com/pritunl/mongo-go-driver/bson/primitive"
 	"github.com/pritunl/mongo-go-driver/x/bsonx/bsoncore"
+	"github.com/stretchr/testify/assert"
 )
 
 func TestBasicDecode(t *testing.T) {
-	for _, tc := range unmarshalingTestCases {
+	for _, tc := range unmarshalingTestCases() {
 		t.Run(tc.name, func(t *testing.T) {
 			got := reflect.New(tc.sType).Elem()
 			vr := bsonrw.NewBSONDocumentReader(tc.data)
@@ -30,34 +32,22 @@ func TestBasicDecode(t *testing.T) {
 			noerr(t, err)
 			err = decoder.DecodeValue(bsoncodec.DecodeContext{Registry: reg}, vr, got)
 			noerr(t, err)
-
-			if !reflect.DeepEqual(got.Addr().Interface(), tc.want) {
-				t.Errorf("Results do not match. got %+v; want %+v", got, tc.want)
-			}
+			assert.Equal(t, tc.want, got.Addr().Interface(), "Results do not match.")
 		})
 	}
 }
 
 func TestDecoderv2(t *testing.T) {
 	t.Run("Decode", func(t *testing.T) {
-		for _, tc := range unmarshalingTestCases {
+		for _, tc := range unmarshalingTestCases() {
 			t.Run(tc.name, func(t *testing.T) {
 				got := reflect.New(tc.sType).Interface()
 				vr := bsonrw.NewBSONDocumentReader(tc.data)
-				var reg *bsoncodec.Registry
-				if tc.reg != nil {
-					reg = tc.reg
-				} else {
-					reg = DefaultRegistry
-				}
-				dec, err := NewDecoderWithContext(bsoncodec.DecodeContext{Registry: reg}, vr)
+				dec, err := NewDecoderWithContext(bsoncodec.DecodeContext{Registry: DefaultRegistry}, vr)
 				noerr(t, err)
 				err = dec.Decode(got)
 				noerr(t, err)
-
-				if !reflect.DeepEqual(got, tc.want) {
-					t.Errorf("Results do not match. got %+v; want %+v", got, tc.want)
-				}
+				assert.Equal(t, tc.want, got, "Results do not match.")
 			})
 		}
 		t.Run("lookup error", func(t *testing.T) {
@@ -70,9 +60,7 @@ func TestDecoderv2(t *testing.T) {
 			noerr(t, err)
 			want := bsoncodec.ErrNoDecoder{Type: reflect.TypeOf(cdeih)}
 			got := dec.Decode(&cdeih)
-			if !cmp.Equal(got, want, cmp.Comparer(compareErrors)) {
-				t.Errorf("Received unexpected error. got %v; want %v", got, want)
-			}
+			assert.Equal(t, want, got, "Received unexpected error.")
 		})
 		t.Run("Unmarshaler", func(t *testing.T) {
 			testCases := []struct {
@@ -191,9 +179,7 @@ func TestDecoderv2(t *testing.T) {
 		err = dec.Decode(&got)
 		noerr(t, err)
 		want := foo{Item: "canvas", Qty: 4, Bonus: 2}
-		if !reflect.DeepEqual(got, want) {
-			t.Errorf("Results do not match. got %+v; want %+v", got, want)
-		}
+		assert.Equal(t, want, got, "Results do not match.")
 	})
 	t.Run("Reset", func(t *testing.T) {
 		vr1, vr2 := bsonrw.NewBSONDocumentReader([]byte{}), bsonrw.NewBSONDocumentReader([]byte{})
@@ -214,12 +200,12 @@ func TestDecoderv2(t *testing.T) {
 		dc2 := bsoncodec.DecodeContext{Registry: NewRegistryBuilder().Build()}
 		dec, err := NewDecoderWithContext(dc1, bsonrw.NewBSONDocumentReader([]byte{}))
 		noerr(t, err)
-		if dec.dc != dc1 {
+		if !reflect.DeepEqual(dec.dc, dc1) {
 			t.Errorf("Decoder should use the Registry provided. got %v; want %v", dec.dc, dc1)
 		}
 		err = dec.SetContext(dc2)
 		noerr(t, err)
-		if dec.dc != dc2 {
+		if !reflect.DeepEqual(dec.dc, dc2) {
 			t.Errorf("Decoder should use the Registry provided. got %v; want %v", dec.dc, dc2)
 		}
 	})
@@ -229,12 +215,12 @@ func TestDecoderv2(t *testing.T) {
 		dc2 := bsoncodec.DecodeContext{Registry: r2}
 		dec, err := NewDecoder(bsonrw.NewBSONDocumentReader([]byte{}))
 		noerr(t, err)
-		if dec.dc != dc1 {
+		if !reflect.DeepEqual(dec.dc, dc1) {
 			t.Errorf("Decoder should use the Registry provided. got %v; want %v", dec.dc, dc1)
 		}
 		err = dec.SetRegistry(r2)
 		noerr(t, err)
-		if dec.dc != dc2 {
+		if !reflect.DeepEqual(dec.dc, dc2) {
 			t.Errorf("Decoder should use the Registry provided. got %v; want %v", dec.dc, dc2)
 		}
 	})
@@ -249,6 +235,85 @@ func TestDecoderv2(t *testing.T) {
 		if err != ErrDecodeToNil {
 			t.Fatalf("Decode error mismatch; expected %v, got %v", ErrDecodeToNil, err)
 		}
+	})
+	t.Run("SetDocumentType embedded map as empty interface", func(t *testing.T) {
+		type someMap map[string]interface{}
+
+		in := make(someMap)
+		in["foo"] = map[string]interface{}{"bar": "baz"}
+
+		bytes, err := Marshal(in)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		var bsonOut someMap
+		dec, err := NewDecoder(bsonrw.NewBSONDocumentReader(bytes))
+		if err != nil {
+			t.Fatal(err)
+		}
+		dec.DefaultDocumentM()
+		if err := dec.Decode(&bsonOut); err != nil {
+			t.Fatal(err)
+		}
+
+		// Ensure that interface{}-typed top-level data is converted to the document type.
+		bsonOutType := reflect.TypeOf(bsonOut)
+		inType := reflect.TypeOf(in)
+		assert.Equal(t, inType, bsonOutType, "expected %v to equal %v", inType.String(), bsonOutType.String())
+
+		// Ensure that the embedded type is a primitive map.
+		mType := reflect.TypeOf(primitive.M{})
+		bsonFooOutType := reflect.TypeOf(bsonOut["foo"])
+		assert.Equal(t, mType, bsonFooOutType, "expected %v to equal %v", mType.String(), bsonFooOutType.String())
+	})
+	t.Run("SetDocumentType for decoding into interface{} alias", func(t *testing.T) {
+		var in interface{} = map[string]interface{}{"bar": "baz"}
+
+		bytes, err := Marshal(in)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		var bsonOut interface{}
+		dec, err := NewDecoder(bsonrw.NewBSONDocumentReader(bytes))
+		if err != nil {
+			t.Fatal(err)
+		}
+		dec.DefaultDocumentD()
+		if err := dec.Decode(&bsonOut); err != nil {
+			t.Fatal(err)
+		}
+
+		// Ensure that interface{}-typed top-level data is converted to the document type.
+		dType := reflect.TypeOf(primitive.D{})
+		bsonOutType := reflect.TypeOf(bsonOut)
+		assert.Equal(t, dType, bsonOutType,
+			"expected %v to equal %v", dType.String(), bsonOutType.String())
+	})
+	t.Run("SetDocumentType for decoding into non-interface{} alias", func(t *testing.T) {
+		var in interface{} = map[string]interface{}{"bar": "baz"}
+
+		bytes, err := Marshal(in)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		var bsonOut struct{}
+		dec, err := NewDecoder(bsonrw.NewBSONDocumentReader(bytes))
+		if err != nil {
+			t.Fatal(err)
+		}
+		dec.DefaultDocumentD()
+		if err := dec.Decode(&bsonOut); err != nil {
+			t.Fatal(err)
+		}
+
+		// Ensure that typed top-level data is not converted to the document type.
+		dType := reflect.TypeOf(primitive.D{})
+		bsonOutType := reflect.TypeOf(bsonOut)
+		assert.NotEqual(t, dType, bsonOutType,
+			"expected %v to not equal %v", dType.String(), bsonOutType.String())
 	})
 }
 

@@ -15,12 +15,12 @@ import (
 	"testing"
 	"time"
 
-	"github.com/stretchr/testify/require"
 	"github.com/pritunl/mongo-go-driver/internal/testutil/assert"
 	"github.com/pritunl/mongo-go-driver/mongo/address"
 	"github.com/pritunl/mongo-go-driver/mongo/description"
-	"github.com/pritunl/mongo-go-driver/x/mongo/driver/connstring"
+	"github.com/pritunl/mongo-go-driver/mongo/options"
 	"github.com/pritunl/mongo-go-driver/x/mongo/driver/dns"
+	"github.com/stretchr/testify/require"
 )
 
 type mockResolver struct {
@@ -125,17 +125,25 @@ func compareHosts(t *testing.T, received []description.Server, expected []string
 }
 
 func TestPollingSRVRecordsSpec(t *testing.T) {
-	if testing.Short() {
-		t.Skip("skipping integration test in short mode")
+	for _, uri := range []string{
+		"mongodb+srv://test1.test.build.10gen.cc/?heartbeatFrequencyMS=100",
+		// Test with user:pass as a regression test for GODRIVER-2620
+		"mongodb+srv://user:pass@test1.test.build.10gen.cc/?heartbeatFrequencyMS=100",
+	} {
+		t.Run(uri, func(t *testing.T) {
+			testPollingSRVRecordsSpec(t, uri)
+		})
 	}
+}
+
+func testPollingSRVRecordsSpec(t *testing.T, uri string) {
+	t.Helper()
 	for _, tt := range srvPollingTests {
 		t.Run(tt.name, func(t *testing.T) {
-			cs, err := connstring.ParseAndValidate("mongodb+srv://test1.test.build.10gen.cc/?heartbeatFrequencyMS=100")
-			require.NoError(t, err, "Problem parsing the uri: %v", err)
-			topo, err := New(
-				WithConnString(func(connstring.ConnString) connstring.ConnString { return cs }),
-				WithURI(func(string) string { return cs.Original }),
-			)
+			cfg, err := NewConfig(options.Client().ApplyURI(uri), nil)
+			require.NoError(t, err, "error constructing topology configs: %v", err)
+
+			topo, err := New(cfg)
 			require.NoError(t, err, "Could not create the topology: %v", err)
 			mockRes := newMockResolver(tt.recordsToAdd, tt.recordsToRemove, tt.lookupFail, tt.lookupTimeout)
 			topo.dnsResolver = &dns.Resolver{mockRes.LookupSRV, mockRes.LookupTXT}
@@ -159,16 +167,12 @@ func TestPollingSRVRecordsSpec(t *testing.T) {
 }
 
 func TestPollSRVRecords(t *testing.T) {
-	if testing.Short() {
-		t.Skip("skipping integration test in short mode")
-	}
 	t.Run("Not unknown or sharded topology", func(t *testing.T) {
-		cs, err := connstring.ParseAndValidate("mongodb+srv://test1.test.build.10gen.cc/?heartbeatFrequencyMS=100")
-		require.NoError(t, err, "Problem parsing the uri: %v", err)
-		topo, err := New(
-			WithConnString(func(connstring.ConnString) connstring.ConnString { return cs }),
-			WithURI(func(string) string { return cs.Original }),
-		)
+		uri := "mongodb+srv://test1.test.build.10gen.cc/?heartbeatFrequencyMS=100"
+		cfg, err := NewConfig(options.Client().ApplyURI(uri), nil)
+		require.NoError(t, err, "error constructing topology config: %v", err)
+
+		topo, err := New(cfg)
 		require.NoError(t, err, "Could not create the topology: %v", err)
 		mockRes := newMockResolver(nil, nil, false, false)
 		topo.dnsResolver = &dns.Resolver{mockRes.LookupSRV, mockRes.LookupTXT}
@@ -202,12 +206,11 @@ func TestPollSRVRecords(t *testing.T) {
 
 	})
 	t.Run("Failed Hostname Verification", func(t *testing.T) {
-		cs, err := connstring.ParseAndValidate("mongodb+srv://test1.test.build.10gen.cc/?heartbeatFrequencyMS=100")
-		require.NoError(t, err, "Problem parsing the uri: %v", err)
-		topo, err := New(
-			WithConnString(func(connstring.ConnString) connstring.ConnString { return cs }),
-			WithURI(func(string) string { return cs.Original }),
-		)
+		uri := "mongodb+srv://test1.test.build.10gen.cc/?heartbeatFrequencyMS=100"
+		cfg, err := NewConfig(options.Client().ApplyURI(uri), nil)
+		require.NoError(t, err, "error constructing topology config: %v", err)
+
+		topo, err := New(cfg)
 		require.NoError(t, err, "Could not create the topology: %v", err)
 		mockRes := newMockResolver([]*net.SRV{{"blah.bleh", 27019, 0, 0}, {"localhost.test.build.10gen.cc.", 27020, 0, 0}}, nil, false, false)
 		topo.dnsResolver = &dns.Resolver{mockRes.LookupSRV, mockRes.LookupTXT}
@@ -230,12 +233,11 @@ func TestPollSRVRecords(t *testing.T) {
 
 	})
 	t.Run("Return to polling time", func(t *testing.T) {
-		cs, err := connstring.ParseAndValidate("mongodb+srv://test1.test.build.10gen.cc/?heartbeatFrequencyMS=100")
-		require.NoError(t, err, "Problem parsing the uri: %v", err)
-		topo, err := New(
-			WithConnString(func(connstring.ConnString) connstring.ConnString { return cs }),
-			WithURI(func(string) string { return cs.Original }),
-		)
+		uri := "mongodb+srv://test1.test.build.10gen.cc/?heartbeatFrequencyMS=100"
+		cfg, err := NewConfig(options.Client().ApplyURI(uri), nil)
+		require.NoError(t, err, "error constructing topology config: %v", err)
+
+		topo, err := New(cfg)
 		require.NoError(t, err, "Could not create the topology: %v", err)
 		mockRes := newMockResolver(nil, nil, false, false)
 		mockRes.fail = 1
@@ -263,21 +265,17 @@ func TestPollingSRVRecordsLoadBalanced(t *testing.T) {
 	createLBTopology := func(t *testing.T, uri string) *Topology {
 		t.Helper()
 
-		cs, err := connstring.ParseAndValidate(uri)
-		assert.Nil(t, err, "connstring.ParseAndValidate error: %v", err)
-		cs.LoadBalancedSet = true
-		cs.LoadBalanced = true
+		cfg, err := NewConfig(options.Client().ApplyURI(uri).SetLoadBalanced(true), nil)
+		require.NoError(t, err, "error constructing topology config: %v", err)
 
-		topo, err := New(
-			WithConnString(func(connstring.ConnString) connstring.ConnString { return cs }),
-			WithURI(func(string) string { return cs.Original }),
-		)
-		assert.Nil(t, err, "topology.New error: %v", err)
+		topo, err := New(cfg)
+		require.NoError(t, err, "Could not create the topology: %v", err)
+
 		return topo
 	}
 
 	t.Run("pollingRequired is set to false", func(t *testing.T) {
-		topo := createLBTopology(t, "mongodb+srv://test1.test.build.10gen.cc/?heartbeatFrequencyMS=100")
+		topo := createLBTopology(t, "mongodb+srv://test24.test.build.10gen.cc/?heartbeatFrequencyMS=100")
 		assert.False(t, topo.pollingRequired, "expected SRV polling to not be required, but it is")
 	})
 
@@ -309,23 +307,17 @@ func TestPollingSRVRecordsLoadBalanced(t *testing.T) {
 }
 
 func TestPollSRVRecordsMaxHosts(t *testing.T) {
-	if testing.Short() {
-		t.Skip("skipping integration test in short mode")
-	}
-
 	// simulateSRVPoll creates a topology with srvMaxHosts, mocks the DNS changes described by
 	// recordsToAdd and recordsToRemove, and returns the the topology.
 	simulateSRVPoll := func(srvMaxHosts int, recordsToAdd []*net.SRV, recordsToRemove []*net.SRV) (*Topology, func(ctx context.Context) error) {
 		t.Helper()
 
-		cs, err := connstring.ParseAndValidate("mongodb+srv://test1.test.build.10gen.cc/?heartbeatFrequencyMS=100")
-		assert.Nil(t, err, "ParseAndValidate error: %v", err)
-		topo, err := New(
-			WithConnString(func(connstring.ConnString) connstring.ConnString { return cs }),
-			WithURI(func(string) string { return cs.Original }),
-			WithSRVMaxHosts(func(int) int { return srvMaxHosts }),
-		)
-		assert.Nil(t, err, "error during topology creation: %v", err)
+		uri := "mongodb+srv://test1.test.build.10gen.cc/?heartbeatFrequencyMS=100"
+		cfg, err := NewConfig(options.Client().ApplyURI(uri).SetSRVMaxHosts(srvMaxHosts), nil)
+		require.NoError(t, err, "error constructing topology config: %v", err)
+
+		topo, err := New(cfg)
+		require.NoError(t, err, "Could not create the topology: %v", err)
 
 		mockRes := newMockResolver(recordsToAdd, recordsToRemove, false, false)
 		topo.dnsResolver = &dns.Resolver{mockRes.LookupSRV, mockRes.LookupTXT}
@@ -387,23 +379,17 @@ func TestPollSRVRecordsMaxHosts(t *testing.T) {
 }
 
 func TestPollSRVRecordsServiceName(t *testing.T) {
-	if testing.Short() {
-		t.Skip("skipping integration test in short mode")
-	}
-
 	// simulateSRVPoll creates a topology with srvServiceName, mocks the DNS changes described by
 	// recordsToAdd and recordsToRemove, and returns the topology.
 	simulateSRVPoll := func(srvServiceName string, recordsToAdd []*net.SRV, recordsToRemove []*net.SRV) (*Topology, func(ctx context.Context) error) {
 		t.Helper()
 
-		cs, err := connstring.ParseAndValidate("mongodb+srv://test22.test.build.10gen.cc/?heartbeatFrequencyMS=100&srvServiceName=customname")
-		assert.Nil(t, err, "ParseAndValidate error: %v", err)
-		topo, err := New(
-			WithConnString(func(connstring.ConnString) connstring.ConnString { return cs }),
-			WithURI(func(string) string { return cs.Original }),
-			WithSRVServiceName(func(string) string { return srvServiceName }),
-		)
-		assert.Nil(t, err, "error during topology creation: %v", err)
+		uri := "mongodb+srv://test22.test.build.10gen.cc/?heartbeatFrequencyMS=100&srvServiceName=customname"
+		cfg, err := NewConfig(options.Client().ApplyURI(uri).SetSRVServiceName(srvServiceName), nil)
+		require.NoError(t, err, "error constructing topology config: %v", err)
+
+		topo, err := New(cfg)
+		require.NoError(t, err, "Could not create the topology: %v", err)
 
 		mockRes := newMockResolver(recordsToAdd, recordsToRemove, false, false)
 		topo.dnsResolver = &dns.Resolver{mockRes.LookupSRV, mockRes.LookupTXT}

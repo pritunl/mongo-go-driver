@@ -12,7 +12,6 @@ import (
 	"io"
 	"math/rand"
 	"runtime"
-	"strings"
 	"testing"
 	"time"
 
@@ -121,7 +120,7 @@ func TestGridFS(x *testing.T) {
 		_, err = bucket.UploadFromStream("filename", r)
 		assert.Nil(mt, err, "UploadFromStream error: %v", err)
 
-		findCtx, cancel := context.WithTimeout(mtest.Background, 5*time.Second)
+		findCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 		findIndex(findCtx, mt, mt.DB.Collection("fs.files"), false, "key", "filename")
 		findIndex(findCtx, mt, mt.DB.Collection("fs.chunks"), true, "key", "files_id")
@@ -299,7 +298,7 @@ func TestGridFS(x *testing.T) {
 					// The uploadDate field is calculated when the upload is complete. Manually fetch it from the
 					// fs.files collection to use in assertions.
 					filesColl := mt.DB.Collection("fs.files")
-					uploadedFileDoc, err := filesColl.FindOne(mtest.Background, bson.D{}).DecodeBytes()
+					uploadedFileDoc, err := filesColl.FindOne(context.Background(), bson.D{}).DecodeBytes()
 					assert.Nil(mt, err, "FindOne error: %v", err)
 					uploadTime := uploadedFileDoc.Lookup("uploadDate").Time().UTC()
 
@@ -360,7 +359,7 @@ func TestGridFS(x *testing.T) {
 				{"length", 10},
 				{"filename", "filename"},
 			}
-			_, err := mt.DB.Collection("fs.files").InsertOne(mtest.Background, filesDoc)
+			_, err := mt.DB.Collection("fs.files").InsertOne(context.Background(), filesDoc)
 			assert.Nil(mt, err, "InsertOne error for files collection: %v", err)
 
 			bucket, err := gridfs.NewBucket(mt.DB)
@@ -395,8 +394,7 @@ func TestGridFS(x *testing.T) {
 			p := make([]byte, len(fileData))
 			_, err = ds.Read(p)
 			assert.NotNil(mt, err, "expected error from Read, got nil")
-			assert.True(mt, strings.Contains(err.Error(), "context deadline exceeded"),
-				"expected error to contain 'context deadline exceeded', got %v", err.Error())
+			assert.True(mt, mongo.IsTimeout(err), "expected error to be a timeout, got %v", err.Error())
 		})
 		mt.Run("cursor error during skip after downloading", func(mt *mtest.T) {
 			// To simulate a cursor error we upload a file larger than the 16MB default batch size,
@@ -422,8 +420,7 @@ func TestGridFS(x *testing.T) {
 
 			_, err = ds.Skip(int64(len(fileData)))
 			assert.NotNil(mt, err, "expected error from Skip, got nil")
-			assert.True(mt, strings.Contains(err.Error(), "context deadline exceeded"),
-				"expected error to contain 'context deadline exceeded', got %v", err.Error())
+			assert.True(mt, mongo.IsTimeout(err), "expected error to be a timeout, got %v", err.Error())
 		})
 	})
 
@@ -528,13 +525,26 @@ func TestGridFS(x *testing.T) {
 			})
 		}
 	})
+
+	// Regression test for a bug introduced in GODRIVER-2346.
+	mt.Run("Find", func(mt *mtest.T) {
+		bucket, err := gridfs.NewBucket(mt.DB)
+		assert.Nil(mt, err, "NewBucket error: %v", err)
+		// Find the file back.
+		cursor, err := bucket.Find(bson.D{{"foo", "bar"}})
+		defer func() {
+			_ = cursor.Close(context.Background())
+		}()
+
+		assert.Nil(mt, err, "Find error: %v", err)
+	})
 }
 
 func assertGridFSCollectionState(mt *mtest.T, coll *mongo.Collection, expectedName string, expectedNumDocuments int64) {
 	mt.Helper()
 
 	assert.Equal(mt, expectedName, coll.Name(), "expected collection name %v, got %v", expectedName, coll.Name())
-	count, err := coll.CountDocuments(mtest.Background, bson.D{})
+	count, err := coll.CountDocuments(context.Background(), bson.D{})
 	assert.Nil(mt, err, "CountDocuments error: %v", err)
 	assert.Equal(mt, expectedNumDocuments, count, "expected %d documents in collection, got %d", expectedNumDocuments,
 		count)

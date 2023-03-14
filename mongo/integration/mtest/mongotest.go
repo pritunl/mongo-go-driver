@@ -13,21 +13,22 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/pritunl/mongo-go-driver/bson"
 	"github.com/pritunl/mongo-go-driver/event"
+	"github.com/pritunl/mongo-go-driver/internal"
 	"github.com/pritunl/mongo-go-driver/internal/testutil/assert"
 	"github.com/pritunl/mongo-go-driver/mongo"
 	"github.com/pritunl/mongo-go-driver/mongo/options"
 	"github.com/pritunl/mongo-go-driver/mongo/readconcern"
 	"github.com/pritunl/mongo-go-driver/mongo/readpref"
 	"github.com/pritunl/mongo-go-driver/mongo/writeconcern"
+	"github.com/pritunl/mongo-go-driver/x/bsonx/bsoncore"
 	"github.com/pritunl/mongo-go-driver/x/mongo/driver"
 )
 
 var (
-	// Background is a no-op context.
-	Background = context.Background()
 	// MajorityWc is the majority write concern.
 	MajorityWc = writeconcern.New(writeconcern.WMajority())
 	// PrimaryRp is the primary read preference.
@@ -109,7 +110,7 @@ type T struct {
 	enterprise        *bool
 	dataLake          *bool
 	ssl               *bool
-	collCreateOpts    bson.D
+	collCreateOpts    *options.CreateCollectionOptions
 	requireAPIVersion *bool
 
 	// options copied to sub-tests
@@ -165,6 +166,12 @@ func newT(wrapped *testing.T, opts ...*Options) *T {
 // New creates a new T instance with the given options. If the current environment does not satisfy constraints
 // specified in the options, the test will be skipped automatically.
 func New(wrapped *testing.T, opts ...*Options) *T {
+	// All tests that use mtest.New() are expected to be integration tests, so skip them when the
+	// -short flag is included in the "go test" command.
+	if testing.Short() {
+		wrapped.Skip("skipping mtest integration test in short mode")
+	}
+
 	t := newT(wrapped, opts...)
 
 	// only create a client if it needs to be shared in sub-tests
@@ -190,7 +197,7 @@ func (t *T) Close() {
 
 	// always disconnect the client regardless of clientType because Client.Disconnect will work against
 	// all deployments
-	_ = t.Client.Disconnect(Background)
+	_ = t.Client.Disconnect(context.Background())
 }
 
 // Run creates a new T instance for a sub-test and runs the given callback. It also creates a new collection using the
@@ -245,7 +252,7 @@ func (t *T) RunOpts(name string, opts *Options, callback func(*T)) {
 			}
 			// only disconnect client if it's not being shared
 			if sub.shareClient == nil || !*sub.shareClient {
-				_ = sub.Client.Disconnect(Background)
+				_ = sub.Client.Disconnect(context.Background())
 			}
 			assert.Equal(sub, 0, sessions, "%v sessions checked out", sessions)
 			assert.Equal(sub, 0, conns, "%v connections checked out", conns)
@@ -270,9 +277,9 @@ func (t *T) ClearMockResponses() {
 
 // GetStartedEvent returns the most recent CommandStartedEvent, or nil if one is not present.
 // This can only be called once per event.
-// TODO(GODRIVER-2075): GetStartedEvent documents that it returns the most recent event, but
-// actually returns the first event. Update either the documentation or implementation.
 func (t *T) GetStartedEvent() *event.CommandStartedEvent {
+	// TODO(GODRIVER-2075): GetStartedEvent documents that it returns the most recent event, but actually returns the first
+	// TODO event. Update either the documentation or implementation.
 	if len(t.started) == 0 {
 		return nil
 	}
@@ -283,9 +290,9 @@ func (t *T) GetStartedEvent() *event.CommandStartedEvent {
 
 // GetSucceededEvent returns the most recent CommandSucceededEvent, or nil if one is not present.
 // This can only be called once per event.
-// TODO(GODRIVER-2075): GetSucceededEvent documents that it returns the most recent event, but
-// actually returns the first event. Update either the documentation or implementation.
 func (t *T) GetSucceededEvent() *event.CommandSucceededEvent {
+	// TODO(GODRIVER-2075): GetSucceededEvent documents that it returns the most recent event, but actually returns the
+	// TODO first event. Update either the documentation or implementation.
 	if len(t.succeeded) == 0 {
 		return nil
 	}
@@ -296,9 +303,9 @@ func (t *T) GetSucceededEvent() *event.CommandSucceededEvent {
 
 // GetFailedEvent returns the most recent CommandFailedEvent, or nil if one is not present.
 // This can only be called once per event.
-// TODO(GODRIVER-2075): GetFailedEvent documents that it returns the most recent event, but actually
-// returns the first event. Update either the documentation or implementation.
 func (t *T) GetFailedEvent() *event.CommandFailedEvent {
+	// TODO(GODRIVER-2075): GetFailedEvent documents that it returns the most recent event, but actually  returns the first
+	// TODO event. Update either the documentation or implementation.
 	if len(t.failed) == 0 {
 		return nil
 	}
@@ -394,7 +401,7 @@ func (t *T) ResetClient(opts *options.ClientOptions) {
 		t.clientOpts = opts
 	}
 
-	_ = t.Client.Disconnect(Background)
+	_ = t.Client.Disconnect(context.Background())
 	t.createTestClient()
 	t.DB = t.Client.Database(t.dbName)
 	t.Coll = t.DB.Collection(t.collName, t.collOpts)
@@ -418,12 +425,13 @@ func (t *T) ResetClient(opts *options.ClientOptions) {
 
 // Collection is used to configure a new collection created during a test.
 type Collection struct {
-	Name       string
-	DB         string        // defaults to mt.DB.Name() if not specified
-	Client     *mongo.Client // defaults to mt.Client if not specified
-	Opts       *options.CollectionOptions
-	CreateOpts bson.D
-
+	Name               string
+	DB                 string        // defaults to mt.DB.Name() if not specified
+	Client             *mongo.Client // defaults to mt.Client if not specified
+	Opts               *options.CollectionOptions
+	CreateOpts         *options.CreateCollectionOptions
+	ViewOn             string
+	ViewPipeline       interface{}
 	hasDifferentClient bool
 	created            *mongo.Collection // the actual collection that was created
 }
@@ -442,16 +450,28 @@ func (t *T) CreateCollection(coll Collection, createOnServer bool) *mongo.Collec
 
 	db := coll.Client.Database(coll.DB)
 
-	if createOnServer && t.clientType != Mock {
-		cmd := bson.D{{"create", coll.Name}}
-		cmd = append(cmd, coll.CreateOpts...)
+	if coll.CreateOpts != nil && coll.CreateOpts.EncryptedFields != nil {
+		// An encrypted collection consists of a data collection and three state collections.
+		// Aborted test runs may leave these collections.
+		// Drop all four collections to avoid a quiet failure to create all collections.
+		DropEncryptedCollection(t, db.Collection(coll.Name), coll.CreateOpts.EncryptedFields)
+	}
 
-		if err := db.RunCommand(Background, cmd).Err(); err != nil {
+	if createOnServer && t.clientType != Mock {
+		var err error
+		if coll.ViewOn != "" {
+			err = db.CreateView(context.Background(), coll.Name, coll.ViewOn, coll.ViewPipeline)
+		} else {
+			err = db.CreateCollection(context.Background(), coll.Name, coll.CreateOpts)
+		}
+
+		// ignore ErrUnacknowledgedWrite. Client may be configured with unacknowledged write concern.
+		if err != nil && err != driver.ErrUnacknowledgedWrite {
 			// ignore NamespaceExists errors for idempotency
 
 			cmdErr, ok := err.(mongo.CommandError)
 			if !ok || cmdErr.Code != namespaceExistsErrCode {
-				t.Fatalf("error creating collection %v on server: %v", coll.Name, err)
+				t.Fatalf("error creating collection or view: %v on server: %v", coll.Name, err)
 			}
 		}
 	}
@@ -461,12 +481,59 @@ func (t *T) CreateCollection(coll Collection, createOnServer bool) *mongo.Collec
 	return coll.created
 }
 
+// DropEncryptedCollection drops a collection with EncryptedFields.
+// The EncryptedFields option is not supported in Collection.Drop(). See GODRIVER-2413.
+func DropEncryptedCollection(t *T, coll *mongo.Collection, encryptedFields interface{}) {
+	t.Helper()
+
+	var efBSON bsoncore.Document
+	efBSON, err := bson.Marshal(encryptedFields)
+	assert.Nil(t, err, "error in Marshal: %v", err)
+
+	// Drop the three encryption-related, associated collections: `escCollection`, `eccCollection` and `ecocCollection`.
+	// Drop ESCCollection.
+	escCollection, err := internal.GetEncryptedStateCollectionName(efBSON, coll.Name(), internal.EncryptedStateCollection)
+	assert.Nil(t, err, "error in getEncryptedStateCollectionName: %v", err)
+	err = coll.Database().Collection(escCollection).Drop(context.Background())
+	assert.Nil(t, err, "error in Drop: %v", err)
+
+	// Drop ECCCollection.
+	eccCollection, err := internal.GetEncryptedStateCollectionName(efBSON, coll.Name(), internal.EncryptedCacheCollection)
+	assert.Nil(t, err, "error in getEncryptedStateCollectionName: %v", err)
+	err = coll.Database().Collection(eccCollection).Drop(context.Background())
+	assert.Nil(t, err, "error in Drop: %v", err)
+
+	// Drop ECOCCollection.
+	ecocCollection, err := internal.GetEncryptedStateCollectionName(efBSON, coll.Name(), internal.EncryptedCompactionCollection)
+	assert.Nil(t, err, "error in getEncryptedStateCollectionName: %v", err)
+	err = coll.Database().Collection(ecocCollection).Drop(context.Background())
+	assert.Nil(t, err, "error in Drop: %v", err)
+
+	// Drop the data collection.
+	err = coll.Drop(context.Background())
+	assert.Nil(t, err, "error in Drop: %v", err)
+}
+
 // ClearCollections drops all collections previously created by this test.
 func (t *T) ClearCollections() {
 	// Collections should not be dropped when testing against Atlas Data Lake because the data is pre-inserted.
 	if !testContext.dataLake {
 		for _, coll := range t.createdColls {
-			_ = coll.created.Drop(Background)
+			if coll.CreateOpts != nil && coll.CreateOpts.EncryptedFields != nil {
+				DropEncryptedCollection(t, coll.created, coll.CreateOpts.EncryptedFields)
+			}
+
+			err := coll.created.Drop(context.Background())
+			if err == mongo.ErrUnacknowledgedWrite || err == driver.ErrUnacknowledgedWrite {
+				// It's possible that a collection could have an unacknowledged write concern, which
+				// could prevent it from being dropped for sharded clusters. We can resolve this by
+				// re-instantiating the collection with a majority write concern before dropping.
+				collname := coll.created.Name()
+				wcm := writeconcern.New(writeconcern.WMajority(), writeconcern.WTimeout(1*time.Second))
+				wccoll := t.DB.Collection(collname, options.Collection().SetWriteConcern(wcm))
+				_ = wccoll.Drop(context.Background())
+
+			}
 		}
 	}
 	t.createdColls = t.createdColls[:0]
@@ -527,7 +594,7 @@ func (t *T) ClearFailPoints() {
 			{"configureFailPoint", fp},
 			{"mode", "off"},
 		}
-		err := db.RunCommand(Background, cmd).Err()
+		err := db.RunCommand(context.Background(), cmd).Err()
 		if err != nil {
 			t.Fatalf("error clearing fail point %s: %v", fp, err)
 		}
@@ -570,19 +637,30 @@ func (t *T) createTestClient() {
 	if clientOpts.Deployment == nil && t.clientType != Mock && clientOpts.ServerAPIOptions == nil && testContext.requireAPIVersion {
 		clientOpts.SetServerAPIOptions(options.ServerAPI(driver.TestServerAPIVersion))
 	}
-	// command monitor
+
+	// Setup command monitor
+	var customMonitor = clientOpts.Monitor
 	clientOpts.SetMonitor(&event.CommandMonitor{
 		Started: func(_ context.Context, cse *event.CommandStartedEvent) {
+			if customMonitor != nil && customMonitor.Started != nil {
+				customMonitor.Started(context.Background(), cse)
+			}
 			t.monitorLock.Lock()
 			defer t.monitorLock.Unlock()
 			t.started = append(t.started, cse)
 		},
 		Succeeded: func(_ context.Context, cse *event.CommandSucceededEvent) {
+			if customMonitor != nil && customMonitor.Succeeded != nil {
+				customMonitor.Succeeded(context.Background(), cse)
+			}
 			t.monitorLock.Lock()
 			defer t.monitorLock.Unlock()
 			t.succeeded = append(t.succeeded, cse)
 		},
 		Failed: func(_ context.Context, cfe *event.CommandFailedEvent) {
+			if customMonitor != nil && customMonitor.Failed != nil {
+				customMonitor.Failed(context.Background(), cfe)
+			}
 			t.monitorLock.Lock()
 			defer t.monitorLock.Unlock()
 			t.failed = append(t.failed, cfe)
@@ -643,7 +721,7 @@ func (t *T) createTestClient() {
 	if err != nil {
 		t.Fatalf("error creating client: %v", err)
 	}
-	if err := t.Client.Connect(Background); err != nil {
+	if err := t.Client.Connect(context.Background()); err != nil {
 		t.Fatalf("error connecting client: %v", err)
 	}
 }
@@ -755,7 +833,23 @@ func verifyRunOnBlockConstraint(rob RunOnBlock) error {
 	if err := verifyServerlessConstraint(rob.Serverless); err != nil {
 		return err
 	}
-	return verifyServerParametersConstraints(rob.ServerParameters)
+	if err := verifyServerParametersConstraints(rob.ServerParameters); err != nil {
+		return err
+	}
+
+	if rob.CSFLE != nil {
+		if *rob.CSFLE && !IsCSFLEEnabled() {
+			return fmt.Errorf("runOnBlock requires CSFLE to be enabled. Build with the cse tag to enable")
+		} else if !*rob.CSFLE && IsCSFLEEnabled() {
+			return fmt.Errorf("runOnBlock requires CSFLE to be disabled. Build without the cse tag to disable")
+		}
+		if *rob.CSFLE {
+			if err := verifyVersionConstraints("4.2", ""); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
 }
 
 // verifyConstraints returns an error if the current environment does not match the constraints specified for the test.
@@ -794,7 +888,7 @@ func (t *T) verifyConstraints() error {
 
 	// Stop once we find a RunOnBlock that matches the current environment. Record all errors as we go because if we
 	// don't find any matching blocks, we want to report the comparison errors for each block.
-	var runOnErrors []error
+	runOnErrors := make([]error, 0, len(t.runOn))
 	for _, runOn := range t.runOn {
 		err := verifyRunOnBlockConstraint(runOn)
 		if err == nil {

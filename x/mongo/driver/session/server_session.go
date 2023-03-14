@@ -9,9 +9,9 @@ package session
 import (
 	"time"
 
+	"github.com/pritunl/mongo-go-driver/internal/uuid"
 	"github.com/pritunl/mongo-go-driver/mongo/description"
 	"github.com/pritunl/mongo-go-driver/x/bsonx/bsoncore"
-	"github.com/pritunl/mongo-go-driver/x/mongo/driver/uuid"
 )
 
 // Server is an open session with the server.

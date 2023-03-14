@@ -16,12 +16,12 @@ import (
 
 	"github.com/pritunl/mongo-go-driver/bson"
 	"github.com/pritunl/mongo-go-driver/bson/primitive"
+	"github.com/pritunl/mongo-go-driver/internal"
 	"github.com/pritunl/mongo-go-driver/mongo"
 	"github.com/pritunl/mongo-go-driver/mongo/options"
 	"github.com/pritunl/mongo-go-driver/mongo/readconcern"
 	"github.com/pritunl/mongo-go-driver/mongo/readpref"
 	"github.com/pritunl/mongo-go-driver/mongo/writeconcern"
-	"github.com/pritunl/mongo-go-driver/x/bsonx"
 	"github.com/pritunl/mongo-go-driver/x/bsonx/bsoncore"
 )
 
@@ -59,7 +59,7 @@ type Bucket struct {
 // Upload contains options to upload a file to a bucket.
 type Upload struct {
 	chunkSize int32
-	metadata  bsonx.Doc
+	metadata  bson.D
 }
 
 // NewBucket creates a GridFS bucket.
@@ -186,17 +186,13 @@ func (b *Bucket) UploadFromStreamWithID(fileID interface{}, filename string, sou
 
 // OpenDownloadStream creates a stream from which the contents of the file can be read.
 func (b *Bucket) OpenDownloadStream(fileID interface{}) (*DownloadStream, error) {
-	id, err := convertFileID(fileID)
-	if err != nil {
-		return nil, err
-	}
-	return b.openDownloadStream(bsonx.Doc{
-		{"_id", id},
+	return b.openDownloadStream(bson.D{
+		{"_id", fileID},
 	})
 }
 
 // DownloadToStream downloads the file with the specified fileID and writes it to the provided io.Writer.
-// Returns the number of bytes written to the steam and an error, or nil if there was no error.
+// Returns the number of bytes written to the stream and an error, or nil if there was no error.
 //
 // If this download requires a custom read deadline to be set on the bucket, it cannot be done concurrently with other
 // read operations operations on this bucket that also require a custom deadline.
@@ -224,9 +220,9 @@ func (b *Bucket) OpenDownloadStreamByName(filename string, opts ...*options.Name
 		numSkip = (-1 * numSkip) - 1
 	}
 
-	findOpts := options.Find().SetSkip(int64(numSkip)).SetSort(bsonx.Doc{{"uploadDate", bsonx.Int32(sortOrder)}})
+	findOpts := options.Find().SetSkip(int64(numSkip)).SetSort(bson.D{{"uploadDate", sortOrder}})
 
-	return b.openDownloadStream(bsonx.Doc{{"filename", bsonx.String(filename)}}, findOpts)
+	return b.openDownloadStream(bson.D{{"filename", filename}}, findOpts)
 }
 
 // DownloadToStreamByName downloads the file with the given name to the given io.Writer.
@@ -246,24 +242,39 @@ func (b *Bucket) DownloadToStreamByName(filename string, stream io.Writer, opts 
 //
 // If this operation requires a custom write deadline to be set on the bucket, it cannot be done concurrently with other
 // write operations operations on this bucket that also require a custom deadline.
+//
+// Use SetWriteDeadline to set a deadline for the delete operation.
 func (b *Bucket) Delete(fileID interface{}) error {
-	// delete document in files collection and then chunks to minimize race conditions
-
 	ctx, cancel := deadlineContext(b.writeDeadline)
 	if cancel != nil {
 		defer cancel()
 	}
+	return b.DeleteContext(ctx, fileID)
+}
 
-	id, err := convertFileID(fileID)
-	if err != nil {
-		return err
+// DeleteContext deletes all chunks and metadata associated with the file with the given file ID and runs the underlying
+// delete operations with the provided context.
+//
+// Use the context parameter to time-out or cancel the delete operation. The deadline set by SetWriteDeadline is ignored.
+func (b *Bucket) DeleteContext(ctx context.Context, fileID interface{}) error {
+	// If no deadline is set on the passed-in context, Timeout is set on the Client, and context is
+	// not already a Timeout context, honor Timeout in new Timeout context for operation execution to
+	// be shared by both delete operations.
+	if _, deadlineSet := ctx.Deadline(); !deadlineSet && b.db.Client().Timeout() != nil && !internal.IsTimeoutContext(ctx) {
+		newCtx, cancelFunc := internal.MakeTimeoutContext(ctx, *b.db.Client().Timeout())
+		// Redefine ctx to be the new timeout-derived context.
+		ctx = newCtx
+		// Cancel the timeout-derived context at the end of Execute to avoid a context leak.
+		defer cancelFunc()
 	}
-	res, err := b.filesColl.DeleteOne(ctx, bsonx.Doc{{"_id", id}})
+
+	// Delete document in files collection and then chunks to minimize race conditions.
+	res, err := b.filesColl.DeleteOne(ctx, bson.D{{"_id", fileID}})
 	if err == nil && res.DeletedCount == 0 {
 		err = ErrFileNotFound
 	}
 	if err != nil {
-		_ = b.deleteChunks(ctx, fileID) // can attempt to delete chunks even if no docs in files collection matched
+		_ = b.deleteChunks(ctx, fileID) // Can attempt to delete chunks even if no docs in files collection matched.
 		return err
 	}
 
@@ -274,12 +285,23 @@ func (b *Bucket) Delete(fileID interface{}) error {
 //
 // If this download requires a custom read deadline to be set on the bucket, it cannot be done concurrently with other
 // read operations operations on this bucket that also require a custom deadline.
+//
+// Use SetReadDeadline to set a deadline for the find operation.
 func (b *Bucket) Find(filter interface{}, opts ...*options.GridFSFindOptions) (*mongo.Cursor, error) {
 	ctx, cancel := deadlineContext(b.readDeadline)
 	if cancel != nil {
 		defer cancel()
 	}
 
+	return b.FindContext(ctx, filter, opts...)
+}
+
+// FindContext returns the files collection documents that match the given filter and runs the underlying
+// find query with the provided context.
+//
+// Use the context parameter to time-out or cancel the find operation. The deadline set by SetReadDeadline
+// is ignored.
+func (b *Bucket) FindContext(ctx context.Context, filter interface{}, opts ...*options.GridFSFindOptions) (*mongo.Cursor, error) {
 	gfsOpts := options.MergeGridFSFindOptions(opts...)
 	find := options.Find()
 	if gfsOpts.AllowDiskUse != nil {
@@ -311,19 +333,25 @@ func (b *Bucket) Find(filter interface{}, opts ...*options.GridFSFindOptions) (*
 //
 // If this operation requires a custom write deadline to be set on the bucket, it cannot be done concurrently with other
 // write operations operations on this bucket that also require a custom deadline
+//
+// Use SetWriteDeadline to set a deadline for the rename operation.
 func (b *Bucket) Rename(fileID interface{}, newFilename string) error {
 	ctx, cancel := deadlineContext(b.writeDeadline)
 	if cancel != nil {
 		defer cancel()
 	}
 
-	id, err := convertFileID(fileID)
-	if err != nil {
-		return err
-	}
+	return b.RenameContext(ctx, fileID, newFilename)
+}
+
+// RenameContext renames the stored file with the specified file ID and runs the underlying update with the provided
+// context.
+//
+// Use the context parameter to time-out or cancel the rename operation. The deadline set by SetWriteDeadline is ignored.
+func (b *Bucket) RenameContext(ctx context.Context, fileID interface{}, newFilename string) error {
 	res, err := b.filesColl.UpdateOne(ctx,
-		bsonx.Doc{{"_id", id}},
-		bsonx.Doc{{"$set", bsonx.Document(bsonx.Doc{{"filename", bsonx.String(newFilename)}})}},
+		bson.D{{"_id", fileID}},
+		bson.D{{"$set", bson.D{{"filename", newFilename}}}},
 	)
 	if err != nil {
 		return err
@@ -340,10 +368,31 @@ func (b *Bucket) Rename(fileID interface{}, newFilename string) error {
 //
 // If this operation requires a custom write deadline to be set on the bucket, it cannot be done concurrently with other
 // write operations operations on this bucket that also require a custom deadline
+//
+// Use SetWriteDeadline to set a deadline for the drop operation.
 func (b *Bucket) Drop() error {
 	ctx, cancel := deadlineContext(b.writeDeadline)
 	if cancel != nil {
 		defer cancel()
+	}
+
+	return b.DropContext(ctx)
+}
+
+// DropContext drops the files and chunks collections associated with this bucket and runs the drop operations with
+// the provided context.
+//
+// Use the context parameter to time-out or cancel the drop operation. The deadline set by SetWriteDeadline is ignored.
+func (b *Bucket) DropContext(ctx context.Context) error {
+	// If no deadline is set on the passed-in context, Timeout is set on the Client, and context is
+	// not already a Timeout context, honor Timeout in new Timeout context for operation execution to
+	// be shared by both drop operations.
+	if _, deadlineSet := ctx.Deadline(); !deadlineSet && b.db.Client().Timeout() != nil && !internal.IsTimeoutContext(ctx) {
+		newCtx, cancelFunc := internal.MakeTimeoutContext(ctx, *b.db.Client().Timeout())
+		// Redefine ctx to be the new timeout-derived context.
+		ctx = newCtx
+		// Cancel the timeout-derived context at the end of Execute to avoid a context leak.
+		defer cancelFunc()
 	}
 
 	err := b.filesColl.Drop(ctx)
@@ -426,11 +475,7 @@ func (b *Bucket) downloadToStream(ds *DownloadStream, stream io.Writer) (int64, 
 }
 
 func (b *Bucket) deleteChunks(ctx context.Context, fileID interface{}) error {
-	id, err := convertFileID(fileID)
-	if err != nil {
-		return err
-	}
-	_, err = b.chunksColl.DeleteMany(ctx, bsonx.Doc{{"files_id", id}})
+	_, err := b.chunksColl.DeleteMany(ctx, bson.D{{"files_id", fileID}})
 	return err
 }
 
@@ -449,13 +494,9 @@ func (b *Bucket) findFile(ctx context.Context, filter interface{}, opts ...*opti
 }
 
 func (b *Bucket) findChunks(ctx context.Context, fileID interface{}) (*mongo.Cursor, error) {
-	id, err := convertFileID(fileID)
-	if err != nil {
-		return nil, err
-	}
 	chunksCursor, err := b.chunksColl.Find(ctx,
-		bsonx.Doc{{"files_id", id}},
-		options.Find().SetSort(bsonx.Doc{{"n", bsonx.Int32(1)}})) // sort by chunk index
+		bson.D{{"files_id", fileID}},
+		options.Find().SetSort(bson.D{{"n", 1}})) // sort by chunk index
 	if err != nil {
 		return nil, err
 	}
@@ -550,11 +591,11 @@ func (b *Bucket) createIndexes(ctx context.Context) error {
 		return err
 	}
 
-	docRes := cloned.FindOne(ctx, bsonx.Doc{}, options.FindOne().SetProjection(bsonx.Doc{{"_id", bsonx.Int32(1)}}))
+	docRes := cloned.FindOne(ctx, bson.D{}, options.FindOne().SetProjection(bson.D{{"_id", 1}}))
 
 	_, err = docRes.DecodeBytes()
 	if err != mongo.ErrNoDocuments {
-		// nil, or error that occured during the FindOne operation
+		// nil, or error that occurred during the FindOne operation
 		return err
 	}
 
@@ -617,31 +658,13 @@ func (b *Bucket) parseUploadOptions(opts ...*options.UploadOptions) (*Upload, er
 		if err != nil {
 			return nil, err
 		}
-		doc, err := bsonx.ReadDoc(raw)
-		if err != nil {
-			return nil, err
+		var doc bson.D
+		unMarErr := bson.UnmarshalWithRegistry(uo.Registry, raw, &doc)
+		if unMarErr != nil {
+			return nil, unMarErr
 		}
 		upload.metadata = doc
 	}
 
 	return upload, nil
-}
-
-type _convertFileID struct {
-	ID interface{} `bson:"_id"`
-}
-
-func convertFileID(fileID interface{}) (bsonx.Val, error) {
-	id := _convertFileID{
-		ID: fileID,
-	}
-
-	b, err := bson.Marshal(id)
-	if err != nil {
-		return bsonx.Val{}, err
-	}
-	val := bsoncore.Document(b).Lookup("_id")
-	var res bsonx.Val
-	err = res.UnmarshalBSONValue(val.Type, val.Data)
-	return res, err
 }

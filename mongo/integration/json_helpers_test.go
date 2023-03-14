@@ -27,18 +27,18 @@ import (
 )
 
 var (
-	awsAccessKeyID              = os.Getenv("AWS_ACCESS_KEY_ID")
-	awsSecretAccessKey          = os.Getenv("AWS_SECRET_ACCESS_KEY")
-	awsTempAccessKeyID          = os.Getenv("CSFLE_AWS_TEMP_ACCESS_KEY_ID")
-	awsTempSecretAccessKey      = os.Getenv("CSFLE_AWS_TEMP_SECRET_ACCESS_KEY")
-	awsTempSessionToken         = os.Getenv("CSFLE_AWS_TEMP_SESSION_TOKEN")
-	azureTenantID               = os.Getenv("AZURE_TENANT_ID")
-	azureClientID               = os.Getenv("AZURE_CLIENT_ID")
-	azureClientSecret           = os.Getenv("AZURE_CLIENT_SECRET")
-	gcpEmail                    = os.Getenv("GCP_EMAIL")
-	gcpPrivateKey               = os.Getenv("GCP_PRIVATE_KEY")
-	tlsCAFile                   = os.Getenv("CSFLE_TLS_CA_FILE")
-	tlsClientCertificateKeyFile = os.Getenv("CSFLE_TLS_CERTIFICATE_KEY_FILE")
+	awsAccessKeyID                  = os.Getenv("AWS_ACCESS_KEY_ID")
+	awsSecretAccessKey              = os.Getenv("AWS_SECRET_ACCESS_KEY")
+	awsTempAccessKeyID              = os.Getenv("CSFLE_AWS_TEMP_ACCESS_KEY_ID")
+	awsTempSecretAccessKey          = os.Getenv("CSFLE_AWS_TEMP_SECRET_ACCESS_KEY")
+	awsTempSessionToken             = os.Getenv("CSFLE_AWS_TEMP_SESSION_TOKEN")
+	azureTenantID                   = os.Getenv("AZURE_TENANT_ID")
+	azureClientID                   = os.Getenv("AZURE_CLIENT_ID")
+	azureClientSecret               = os.Getenv("AZURE_CLIENT_SECRET")
+	gcpEmail                        = os.Getenv("GCP_EMAIL")
+	gcpPrivateKey                   = os.Getenv("GCP_PRIVATE_KEY")
+	tlsCAFileKMIP                   = os.Getenv("CSFLE_TLS_CA_FILE")
+	tlsClientCertificateKeyFileKMIP = os.Getenv("CSFLE_TLS_CERTIFICATE_KEY_FILE")
 )
 
 // Helper functions to do read JSON spec test files and convert JSON objects into the appropriate driver types.
@@ -155,6 +155,15 @@ func createAutoEncryptionOptions(t testing.TB, opts bson.Raw) *options.AutoEncry
 			aeo.SetKeyVaultNamespace(opt.StringValue())
 		case "bypassAutoEncryption":
 			aeo.SetBypassAutoEncryption(opt.Boolean())
+		case "encryptedFieldsMap":
+			var encryptedFieldsMap map[string]interface{}
+			err := bson.Unmarshal(opt.Document(), &encryptedFieldsMap)
+			if err != nil {
+				t.Fatalf("error creating encryptedFieldsMap: %v", err)
+			}
+			aeo.SetEncryptedFieldsMap(encryptedFieldsMap)
+		case "bypassQueryAnalysis":
+			aeo.SetBypassQueryAnalysis(opt.Boolean())
 		default:
 			t.Fatalf("unrecognized auto encryption option: %v", name)
 		}
@@ -177,8 +186,8 @@ func createTLSOptsMap(t testing.TB, opts bson.Raw) map[string]*tls.Config {
 
 		if provider == "kmip" {
 			tlsOptsMap := map[string]interface{}{
-				"tlsCertificateKeyFile": tlsClientCertificateKeyFile,
-				"tlsCAFile":             tlsCAFile,
+				"tlsCertificateKeyFile": tlsClientCertificateKeyFileKMIP,
+				"tlsCAFile":             tlsCAFileKMIP,
 			}
 
 			cfg, err := options.BuildTLSConfig(tlsOptsMap)
@@ -445,29 +454,6 @@ func createReadPref(opt bson.RawValue) *readpref.ReadPref {
 	return readPrefFromString(mode)
 }
 
-// transform a slice of BSON documents to a slice of interface{}.
-func rawSliceToInterfaceSlice(docs []bson.Raw) []interface{} {
-	out := make([]interface{}, len(docs))
-
-	for i, doc := range docs {
-		out[i] = doc
-	}
-
-	return out
-}
-
-// transform a BSON raw array to a slice of interface{}.
-func rawArrayToInterfaceSlice(docs bson.Raw) []interface{} {
-	vals, _ := docs.Values()
-
-	out := make([]interface{}, len(vals))
-	for i, val := range vals {
-		out[i] = val.Document()
-	}
-
-	return out
-}
-
 // retrieve the error associated with a result.
 func errorFromResult(t testing.TB, result interface{}) *operationError {
 	t.Helper()
@@ -639,25 +625,6 @@ func createCollation(t testing.TB, m bson.Raw) *options.Collation {
 		}
 	}
 	return &collation
-}
-
-func createChangeStreamOptions(t testing.TB, opts bson.Raw) *options.ChangeStreamOptions {
-	t.Helper()
-
-	csOpts := options.ChangeStream()
-	elems, _ := opts.Elements()
-	for _, elem := range elems {
-		key := elem.Key()
-		opt := elem.Value()
-
-		switch key {
-		case "batchSize":
-			csOpts.SetBatchSize(opt.Int32())
-		default:
-			t.Fatalf("unrecognized change stream option: %v", key)
-		}
-	}
-	return csOpts
 }
 
 func convertValueToMilliseconds(t testing.TB, val bson.RawValue) time.Duration {

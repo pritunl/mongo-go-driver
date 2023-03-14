@@ -8,23 +8,28 @@ package integration
 
 import (
 	"context"
+	"crypto/tls"
 	"io/ioutil"
 	"os"
 	"path"
 	"runtime"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/pritunl/mongo-go-driver/bson"
 	"github.com/pritunl/mongo-go-driver/internal/testutil/assert"
+	"github.com/pritunl/mongo-go-driver/mongo"
 	"github.com/pritunl/mongo-go-driver/mongo/description"
 	"github.com/pritunl/mongo-go-driver/mongo/integration/mtest"
+	"github.com/pritunl/mongo-go-driver/mongo/options"
+	"github.com/pritunl/mongo-go-driver/mongo/readpref"
 	"github.com/pritunl/mongo-go-driver/x/mongo/driver/connstring"
 	"github.com/pritunl/mongo-go-driver/x/mongo/driver/topology"
 )
 
 const (
-	seedlistDiscoveryTestsBaseDir = "../../data/initial-dns-seedlist-discovery"
+	seedlistDiscoveryTestsBaseDir = "../../testdata/initial-dns-seedlist-discovery"
 )
 
 type seedlistTest struct {
@@ -35,6 +40,7 @@ type seedlistTest struct {
 	NumHosts *int     `bson:"numHosts"`
 	Error    bool     `bson:"error"`
 	Options  bson.Raw `bson:"options"`
+	Ping     *bool    `bson:"ping"`
 }
 
 func TestInitialDNSSeedlistDiscoverySpec(t *testing.T) {
@@ -42,12 +48,18 @@ func TestInitialDNSSeedlistDiscoverySpec(t *testing.T) {
 	defer mt.Close()
 
 	mt.RunOpts("replica set", mtest.NewOptions().Topologies(mtest.ReplicaSet).CreateClient(false), func(mt *mtest.T) {
+		mt.Parallel()
+
 		runSeedlistDiscoveryDirectory(mt, "replica-set")
 	})
 	mt.RunOpts("sharded", mtest.NewOptions().Topologies(mtest.Sharded).CreateClient(false), func(mt *mtest.T) {
+		mt.Parallel()
+
 		runSeedlistDiscoveryDirectory(mt, "sharded")
 	})
 	mt.RunOpts("load balanced", mtest.NewOptions().Topologies(mtest.LoadBalanced).CreateClient(false), func(mt *mtest.T) {
+		mt.Parallel()
+
 		runSeedlistDiscoveryDirectory(mt, "load-balanced")
 	})
 }
@@ -59,6 +71,24 @@ func runSeedlistDiscoveryDirectory(mt *mtest.T, subdirectory string) {
 			runSeedlistDiscoveryTest(mt, path.Join(directoryPath, file))
 		})
 	}
+}
+
+// runSeedlistDiscoveryPingTest will create a new connection using the test URI and attempt to "ping" the server.
+func runSeedlistDiscoveryPingTest(mt *mtest.T, clientOpts *options.ClientOptions) {
+	ctx := context.Background()
+
+	client, err := mongo.Connect(ctx, clientOpts)
+	assert.Nil(mt, err, "Connect error: %v", err)
+
+	defer func() { _ = client.Disconnect(ctx) }()
+
+	// Create a context with a timeout to prevent the ping operation from blocking indefinitely.
+	pingCtx, cancel := context.WithTimeout(ctx, 1*time.Second)
+	defer cancel()
+
+	// Ping the server.
+	err = client.Ping(pingCtx, readpref.Nearest())
+	assert.Nil(mt, err, "Ping error: %v", err)
 }
 
 func runSeedlistDiscoveryTest(mt *mtest.T, file string) {
@@ -74,15 +104,6 @@ func runSeedlistDiscoveryTest(mt *mtest.T, file string) {
 	}
 	if strings.HasPrefix(runtime.Version(), "go1.11") && strings.HasSuffix(file, "/one-txt-record-multiple-strings.json") {
 		mt.Skip("skipping to avoid go1.11 problem with multiple strings in one TXT record")
-	}
-
-	// TODO(GODRIVER-2312): Unskip these tests when the DNS SRV records are updated to point to the
-	// load balancer instead of directly to the mongos.
-	if strings.HasSuffix(file, "load-balanced/loadBalanced-directConnection.json") ||
-		strings.HasSuffix(file, "load-balanced/loadBalanced-true-txt.json") ||
-		strings.HasSuffix(file, "load-balanced/srvMaxHosts-zero-txt.json") ||
-		strings.HasSuffix(file, "load-balanced/srvMaxHosts-zero.json") {
-		mt.Skip("skipping because the DNS SRV records need to be updated to work correctly (GODRIVER-2312)")
 	}
 
 	cs, err := connstring.ParseAndValidate(test.URI)
@@ -102,20 +123,31 @@ func runSeedlistDiscoveryTest(mt *mtest.T, file string) {
 		assert.Equal(mt, len(actualSeedlist), *test.NumSeeds,
 			"expected %v seeds, got %v", *test.NumSeeds, len(actualSeedlist))
 	}
+
 	// If Seeds is set, check contents of seedlist.
 	if test.Seeds != nil {
 		expectedSeedlist := buildSet(test.Seeds)
 		assert.Equal(mt, expectedSeedlist, actualSeedlist, "expected seedlist %v, got %v", expectedSeedlist, actualSeedlist)
 	}
 	verifyConnstringOptions(mt, test.Options, cs)
-	setSSLSettings(mt, &cs, test)
+
+	tlsConfig := getSSLSettings(mt, test)
 
 	// Make a topology from the options.
-	topo, err := topology.New(topology.WithConnString(func(connstring.ConnString) connstring.ConnString { return cs }))
+	opts := options.Client().ApplyURI(test.URI)
+	if tlsConfig != nil {
+		opts.SetTLSConfig(tlsConfig)
+	}
+
+	cfg, err := topology.NewConfig(opts, nil)
+	assert.Nil(mt, err, "error constructing toplogy config: %v", err)
+
+	topo, err := topology.New(cfg)
 	assert.Nil(mt, err, "topology.New error: %v", err)
+
 	err = topo.Connect()
 	assert.Nil(mt, err, "topology.Connect error: %v", err)
-	defer func() { _ = topo.Disconnect(mtest.Background) }()
+	defer func() { _ = topo.Disconnect(context.Background()) }()
 
 	// If NumHosts is set, check number of hosts currently stored on the Topology.
 	if test.NumHosts != nil {
@@ -126,6 +158,10 @@ func runSeedlistDiscoveryTest(mt *mtest.T, file string) {
 	for _, host := range test.Hosts {
 		_, err := getServerByAddress(host, topo)
 		assert.Nil(mt, err, "error finding host %q: %v", host, err)
+	}
+
+	if ping := test.Ping; ping == nil || *ping {
+		runSeedlistDiscoveryPingTest(mt, opts)
 	}
 }
 
@@ -182,13 +218,13 @@ func verifyConnstringOptions(mt *mtest.T, expected bson.Raw, cs connstring.ConnS
 // present, we assume that the test will assert an error, so we proceed with the test as normal.
 // If the option is false, then we skip the test if the server is running with SSL enabled.
 // If the option is true, then we skip the test if the server is running without SSL enabled; if
-// the server is running with SSL enabled, then we manually set the necessary SSL options in the
-// connection string.
-func setSSLSettings(mt *mtest.T, cs *connstring.ConnString, test seedlistTest) {
+// the server is running with SSL enabled, then we return a tls.Config with InsecureSkipVerify
+// set to true.
+func getSSLSettings(mt *mtest.T, test seedlistTest) *tls.Config {
 	ssl, err := test.Options.LookupErr("ssl")
 	if err != nil {
 		// No "ssl" option is specified
-		return
+		return nil
 	}
 	testCaseExpectsSSL := ssl.Boolean()
 	envSSL := os.Getenv("SSL") == "ssl"
@@ -200,13 +236,16 @@ func setSSLSettings(mt *mtest.T, cs *connstring.ConnString, test seedlistTest) {
 
 	// Skip SSL tests if the server is running without SSL.
 	if testCaseExpectsSSL && !envSSL {
-		mt.Skip("skipping test that expectes ssl in a non-ssl environment")
+		mt.Skip("skipping test that expects ssl in a non-ssl environment")
 	}
 
 	// If SSL tests are running, set the CA file.
 	if testCaseExpectsSSL && envSSL {
-		cs.SSLInsecure = true
+		tlsConfig := new(tls.Config)
+		tlsConfig.InsecureSkipVerify = true
+		return tlsConfig
 	}
+	return nil
 }
 
 func getServerByAddress(address string, topo *topology.Topology) (description.Server, error) {
@@ -223,6 +262,14 @@ func getServerByAddress(address string, topo *topology.Topology) (description.Se
 	if err != nil {
 		return description.Server{}, err
 	}
+
+	// If the selected server is a topology.SelectedServer, then we can get the description without creating a
+	// connect pool.
+	topologySelectedServer, ok := selectedServer.(*topology.SelectedServer)
+	if ok {
+		return topologySelectedServer.Description().Server, nil
+	}
+
 	selectedServerConnection, err := selectedServer.Connection(context.Background())
 	if err != nil {
 		return description.Server{}, err

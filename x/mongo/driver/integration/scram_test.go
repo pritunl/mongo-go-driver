@@ -1,3 +1,9 @@
+// Copyright (C) MongoDB, Inc. 2022-present.
+//
+// Licensed under the Apache License, Version 2.0 (the "License"); you may
+// not use this file except in compliance with the License. You may obtain
+// a copy of the License at http://www.apache.org/licenses/LICENSE-2.0
+
 package integration
 
 import (
@@ -9,10 +15,10 @@ import (
 	"github.com/pritunl/mongo-go-driver/bson/bsontype"
 	"github.com/pritunl/mongo-go-driver/internal/testutil"
 	"github.com/pritunl/mongo-go-driver/mongo/description"
+	"github.com/pritunl/mongo-go-driver/mongo/options"
 	"github.com/pritunl/mongo-go-driver/mongo/writeconcern"
 	"github.com/pritunl/mongo-go-driver/x/bsonx/bsoncore"
 	"github.com/pritunl/mongo-go-driver/x/mongo/driver"
-	"github.com/pritunl/mongo-go-driver/x/mongo/driver/connstring"
 )
 
 type scramTestCase struct {
@@ -120,22 +126,23 @@ func hasAuthMech(mechs []string, m string) bool {
 
 func testScramUserAuthWithMech(t *testing.T, c scramTestCase, mech string) error {
 	t.Helper()
-	cs := testutil.ConnString(t)
-	cs.Username = c.username
-	cs.Password = c.password
-	cs.AuthSource = testutil.DBName(t)
+	credential := options.Credential{
+		Username:   c.username,
+		Password:   c.password,
+		AuthSource: testutil.DBName(t),
+	}
 	switch mech {
 	case "negotiate":
-		cs.AuthMechanism = ""
+		credential.AuthMechanism = ""
 	default:
-		cs.AuthMechanism = mech
+		credential.AuthMechanism = mech
 	}
-	return runScramAuthTest(t, cs)
+	return runScramAuthTest(t, credential)
 }
 
-func runScramAuthTest(t *testing.T, cs connstring.ConnString) error {
+func runScramAuthTest(t *testing.T, credential options.Credential) error {
 	t.Helper()
-	topology := testutil.TopologyWithConnString(t, cs)
+	topology := testutil.TopologyWithCredential(t, credential)
 	server, err := topology.SelectServer(context.Background(), description.WriteSelector())
 	noerr(t, err)
 

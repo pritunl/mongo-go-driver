@@ -3,7 +3,7 @@
   <a href="https://goreportcard.com/report/github.com/pritunl/mongo-go-driver"><img src="https://goreportcard.com/badge/github.com/pritunl/mongo-go-driver"></a>
   <a href="https://pkg.go.dev/github.com/pritunl/mongo-go-driver/mongo"><img src="etc/assets/godev-mongo-blue.svg" alt="docs"></a>
   <a href="https://pkg.go.dev/github.com/pritunl/mongo-go-driver/bson"><img src="etc/assets/godev-bson-blue.svg" alt="docs"></a>
-  <a href="https://docs.mongodb.com/drivers/go/current/"><img src="etc/assets/docs-mongodb-green.svg"></a>
+  <a href="https://www.mongodb.com/docs/drivers/go/current/"><img src="etc/assets/docs-mongodb-green.svg"></a>
 </p>
 
 # MongoDB Go Driver
@@ -22,13 +22,14 @@ The MongoDB supported driver for Go.
 -------------------------
 ## Requirements
 
-- Go 1.10 or higher if using the driver as a dependency. Go 1.16 or higher if building the driver yourself. We aim to support the latest supported versions of go.
-- MongoDB 2.6 and higher.
+- Go 1.13 or higher. We aim to support the latest versions of Go.
+  - Go 1.18 or higher is required to run the driver test suite.
+- MongoDB 3.6 and higher.
 
 -------------------------
 ## Installation
 
-The recommended way to get started using the MongoDB Go driver is by using go modules to install the dependency in
+The recommended way to get started using the MongoDB Go driver is by using Go modules to install the dependency in
 your project. This can be done either by importing packages from `github.com/pritunl/mongo-go-driver` and having the build
 step install the dependency or by explicitly running
 
@@ -49,6 +50,9 @@ To get started with the driver, import the `mongo` package and create a `mongo.C
 
 ```go
 import (
+    "context"
+    "time"
+
     "github.com/pritunl/mongo-go-driver/mongo"
     "github.com/pritunl/mongo-go-driver/mongo/options"
     "github.com/pritunl/mongo-go-driver/mongo/readpref"
@@ -101,6 +105,10 @@ Your import statement should now look like this:
 
 ```go
 import (
+    "context"
+    "log"
+    "time"
+
     "github.com/pritunl/mongo-go-driver/bson"
     "github.com/pritunl/mongo-go-driver/mongo"
     "github.com/pritunl/mongo-go-driver/mongo/options"
@@ -146,7 +154,7 @@ if err == mongo.ErrNoDocuments {
 // Do something with result...
 ```
 
-Additional examples and documentation can be found under the examples directory and [on the MongoDB Documentation website](https://docs.mongodb.com/drivers/go/current/).
+Additional examples and documentation can be found under the examples directory and [on the MongoDB Documentation website](https://www.mongodb.com/docs/drivers/go/current/).
 
 -------------------------
 ## Feedback
@@ -215,17 +223,22 @@ The MongoDB Go Driver supports wire protocol compression using Snappy, zLib, or 
 MONGO_GO_DRIVER_COMPRESSOR=snappy make
 ```
 
-Ensure the [`--networkMessageCompressors` flag](https://docs.mongodb.com/manual/reference/program/mongod/#cmdoption-mongod-networkmessagecompressors) on mongod or mongos includes `zlib` if testing zLib compression.
+Ensure the [`--networkMessageCompressors` flag](https://www.mongodb.com/docs/manual/reference/program/mongod/#cmdoption-mongod-networkmessagecompressors) on mongod or mongos includes `zlib` if testing zLib compression.
 
 -------------------------
 ## Contribution
 
-Check out the [project page](https://jira.mongodb.org/browse/GODRIVER) for tickets that need completing. See our [contribution guidelines](CONTRIBUTING.md) for details.
+Check out the [project page](https://jira.mongodb.org/browse/GODRIVER) for tickets that need completing. See our [contribution guidelines](docs/CONTRIBUTING.md) for details.
 
 -------------------------
 ## Continuous Integration
 
 Commits to master are run automatically on [evergreen](https://evergreen.mongodb.com/waterfall/mongo-go-driver).
+
+-------------------------
+## Frequently Encountered Issues
+
+See our [common issues](docs/common-issues.md) documentation for troubleshooting frequently encountered issues.
 
 -------------------------
 ## Thanks and Acknowledgement

@@ -4,6 +4,7 @@
 // not use this file except in compliance with the License. You may obtain
 // a copy of the License at http://www.apache.org/licenses/LICENSE-2.0
 
+// Package address provides structured representations of network addresses.
 package address // import "github.com/pritunl/mongo-go-driver/mongo/address"
 
 import (

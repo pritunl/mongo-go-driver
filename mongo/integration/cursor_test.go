@@ -8,6 +8,7 @@ package integration
 
 import (
 	"context"
+	"errors"
 	"os"
 	"testing"
 	"time"
@@ -26,21 +27,21 @@ const (
 func TestCursor(t *testing.T) {
 	mt := mtest.New(t, mtest.NewOptions().CreateClient(false))
 	defer mt.Close()
-	cappedCollectionOpts := bson.D{{"capped", true}, {"size", 64 * 1024}}
+	cappedCollectionOpts := options.CreateCollection().SetCapped(true).SetSizeInBytes(64 * 1024)
 
 	// Server versions 2.6 and 3.0 use OP_GET_MORE so this works on >= 3.2 and when RequireAPIVersion is false;
 	// getMore cannot be sent with RunCommand as server API options will be attached when they should not be.
 	mt.RunOpts("cursor is killed on server", mtest.NewOptions().MinServerVersion("3.2").RequireAPIVersion(false), func(mt *mtest.T) {
 		initCollection(mt, mt.Coll)
-		c, err := mt.Coll.Find(mtest.Background, bson.D{}, options.Find().SetBatchSize(2))
+		c, err := mt.Coll.Find(context.Background(), bson.D{}, options.Find().SetBatchSize(2))
 		assert.Nil(mt, err, "Find error: %v", err)
 
 		id := c.ID()
-		assert.True(mt, c.Next(mtest.Background), "expected Next true, got false")
-		err = c.Close(mtest.Background)
+		assert.True(mt, c.Next(context.Background()), "expected Next true, got false")
+		err = c.Close(context.Background())
 		assert.Nil(mt, err, "Close error: %v", err)
 
-		err = mt.DB.RunCommand(mtest.Background, bson.D{
+		err = mt.DB.RunCommand(context.Background(), bson.D{
 			{"getMore", id},
 			{"collection", mt.Coll.Name()},
 		}).Err()
@@ -57,9 +58,9 @@ func TestCursor(t *testing.T) {
 			// If there's already documents in the current batch, TryNext should return true without doing a getMore
 
 			initCollection(mt, mt.Coll)
-			cursor, err := mt.Coll.Find(mtest.Background, bson.D{})
+			cursor, err := mt.Coll.Find(context.Background(), bson.D{})
 			assert.Nil(mt, err, "Find error: %v", err)
-			defer cursor.Close(mtest.Background)
+			defer cursor.Close(context.Background())
 			tryNextExistingBatchTest(mt, cursor)
 		})
 		mt.RunOpts("one getMore sent", mtest.NewOptions().CollectionCreateOptions(cappedCollectionOpts), func(mt *mtest.T) {
@@ -67,26 +68,26 @@ func TestCursor(t *testing.T) {
 
 			// insert a document because a tailable cursor will only have a non-zero ID if the initial Find matches
 			// at least one document
-			_, err := mt.Coll.InsertOne(mtest.Background, bson.D{{"x", 1}})
+			_, err := mt.Coll.InsertOne(context.Background(), bson.D{{"x", 1}})
 			assert.Nil(mt, err, "InsertOne error: %v", err)
 
-			cursor, err := mt.Coll.Find(mtest.Background, bson.D{}, options.Find().SetCursorType(options.Tailable))
+			cursor, err := mt.Coll.Find(context.Background(), bson.D{}, options.Find().SetCursorType(options.Tailable))
 			assert.Nil(mt, err, "Find error: %v", err)
-			defer cursor.Close(mtest.Background)
+			defer cursor.Close(context.Background())
 
 			// first call to TryNext should return 1 document
-			assert.True(mt, cursor.TryNext(mtest.Background), "expected Next to return true, got false")
+			assert.True(mt, cursor.TryNext(context.Background()), "expected Next to return true, got false")
 			// TryNext should attempt one getMore
 			mt.ClearEvents()
-			assert.False(mt, cursor.TryNext(mtest.Background), "unexpected document %v", cursor.Current)
-			verifyOneGetmoreSent(mt, cursor)
+			assert.False(mt, cursor.TryNext(context.Background()), "unexpected document %v", cursor.Current)
+			verifyOneGetmoreSent(mt)
 		})
 		mt.RunOpts("getMore error", mtest.NewOptions().ClientType(mtest.Mock), func(mt *mtest.T) {
 			findRes := mtest.CreateCursorResponse(50, "foo.bar", mtest.FirstBatch)
 			mt.AddMockResponses(findRes)
-			cursor, err := mt.Coll.Find(mtest.Background, bson.D{})
+			cursor, err := mt.Coll.Find(context.Background(), bson.D{})
 			assert.Nil(mt, err, "Find error: %v", err)
-			defer cursor.Close(mtest.Background)
+			defer cursor.Close(context.Background())
 			tryNextGetmoreError(mt, cursor)
 		})
 	})
@@ -109,9 +110,9 @@ func TestCursor(t *testing.T) {
 				SetBatchSize(int32(batchSize)).
 				SetCursorType(options.TailableAwait).
 				SetMaxAwaitTime(100 * time.Millisecond)
-			cursor, err := mt.Coll.Find(mtest.Background, bson.D{}, findOpts)
+			cursor, err := mt.Coll.Find(context.Background(), bson.D{}, findOpts)
 			assert.Nil(mt, err, "Find error: %v", err)
-			defer cursor.Close(mtest.Background)
+			defer cursor.Close(context.Background())
 
 			mt.ClearEvents()
 
@@ -120,7 +121,7 @@ func TestCursor(t *testing.T) {
 			assertCursorBatchLength(mt, cursor, batchSize)
 			for i := 0; i < batchSize; i++ {
 				prevLength := cursor.RemainingBatchLength()
-				if !cursor.Next(mtest.Background) {
+				if !cursor.Next(context.Background()) {
 					mt.Fatalf("expected Next to return true on index %d; cursor err: %v", i, cursor.Err())
 				}
 
@@ -135,7 +136,7 @@ func TestCursor(t *testing.T) {
 			// one document.
 			assertCursorBatchLength(mt, cursor, 0)
 
-			assert.True(mt, cursor.Next(mtest.Background), "expected Next to return true; cursor err: %v", cursor.Err())
+			assert.True(mt, cursor.Next(context.Background()), "expected Next to return true; cursor err: %v", cursor.Err())
 			evt = mt.GetStartedEvent()
 			assert.NotNil(mt, evt, "expected CommandStartedEvent, got nil")
 			assert.Equal(mt, "getMore", evt.CommandName, "expected command %q, got %q", "getMore", evt.CommandName)
@@ -144,7 +145,7 @@ func TestCursor(t *testing.T) {
 		})
 		mt.RunOpts("first batch is empty", mtest.NewOptions().ClientType(mtest.Mock), func(mt *mtest.T) {
 			// Test that the cursor reports the correct value for RemainingBatchLength if the first batch is empty.
-			// Using a mock deployment simplifies this test becuase the server won't create a valid cursor if the
+			// Using a mock deployment simplifies this test because the server won't create a valid cursor if the
 			// collection is empty when the find is run.
 
 			cursorID := int64(50)
@@ -160,13 +161,13 @@ func TestCursor(t *testing.T) {
 			killCursors := mtest.CreateSuccessResponse()
 			mt.AddMockResponses(find, getMore, killCursors)
 
-			cursor, err := mt.Coll.Find(mtest.Background, bson.D{})
+			cursor, err := mt.Coll.Find(context.Background(), bson.D{})
 			assert.Nil(mt, err, "Find error: %v", err)
-			defer cursor.Close(mtest.Background)
+			defer cursor.Close(context.Background())
 			mt.ClearEvents()
 
 			for {
-				if cursor.TryNext(mtest.Background) {
+				if cursor.TryNext(context.Background()) {
 					break
 				}
 
@@ -190,9 +191,9 @@ func TestCursor(t *testing.T) {
 				Data:               failpointData,
 			})
 			initCollection(mt, mt.Coll)
-			cursor, err := mt.Coll.Find(mtest.Background, bson.D{}, options.Find().SetBatchSize(2))
+			cursor, err := mt.Coll.Find(context.Background(), bson.D{}, options.Find().SetBatchSize(2))
 			assert.Nil(mt, err, "Find error: %v", err)
-			defer cursor.Close(mtest.Background)
+			defer cursor.Close(context.Background())
 
 			var docs []bson.D
 			err = cursor.All(context.Background(), &docs)
@@ -202,6 +203,51 @@ func TestCursor(t *testing.T) {
 			mongoErr, ok := err.(mongo.CommandError)
 			assert.True(mt, ok, "expected mongo.CommandError, got: %T", err)
 			assert.Equal(mt, failpointData.ErrorCode, mongoErr.Code, "expected code %v, got: %v", failpointData.ErrorCode, mongoErr.Code)
+		})
+
+		mt.Run("deferred Close uses context.Background", func(mt *mtest.T) {
+			initCollection(mt, mt.Coll)
+
+			// Find with batchSize 2 so All will run getMore for next 3 docs and error.
+			cur, err := mt.Coll.Find(context.Background(), bson.D{},
+				options.Find().SetBatchSize(2))
+			assert.Nil(mt, err, "Find error: %v", err)
+
+			// Create a context and immediately cancel it.
+			canceledCtx, cancel := context.WithCancel(context.Background())
+			cancel()
+
+			// Clear "insert" and "find" events.
+			mt.ClearEvents()
+
+			// Call All with the canceled context and expect context.Canceled.
+			var docs []bson.D
+			err = cur.All(canceledCtx, &docs)
+			assert.NotNil(mt, err, "expected error for All, got nil")
+			assert.True(mt, errors.Is(err, context.Canceled),
+				"expected context.Canceled error, got %v", err)
+
+			// Assert that a "getMore" command was sent and failed (Next used the
+			// canceled context).
+			stEvt := mt.GetStartedEvent()
+			assert.NotNil(mt, stEvt, `expected a "getMore" started event, got no event`)
+			assert.Equal(mt, stEvt.CommandName, "getMore",
+				`expected a "getMore" started event, got %q`, stEvt.CommandName)
+			fEvt := mt.GetFailedEvent()
+			assert.NotNil(mt, fEvt, `expected a failed "getMore" event, got no event`)
+			assert.Equal(mt, fEvt.CommandName, "getMore",
+				`expected a failed "getMore" event, got %q`, fEvt.CommandName)
+
+			// Assert that a "killCursors" command was sent and was successful (Close
+			// used the 2 second Client Timeout).
+			stEvt = mt.GetStartedEvent()
+			assert.NotNil(mt, stEvt, `expected a "killCursors" started event, got no event`)
+			assert.Equal(mt, stEvt.CommandName, "killCursors",
+				`expected a "killCursors" started event, got %q`, stEvt.CommandName)
+			suEvt := mt.GetSucceededEvent()
+			assert.NotNil(mt, suEvt, `expected a successful "killCursors" event, got no event`)
+			assert.Equal(mt, suEvt.CommandName, "killCursors",
+				`expected a successful "killCursors" event, got %q`, suEvt.CommandName)
 		})
 	})
 	mt.RunOpts("close", noClientOpts, func(mt *mtest.T) {
@@ -217,10 +263,10 @@ func TestCursor(t *testing.T) {
 				Data:               failpointData,
 			})
 			initCollection(mt, mt.Coll)
-			cursor, err := mt.Coll.Find(mtest.Background, bson.D{}, options.Find().SetBatchSize(2))
+			cursor, err := mt.Coll.Find(context.Background(), bson.D{}, options.Find().SetBatchSize(2))
 			assert.Nil(mt, err, "Find error: %v", err)
 
-			err = cursor.Close(mtest.Background)
+			err = cursor.Close(context.Background())
 			assert.NotNil(mt, err, "expected change stream error, got nil")
 
 			// make sure that a mongo.CommandError is returned instead of a driver.Error
@@ -235,9 +281,9 @@ func TestCursor(t *testing.T) {
 		mt.ClearEvents()
 
 		// create cursor with batchSize 0
-		cursor, err := mt.Coll.Find(mtest.Background, bson.D{}, options.Find().SetBatchSize(0))
+		cursor, err := mt.Coll.Find(context.Background(), bson.D{}, options.Find().SetBatchSize(0))
 		assert.Nil(mt, err, "Find error: %v", err)
-		defer cursor.Close(mtest.Background)
+		defer cursor.Close(context.Background())
 		evt := mt.GetStartedEvent()
 		assert.Equal(mt, "find", evt.CommandName, "expected 'find' event, got '%v'", evt.CommandName)
 		sizeVal, err := evt.Command.LookupErr("batchSize")
@@ -248,7 +294,7 @@ func TestCursor(t *testing.T) {
 		// make sure that the getMore sends the new batchSize
 		batchCursor := mongo.BatchCursorFromCursor(cursor)
 		batchCursor.SetBatchSize(4)
-		assert.True(mt, cursor.Next(mtest.Background), "expected Next true, got false")
+		assert.True(mt, cursor.Next(context.Background()), "expected Next true, got false")
 		evt = mt.GetStartedEvent()
 		assert.NotNil(mt, evt, "expected getMore event, got nil")
 		assert.Equal(mt, "getMore", evt.CommandName, "expected 'getMore' event, got '%v'", evt.CommandName)
@@ -268,7 +314,7 @@ func tryNextExistingBatchTest(mt *mtest.T, cursor tryNextCursor) {
 	mt.Helper()
 
 	mt.ClearEvents()
-	assert.True(mt, cursor.TryNext(mtest.Background), "expected TryNext to return true, got false")
+	assert.True(mt, cursor.TryNext(context.Background()), "expected TryNext to return true, got false")
 	evt := mt.GetStartedEvent()
 	if evt != nil {
 		mt.Fatalf("unexpected event sent during TryNext: %v", evt.CommandName)
@@ -276,7 +322,7 @@ func tryNextExistingBatchTest(mt *mtest.T, cursor tryNextCursor) {
 }
 
 // use command monitoring to verify that a single getMore was sent
-func verifyOneGetmoreSent(mt *mtest.T, cursor tryNextCursor) {
+func verifyOneGetmoreSent(mt *mtest.T) {
 	mt.Helper()
 
 	evt := mt.GetStartedEvent()
@@ -303,7 +349,7 @@ func tryNextGetmoreError(mt *mtest.T, cursor tryNextCursor) {
 	// without doing a getMore
 	// next call to TryNext should attempt a getMore
 	for i := 0; i < 2; i++ {
-		assert.False(mt, cursor.TryNext(mtest.Background), "TryNext returned true on iteration %v", i)
+		assert.False(mt, cursor.TryNext(context.Background()), "TryNext returned true on iteration %v", i)
 	}
 
 	err := cursor.Err()

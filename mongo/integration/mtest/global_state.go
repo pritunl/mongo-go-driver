@@ -7,6 +7,7 @@
 package mtest
 
 import (
+	"context"
 	"fmt"
 
 	"github.com/pritunl/mongo-go-driver/bson"
@@ -33,6 +34,11 @@ func ClusterTopologyKind() TopologyKind {
 // ClusterURI returns the connection string for the cluster.
 func ClusterURI() string {
 	return testContext.connString.Original
+}
+
+// Serverless returns whether the test is running against a serverless instance.
+func Serverless() bool {
+	return testContext.serverless
 }
 
 // SingleMongosLoadBalancerURI returns the URI for a load balancer fronting a single mongos. This will only be set
@@ -72,7 +78,7 @@ func ServerVersion() string {
 // SetFailPoint configures the provided fail point on the cluster under test using the provided Client.
 func SetFailPoint(fp FailPoint, client *mongo.Client) error {
 	admin := client.Database("admin")
-	if err := admin.RunCommand(Background, fp).Err(); err != nil {
+	if err := admin.RunCommand(context.Background(), fp).Err(); err != nil {
 		return fmt.Errorf("error creating fail point: %v", err)
 	}
 	return nil
@@ -82,7 +88,7 @@ func SetFailPoint(fp FailPoint, client *mongo.Client) error {
 // provided Client
 func SetRawFailPoint(fp bson.Raw, client *mongo.Client) error {
 	admin := client.Database("admin")
-	if err := admin.RunCommand(Background, fp).Err(); err != nil {
+	if err := admin.RunCommand(context.Background(), fp).Err(); err != nil {
 		return fmt.Errorf("error creating fail point: %v", err)
 	}
 	return nil

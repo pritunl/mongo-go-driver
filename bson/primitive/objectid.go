@@ -61,7 +61,9 @@ func (id ObjectID) Timestamp() time.Time {
 
 // Hex returns the hex encoding of the ObjectID as a string.
 func (id ObjectID) Hex() string {
-	return hex.EncodeToString(id[:])
+	var buf [24]byte
+	hex.Encode(buf[:], id[:])
+	return string(buf[:])
 }
 
 func (id ObjectID) String() string {
@@ -116,9 +118,6 @@ func (id *ObjectID) UnmarshalText(b []byte) error {
 
 // MarshalJSON returns the ObjectID as a string
 func (id ObjectID) MarshalJSON() ([]byte, error) {
-	if id.IsZero() {
-		return json.Marshal(nil)
-	}
 	return json.Marshal(id.Hex())
 }
 
@@ -145,12 +144,6 @@ func (id *ObjectID) UnmarshalJSON(b []byte) error {
 		if err != nil {
 			return err
 		}
-
-		if res == nil {
-			*id = NilObjectID
-			return err
-		}
-
 		str, ok := res.(string)
 		if !ok {
 			m, ok := res.(map[string]interface{})

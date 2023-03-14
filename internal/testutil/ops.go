@@ -9,7 +9,6 @@ package testutil // import "github.com/pritunl/mongo-go-driver/internal/testutil
 import (
 	"context"
 	"os"
-	"strings"
 	"testing"
 
 	"github.com/pritunl/mongo-go-driver/mongo/description"
@@ -18,31 +17,8 @@ import (
 	"github.com/pritunl/mongo-go-driver/x/bsonx/bsoncore"
 	"github.com/pritunl/mongo-go-driver/x/mongo/driver"
 	"github.com/pritunl/mongo-go-driver/x/mongo/driver/operation"
-	"github.com/pritunl/mongo-go-driver/x/mongo/driver/topology"
 	"github.com/stretchr/testify/require"
 )
-
-// AutoCreateIndexes creates an index in the test cluster.
-func AutoCreateIndexes(t *testing.T, keys []string) {
-	var elems [][]byte
-	for _, k := range keys {
-		elems = append(elems, bsoncore.AppendInt32Element(nil, k, 1))
-	}
-	name := strings.Join(keys, "_")
-	indexes := bsoncore.BuildDocumentFromElements(nil,
-		bsoncore.AppendDocumentElement(nil, "key", bsoncore.BuildDocumentFromElements(nil,
-			elems...)),
-		bsoncore.AppendStringElement(nil, "name", name),
-	)
-	err := operation.NewCreateIndexes(indexes).Collection(ColName(t)).Database(DBName(t)).
-		Deployment(Topology(t)).ServerSelector(description.WriteSelector()).Execute(context.Background())
-	require.NoError(t, err)
-}
-
-// AutoDropCollection drops the collection in the test cluster.
-func AutoDropCollection(t *testing.T) {
-	DropCollection(t, DBName(t), ColName(t))
-}
 
 // DropCollection drops the collection in the test cluster.
 func DropCollection(t *testing.T, dbname, colname string) {
@@ -64,28 +40,6 @@ func InsertDocs(t *testing.T, dbname, colname string, writeConcern *writeconcern
 	err := operation.NewInsert(docs...).Collection(colname).Database(dbname).
 		Deployment(Topology(t)).ServerSelector(description.WriteSelector()).Execute(context.Background())
 	require.NoError(t, err)
-}
-
-// EnableMaxTimeFailPoint turns on the max time fail point in the test cluster.
-func EnableMaxTimeFailPoint(t *testing.T, s *topology.Server) error {
-	cmd := bsoncore.BuildDocumentFromElements(nil,
-		bsoncore.AppendStringElement(nil, "configureFailPoint", "maxTimeAlwaysTimeOut"),
-		bsoncore.AppendStringElement(nil, "mode", "alwaysOn"),
-	)
-	return operation.NewCommand(cmd).
-		Database("admin").Deployment(driver.SingleServerDeployment{Server: s}).
-		Execute(context.Background())
-}
-
-// DisableMaxTimeFailPoint turns off the max time fail point in the test cluster.
-func DisableMaxTimeFailPoint(t *testing.T, s *topology.Server) {
-	cmd := bsoncore.BuildDocumentFromElements(nil,
-		bsoncore.AppendStringElement(nil, "configureFailPoint", "maxTimeAlwaysTimeOut"),
-		bsoncore.AppendStringElement(nil, "mode", "off"),
-	)
-	_ = operation.NewCommand(cmd).
-		Database("admin").Deployment(driver.SingleServerDeployment{Server: s}).
-		Execute(context.Background())
 }
 
 // RunCommand runs an arbitrary command on a given database of target server

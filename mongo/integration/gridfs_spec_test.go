@@ -8,6 +8,7 @@ package integration
 
 import (
 	"bytes"
+	"context"
 	"encoding/hex"
 	"io/ioutil"
 	"path"
@@ -57,7 +58,7 @@ type gridfsAssert struct {
 }
 
 const (
-	gridfsTestsDir       = "../../data/gridfs"
+	gridfsTestsDir       = "../../testdata/gridfs"
 	gridfsFiles          = "fs.files"
 	gridfsChunks         = "fs.chunks"
 	gridfsExpectedFiles  = "expected.files"
@@ -145,19 +146,19 @@ func checkGridfsResults(mt *mtest.T, test gridfsTest) {
 }
 
 func compareGridfsCollections(mt *mtest.T, expected, actual string) {
-	expectedCursor, err := mt.DB.Collection(expected).Find(mtest.Background, bson.D{})
+	expectedCursor, err := mt.DB.Collection(expected).Find(context.Background(), bson.D{})
 	assert.Nil(mt, err, "Find error for collection %v: %v", expected, err)
-	actualCursor, err := mt.DB.Collection(actual).Find(mtest.Background, bson.D{})
+	actualCursor, err := mt.DB.Collection(actual).Find(context.Background(), bson.D{})
 	assert.Nil(mt, err, "Find error for collection %v: %v", actual, err)
 
 	var idx int
-	for expectedCursor.Next(mtest.Background) {
-		assert.True(mt, actualCursor.Next(mtest.Background), "Next returned false at index %v", idx)
+	for expectedCursor.Next(context.Background()) {
+		assert.True(mt, actualCursor.Next(context.Background()), "Next returned false at index %v", idx)
 		idx++
 
 		compareGridfsDocs(mt, expectedCursor.Current, actualCursor.Current)
 	}
-	assert.False(mt, actualCursor.Next(mtest.Background),
+	assert.False(mt, actualCursor.Next(context.Background()),
 		"found unexpected document in collection %v: %s", expected, actualCursor.Current)
 }
 
@@ -194,7 +195,7 @@ func arrangeGridfsCollections(mt *mtest.T, arrange gridfsArrange) {
 		return
 	}
 
-	var arrangeCmds []interface{}
+	arrangeCmds := make([]interface{}, 0, len(arrange.Data))
 	for _, cmd := range arrange.Data {
 		if cmd[0].Key != "update" {
 			arrangeCmds = append(arrangeCmds, cmd)
@@ -230,7 +231,7 @@ func arrangeGridfsCollections(mt *mtest.T, arrange gridfsArrange) {
 func executeUploadAssert(mt *mtest.T, fileID primitive.ObjectID, assert gridfsAssert) {
 	fileIDVal := bsonx.ObjectID(fileID)
 
-	var assertCommands []interface{}
+	assertCommands := make([]interface{}, 0, len(assert.Data))
 	for _, data := range assert.Data {
 		documentsIdx := data.IndexOf("documents")
 		if documentsIdx == -1 {
@@ -412,7 +413,7 @@ func executeGridfsDelete(mt *mtest.T, test gridfsTest, bucket *gridfs.Bucket) {
 		compareGridfsAssertError(mt, test.Assert.Error, err)
 		return
 	}
-	var cmds []interface{}
+	cmds := make([]interface{}, 0, len(test.Assert.Data))
 	for _, cmd := range test.Assert.Data {
 		cmds = append(cmds, cmd)
 	}
@@ -432,7 +433,7 @@ func setupGridfsTest(mt *mtest.T, data gridfsData) int32 {
 			break
 		}
 	}
-	var chunksDocs []interface{}
+	chunksDocs := make([]interface{}, 0, len(data.Chunks))
 	for _, chunk := range data.Chunks {
 		if hexStr, err := chunk.LookupErr("data", "$hex"); err == nil {
 			hexBytes := hexStringToBytes(mt, hexStr.StringValue())
@@ -447,9 +448,9 @@ func setupGridfsTest(mt *mtest.T, data gridfsData) int32 {
 		return chunkSize
 	}
 
-	_, err := chunksColl.InsertMany(mtest.Background, chunksDocs)
+	_, err := chunksColl.InsertMany(context.Background(), chunksDocs)
 	assert.Nil(mt, err, "InsertMany error for collection %v: %v", chunksColl.Name(), err)
-	_, err = expectedChunksColl.InsertMany(mtest.Background, chunksDocs)
+	_, err = expectedChunksColl.InsertMany(context.Background(), chunksDocs)
 	assert.Nil(mt, err, "InsertMany error for collection %v: %v", expectedChunksColl.Name(), err)
 	return chunkSize
 }
@@ -462,7 +463,7 @@ func hexStringToBytes(mt *mtest.T, hexStr string) []byte {
 
 func runCommands(mt *mtest.T, commands []interface{}) {
 	for _, cmd := range commands {
-		err := mt.DB.RunCommand(mtest.Background, cmd).Err()
+		err := mt.DB.RunCommand(context.Background(), cmd).Err()
 		assert.Nil(mt, err, "RunCommand error for command %v: %v", cmd, err)
 	}
 }
@@ -470,7 +471,7 @@ func runCommands(mt *mtest.T, commands []interface{}) {
 func clearGridfsCollections(mt *mtest.T) {
 	mt.Helper()
 	for _, coll := range []string{gridfsFiles, gridfsChunks, gridfsExpectedFiles, gridfsExpectedChunks} {
-		_, err := mt.DB.Collection(coll).DeleteMany(mtest.Background, bson.D{})
+		_, err := mt.DB.Collection(coll).DeleteMany(context.Background(), bson.D{})
 		assert.Nil(mt, err, "DeleteMany error for %v: %v", coll, err)
 	}
 }

@@ -7,6 +7,7 @@
 package integration
 
 import (
+	"context"
 	"fmt"
 	"testing"
 
@@ -30,7 +31,7 @@ func TestAtlasDataLake(t *testing.T) {
 
 		// Run a Find and get the cursor ID and namespace returned by the server. Use a batchSize of 2 to force the
 		// server to keep the cursor open.
-		cursor, err := mt.Coll.Find(mtest.Background, bson.D{}, options.Find().SetBatchSize(2))
+		cursor, err := mt.Coll.Find(context.Background(), bson.D{}, options.Find().SetBatchSize(2))
 		assert.Nil(mt, err, "Find error: %v", err)
 		findEvt := mt.GetSucceededEvent()
 		assert.Equal(mt, "find", findEvt.CommandName, "expected command name %q, got %q", "find", findEvt.CommandName)
@@ -39,7 +40,7 @@ func TestAtlasDataLake(t *testing.T) {
 
 		// Close the cursor, forcing a killCursors command.
 		mt.ClearEvents()
-		err = cursor.Close(mtest.Background)
+		err = cursor.Close(context.Background())
 		assert.Nil(mt, err, "Close error: %v", err)
 
 		// Extract information from the killCursors started event and assert that it sent the right cursor ID and ns.
@@ -79,7 +80,7 @@ func TestAtlasDataLake(t *testing.T) {
 			{"scram-sha-256", "SCRAM-SHA-256"},
 		}
 		for _, tc := range testCases {
-			clientOpts := getBaseClientOptions(mt)
+			clientOpts := getBaseClientOptions()
 			if tc.authMechanism != "" {
 				cred := getBaseCredential(mt)
 				cred.AuthMechanism = tc.authMechanism
@@ -88,14 +89,14 @@ func TestAtlasDataLake(t *testing.T) {
 			mtOpts := getMtOpts().ClientOptions(clientOpts)
 
 			mt.RunOpts(tc.name, mtOpts, func(mt *mtest.T) {
-				err := mt.Client.Ping(mtest.Background, mtest.PrimaryRp)
+				err := mt.Client.Ping(context.Background(), mtest.PrimaryRp)
 				assert.Nil(mt, err, "Ping error: %v", err)
 			})
 		}
 	})
 }
 
-func getBaseClientOptions(mt *mtest.T) *options.ClientOptions {
+func getBaseClientOptions() *options.ClientOptions {
 	opts := options.Client().ApplyURI(mtest.ClusterURI())
 	return options.Client().SetHosts(opts.Hosts)
 }

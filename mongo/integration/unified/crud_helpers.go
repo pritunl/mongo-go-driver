@@ -11,7 +11,7 @@ import (
 
 	"github.com/pritunl/mongo-go-driver/bson"
 	"github.com/pritunl/mongo-go-driver/bson/bsontype"
-	testhelpers "github.com/pritunl/mongo-go-driver/internal/testutil/helpers"
+	"github.com/pritunl/mongo-go-driver/internal/testutil/helpers"
 	"github.com/pritunl/mongo-go-driver/mongo/options"
 )
 
@@ -41,7 +41,7 @@ func createUpdateArguments(args bson.Raw) (*updateArguments, error) {
 		switch key {
 		case "arrayFilters":
 			ua.opts.SetArrayFilters(options.ArrayFilters{
-				Filters: testhelpers.RawToInterfaceSlice(val.Array()),
+				Filters: helpers.RawToInterfaces(helpers.RawToDocuments(val.Array())...),
 			})
 		case "bypassDocumentValidation":
 			ua.opts.SetBypassDocumentValidation(val.Boolean())
@@ -51,6 +51,8 @@ func createUpdateArguments(args bson.Raw) (*updateArguments, error) {
 				return nil, fmt.Errorf("error creating collation: %v", err)
 			}
 			ua.opts.SetCollation(collation)
+		case "comment":
+			ua.opts.SetComment(val)
 		case "filter":
 			ua.filter = val.Document()
 		case "hint":
@@ -59,6 +61,8 @@ func createUpdateArguments(args bson.Raw) (*updateArguments, error) {
 				return nil, fmt.Errorf("error creating hint: %v", err)
 			}
 			ua.opts.SetHint(hint)
+		case "let":
+			ua.opts.SetLet(val.Document())
 		case "update":
 			ua.update, err = createUpdateValue(val)
 			if err != nil {
@@ -154,4 +158,15 @@ func createHint(val bson.RawValue) (interface{}, error) {
 		return nil, fmt.Errorf("unrecognized hint value type %s", val.Type)
 	}
 	return hint, nil
+}
+
+func createCommentString(val bson.RawValue) (string, error) {
+	switch val.Type {
+	case bsontype.String:
+		return val.StringValue(), nil
+	case bsontype.EmbeddedDocument:
+		return val.String(), nil
+	default:
+		return "", fmt.Errorf("unrecognized 'comment' value type: %T", val)
+	}
 }

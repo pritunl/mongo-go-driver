@@ -124,8 +124,6 @@ func TestDefaultValueEncoders(t *testing.T) {
 				{"int/fast path - negative int32", int(math.MinInt32 + 1), nil, nil, bsonrwtest.WriteInt32, nil},
 				{"int/fast path - MaxInt32", int(math.MaxInt32), nil, nil, bsonrwtest.WriteInt32, nil},
 				{"int/fast path - MinInt32", int(math.MinInt32), nil, nil, bsonrwtest.WriteInt32, nil},
-				{"int/fast path - larger than MaxInt32", int(math.MaxInt32 + 1), nil, nil, bsonrwtest.WriteInt64, nil},
-				{"int/fast path - smaller than MinInt32", int(math.MinInt32 - 1), nil, nil, bsonrwtest.WriteInt64, nil},
 				{"int8/reflection path", myint8(127), nil, nil, bsonrwtest.WriteInt32, nil},
 				{"int16/reflection path", myint16(32767), nil, nil, bsonrwtest.WriteInt32, nil},
 				{"int32/reflection path", myint32(2147483647), nil, nil, bsonrwtest.WriteInt32, nil},
@@ -137,8 +135,6 @@ func TestDefaultValueEncoders(t *testing.T) {
 				{"int/reflection path - negative int32", myint(math.MinInt32 + 1), nil, nil, bsonrwtest.WriteInt32, nil},
 				{"int/reflection path - MaxInt32", myint(math.MaxInt32), nil, nil, bsonrwtest.WriteInt32, nil},
 				{"int/reflection path - MinInt32", myint(math.MinInt32), nil, nil, bsonrwtest.WriteInt32, nil},
-				{"int/reflection path - larger than MaxInt32", myint(math.MaxInt32 + 1), nil, nil, bsonrwtest.WriteInt64, nil},
-				{"int/reflection path - smaller than MinInt32", myint(math.MinInt32 - 1), nil, nil, bsonrwtest.WriteInt64, nil},
 			},
 		},
 		{
@@ -168,21 +164,18 @@ func TestDefaultValueEncoders(t *testing.T) {
 				{"uint32/fast path - minsize too large", uint32(2147483648), &EncodeContext{MinSize: true}, nil, bsonrwtest.WriteInt64, nil},
 				{"uint64/fast path - minsize too large", uint64(2147483648), &EncodeContext{MinSize: true}, nil, bsonrwtest.WriteInt64, nil},
 				{"uint/fast path - minsize too large", uint(2147483648), &EncodeContext{MinSize: true}, nil, bsonrwtest.WriteInt64, nil},
-				{"uint64/fast path - overflow", uint64(1 << 63), nil, nil, bsonrwtest.Nothing, fmt.Errorf("%d overflows int64", uint(1<<63))},
-				{"uint/fast path - overflow", uint(1 << 63), nil, nil, bsonrwtest.Nothing, fmt.Errorf("%d overflows int64", uint(1<<63))},
+				{"uint64/fast path - overflow", uint64(1 << 63), nil, nil, bsonrwtest.Nothing, fmt.Errorf("%d overflows int64", uint64(1<<63))},
 				{"uint8/reflection path", myuint8(127), nil, nil, bsonrwtest.WriteInt32, nil},
 				{"uint16/reflection path", myuint16(32767), nil, nil, bsonrwtest.WriteInt32, nil},
 				{"uint32/reflection path", myuint32(2147483647), nil, nil, bsonrwtest.WriteInt64, nil},
 				{"uint64/reflection path", myuint64(1234567890987), nil, nil, bsonrwtest.WriteInt64, nil},
-				{"uint/reflection path", myuint(1234567890987), nil, nil, bsonrwtest.WriteInt64, nil},
 				{"uint32/reflection path - minsize", myuint32(2147483647), &EncodeContext{MinSize: true}, nil, bsonrwtest.WriteInt32, nil},
 				{"uint64/reflection path - minsize", myuint64(2147483647), &EncodeContext{MinSize: true}, nil, bsonrwtest.WriteInt32, nil},
 				{"uint/reflection path - minsize", myuint(2147483647), &EncodeContext{MinSize: true}, nil, bsonrwtest.WriteInt32, nil},
 				{"uint32/reflection path - minsize too large", myuint(1 << 31), &EncodeContext{MinSize: true}, nil, bsonrwtest.WriteInt64, nil},
 				{"uint64/reflection path - minsize too large", myuint64(1 << 31), &EncodeContext{MinSize: true}, nil, bsonrwtest.WriteInt64, nil},
 				{"uint/reflection path - minsize too large", myuint(2147483648), &EncodeContext{MinSize: true}, nil, bsonrwtest.WriteInt64, nil},
-				{"uint64/reflection path - overflow", myuint64(1 << 63), nil, nil, bsonrwtest.Nothing, fmt.Errorf("%d overflows int64", uint(1<<63))},
-				{"uint/reflection path - overflow", myuint(1 << 63), nil, nil, bsonrwtest.Nothing, fmt.Errorf("%d overflows int64", uint(1<<63))},
+				{"uint64/reflection path - overflow", myuint64(1 << 63), nil, nil, bsonrwtest.Nothing, fmt.Errorf("%d overflows int64", uint64(1<<63))},
 			},
 		},
 		{
@@ -1712,15 +1705,15 @@ func TestDefaultValueEncoders(t *testing.T) {
 					doc = appendArrayElement(doc, "e", bsoncore.AppendInt64Element(nil, "0", 101112))
 					doc = appendArrayElement(doc, "f", bsoncore.AppendDoubleElement(nil, "0", 3.14159))
 					doc = appendArrayElement(doc, "g", bsoncore.AppendStringElement(nil, "0", "Hello, world"))
-					doc = appendArrayElement(doc, "h", buildDocumentElement("0", bsoncore.AppendStringElement(nil, "foo", "bar")))
+					doc = appendArrayElement(doc, "h", bsoncore.BuildDocumentElement(nil, "0", bsoncore.AppendStringElement(nil, "foo", "bar")))
 					doc = appendArrayElement(doc, "i", bsoncore.AppendBinaryElement(nil, "0", 0x00, []byte{0x01, 0x02, 0x03}))
 					doc = appendArrayElement(doc, "k",
-						buildArrayElement("0",
+						appendArrayElement(nil, "0",
 							bsoncore.AppendStringElement(bsoncore.AppendStringElement(nil, "0", "baz"), "1", "qux")),
 					)
-					doc = appendArrayElement(doc, "l", buildDocumentElement("0", bsoncore.AppendStringElement(nil, "m", "foobar")))
+					doc = appendArrayElement(doc, "l", bsoncore.BuildDocumentElement(nil, "0", bsoncore.AppendStringElement(nil, "m", "foobar")))
 					doc = appendArrayElement(doc, "n",
-						buildArrayElement("0",
+						appendArrayElement(nil, "0",
 							bsoncore.AppendStringElement(bsoncore.AppendStringElement(nil, "0", "foo"), "1", "bar")),
 					)
 					doc = appendArrayElement(doc, "r",
@@ -1734,7 +1727,7 @@ func TestDefaultValueEncoders(t *testing.T) {
 					doc = bsoncore.AppendNullElement(doc, "t")
 					doc = bsoncore.AppendNullElement(doc, "w")
 					doc = appendArrayElement(doc, "x", nil)
-					doc = appendArrayElement(doc, "y", buildDocumentElement("0", nil))
+					doc = appendArrayElement(doc, "y", bsoncore.BuildDocumentElement(nil, "0", nil))
 					doc = appendArrayElement(doc, "z",
 						bsoncore.AppendDateTimeElement(
 							bsoncore.AppendDateTimeElement(
@@ -1858,7 +1851,7 @@ func TestDefaultValueEncoders(t *testing.T) {
 		got := dve.EmptyInterfaceEncodeValue(EncodeContext{Registry: NewRegistryBuilder().Build()}, llvrw, val)
 		want := ErrNoEncoder{Type: tInt64}
 		if !compareErrors(got, want) {
-			t.Errorf("Did not recieve expected error. got %v; want %v", got, want)
+			t.Errorf("Did not receive expected error. got %v; want %v", got, want)
 		}
 	})
 }

@@ -7,6 +7,7 @@
 package integration
 
 import (
+	"context"
 	"runtime"
 	"testing"
 	"time"
@@ -113,8 +114,15 @@ func TestSDAMProse(t *testing.T) {
 					AppName:         "streamingRttTest",
 				},
 			})
-			callback := func() {
+			callback := func(ctx context.Context) {
 				for {
+					// Stop loop if callback has been canceled.
+					select {
+					case <-ctx.Done():
+						return
+					default:
+					}
+
 					// We don't know which server received the failpoint command, so we wait until any of the server
 					// RTTs cross the threshold.
 					for _, serverDesc := range testTopology.Description().Servers {
@@ -129,5 +137,35 @@ func TestSDAMProse(t *testing.T) {
 			}
 			assert.Soon(t, callback, defaultCallbackTimeout)
 		})
+	})
+
+	mt.RunOpts("client waits between failed Hellos", mtest.NewOptions().MinServerVersion("4.9").Topologies(mtest.Single), func(mt *mtest.T) {
+		// Force hello requests to fail 5 times.
+		mt.SetFailPoint(mtest.FailPoint{
+			ConfigureFailPoint: "failCommand",
+			Mode: mtest.FailPointMode{
+				Times: 5,
+			},
+			Data: mtest.FailPointData{
+				FailCommands: []string{internal.LegacyHello, "hello"},
+				ErrorCode:    1234,
+				AppName:      "SDAMMinHeartbeatFrequencyTest",
+			},
+		})
+
+		// Reset client options to use direct connection, app name, and 5s SS timeout.
+		clientOpts := options.Client().SetDirect(true).
+			SetAppName("SDAMMinHeartbeatFrequencyTest").
+			SetServerSelectionTimeout(5 * time.Second)
+		mt.ResetClient(clientOpts)
+
+		// Assert that Ping completes successfully within 2 to 3.5 seconds.
+		start := time.Now()
+		err := mt.Client.Ping(context.Background(), nil)
+		assert.Nil(mt, err, "Ping error: %v", err)
+		pingTime := time.Since(start)
+		assert.True(mt, pingTime > 2000*time.Millisecond && pingTime < 3500*time.Millisecond,
+			"expected Ping to take between 2 and 3.5 seconds, took %v seconds", pingTime.Seconds())
+
 	})
 }

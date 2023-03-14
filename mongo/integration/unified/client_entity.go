@@ -142,11 +142,11 @@ func newClientEntity(ctx context.Context, em *EntityMap, entityOptions *entityOp
 }
 
 func getURIForClient(opts *entityOptions) string {
-	if mtest.ClusterTopologyKind() != mtest.LoadBalanced {
+	if mtest.Serverless() || mtest.ClusterTopologyKind() != mtest.LoadBalanced {
 		return mtest.ClusterURI()
 	}
 
-	// For load-balanced deployments, UseMultipleMongoses is used to determine the load balancer URI. If set to false,
+	// For non-serverless load-balanced deployments, UseMultipleMongoses is used to determine the load balancer URI. If set to false,
 	// the LB fronts a single server. If unset or explicitly true, the LB fronts multiple mongos servers.
 	switch {
 	case opts.UseMultipleMongoses != nil && !*opts.UseMultipleMongoses:
@@ -385,11 +385,15 @@ func setClientOptionsFromURIOptions(clientOpts *options.ClientOptions, uriOpts b
 			clientOpts.SetRetryReads(value.(bool))
 		case "retryWrites":
 			clientOpts.SetRetryWrites(value.(bool))
+		case "socketTimeoutMS":
+			clientOpts.SetSocketTimeout(time.Duration(value.(int32)) * time.Millisecond)
 		case "w":
 			wc.W = value
 			wcSet = true
 		case "waitQueueTimeoutMS":
 			return newSkipTestError("the waitQueueTimeoutMS client option is not supported")
+		case "timeoutMS":
+			clientOpts.SetTimeout(time.Duration(value.(int32)) * time.Millisecond)
 		default:
 			return fmt.Errorf("unrecognized URI option %s", key)
 		}

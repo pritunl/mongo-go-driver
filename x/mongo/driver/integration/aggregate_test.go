@@ -1,3 +1,9 @@
+// Copyright (C) MongoDB, Inc. 2022-present.
+//
+// Licensed under the Apache License, Version 2.0 (the "License"); you may
+// not use this file except in compliance with the License. You may obtain
+// a copy of the License at http://www.apache.org/licenses/LICENSE-2.0
+
 package integration
 
 import (
@@ -52,6 +58,10 @@ func skipIfBelow32(ctx context.Context, t *testing.T, topo *topology.Topology) {
 }
 
 func TestAggregate(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
+
 	t.Run("TestMaxTimeMSInGetMore", func(t *testing.T) {
 		ctx := context.Background()
 		monitor, started, succeeded, failed := setUpMonitor()

@@ -7,10 +7,9 @@
 package unified
 
 import (
+	"context"
 	"path"
 	"testing"
-
-	"github.com/pritunl/mongo-go-driver/mongo/integration/mtest"
 )
 
 var (
@@ -18,13 +17,15 @@ var (
 		"unified-test-format/valid-pass",
 		"versioned-api",
 		"crud/unified",
-		"change-streams/unified",
+		"change-streams",
 		"transactions/unified",
 		"load-balancers",
 		"collection-management",
 		"command-monitoring/unified",
-		"sessions/unified",
+		"sessions",
 		"retryable-writes/unified",
+		"client-side-encryption/unified",
+		"client-side-operations-timeout",
 	}
 	failDirectories = []string{
 		"unified-test-format/valid-fail",
@@ -32,12 +33,12 @@ var (
 )
 
 const (
-	dataDirectory = "../../../data"
+	dataDirectory = "../../../testdata"
 )
 
 func TestUnifiedSpec(t *testing.T) {
 	// Ensure the cluster is in a clean state before test execution begins.
-	if err := terminateOpenSessions(mtest.Background); err != nil {
+	if err := terminateOpenSessions(context.Background()); err != nil {
 		t.Fatalf("error terminating open transactions: %v", err)
 	}
 

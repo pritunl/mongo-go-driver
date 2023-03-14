@@ -10,13 +10,12 @@ import (
 	"bytes"
 	"testing"
 
-	"github.com/stretchr/testify/require"
 	"github.com/pritunl/mongo-go-driver/bson/primitive"
 	"github.com/pritunl/mongo-go-driver/internal/testutil/assert"
-	testhelpers "github.com/pritunl/mongo-go-driver/internal/testutil/helpers"
+	"github.com/pritunl/mongo-go-driver/internal/uuid"
 	"github.com/pritunl/mongo-go-driver/mongo/description"
 	"github.com/pritunl/mongo-go-driver/x/bsonx/bsoncore"
-	"github.com/pritunl/mongo-go-driver/x/mongo/driver/uuid"
+	"github.com/stretchr/testify/require"
 )
 
 var consistent = true
@@ -53,7 +52,7 @@ func TestClientSession(t *testing.T) {
 
 	t.Run("TestAdvanceClusterTime", func(t *testing.T) {
 		id, _ := uuid.New()
-		sess, err := NewClientSession(&Pool{}, id, Explicit, sessionOpts)
+		sess, err := NewClientSession(&Pool{}, id, sessionOpts)
 		require.Nil(t, err, "Unexpected error")
 		err = sess.AdvanceClusterTime(clusterTime2)
 		require.Nil(t, err, "Unexpected error")
@@ -75,7 +74,7 @@ func TestClientSession(t *testing.T) {
 
 	t.Run("TestEndSession", func(t *testing.T) {
 		id, _ := uuid.New()
-		sess, err := NewClientSession(&Pool{}, id, Explicit, sessionOpts)
+		sess, err := NewClientSession(&Pool{}, id, sessionOpts)
 		require.Nil(t, err, "Unexpected error")
 		sess.EndSession()
 		err = sess.UpdateUseTime()
@@ -84,7 +83,7 @@ func TestClientSession(t *testing.T) {
 
 	t.Run("TestAdvanceOperationTime", func(t *testing.T) {
 		id, _ := uuid.New()
-		sess, err := NewClientSession(&Pool{}, id, Explicit, sessionOpts)
+		sess, err := NewClientSession(&Pool{}, id, sessionOpts)
 		require.Nil(t, err, "Unexpected error")
 
 		optime1 := &primitive.Timestamp{
@@ -92,7 +91,7 @@ func TestClientSession(t *testing.T) {
 			I: 0,
 		}
 		err = sess.AdvanceOperationTime(optime1)
-		testhelpers.RequireNil(t, err, "error updating first operation time: %s", err)
+		assert.Nil(t, err, "error updating first operation time: %s", err)
 		compareOperationTimes(t, optime1, sess.OperationTime)
 
 		optime2 := &primitive.Timestamp{
@@ -100,7 +99,7 @@ func TestClientSession(t *testing.T) {
 			I: 0,
 		}
 		err = sess.AdvanceOperationTime(optime2)
-		testhelpers.RequireNil(t, err, "error updating second operation time: %s", err)
+		assert.Nil(t, err, "error updating second operation time: %s", err)
 		compareOperationTimes(t, optime2, sess.OperationTime)
 
 		optime3 := &primitive.Timestamp{
@@ -108,21 +107,21 @@ func TestClientSession(t *testing.T) {
 			I: 1,
 		}
 		err = sess.AdvanceOperationTime(optime3)
-		testhelpers.RequireNil(t, err, "error updating third operation time: %s", err)
+		assert.Nil(t, err, "error updating third operation time: %s", err)
 		compareOperationTimes(t, optime3, sess.OperationTime)
 
 		err = sess.AdvanceOperationTime(&primitive.Timestamp{
 			T: 1,
 			I: 10,
 		})
-		testhelpers.RequireNil(t, err, "error updating fourth operation time: %s", err)
+		assert.Nil(t, err, "error updating fourth operation time: %s", err)
 		compareOperationTimes(t, optime3, sess.OperationTime)
 		sess.EndSession()
 	})
 
 	t.Run("TestTransactionState", func(t *testing.T) {
 		id, _ := uuid.New()
-		sess, err := NewClientSession(&Pool{}, id, Explicit, nil)
+		sess, err := NewClientSession(&Pool{}, id, nil)
 		require.Nil(t, err, "Unexpected error")
 
 		err = sess.CommitTransaction()
@@ -274,7 +273,7 @@ func TestClientSession(t *testing.T) {
 				}
 
 				id, _ := uuid.New()
-				sess, err := NewClientSession(&Pool{}, id, Explicit, sessOpts)
+				sess, err := NewClientSession(&Pool{}, id, sessOpts)
 				require.Nil(t, err, "unexpected NewClientSession error %v", err)
 
 				require.Equal(t, tc.expectedConsistent, sess.Consistent,
@@ -283,5 +282,19 @@ func TestClientSession(t *testing.T) {
 					"expected Snapshot to be %v, got %v", tc.expectedSnapshot, sess.Snapshot)
 			})
 		}
+	})
+}
+
+func TestImplicitClientSession(t *testing.T) {
+	t.Parallel()
+
+	t.Run("causal consistency is false", func(t *testing.T) {
+		t.Parallel()
+
+		id, err := uuid.New()
+		require.NoError(t, err)
+
+		c := NewImplicitClientSession(&Pool{}, id)
+		assert.False(t, c.Consistent, "expected causal consistency to be false for implicit sessions")
 	})
 }

@@ -14,7 +14,7 @@ import (
 	"time"
 
 	"github.com/pritunl/mongo-go-driver/internal/testutil/assert"
-	testhelpers "github.com/pritunl/mongo-go-driver/internal/testutil/helpers"
+	"github.com/pritunl/mongo-go-driver/internal/testutil/helpers"
 )
 
 // Test case for all server selection rtt spec tests.
@@ -27,9 +27,9 @@ func TestServerSelectionRTTSpec(t *testing.T) {
 		NewAvgRtt float64     `json:"new_avg_rtt"`
 	}
 
-	const testsDir string = "../../../../data/server-selection/rtt"
+	const testsDir string = "../../../../testdata/server-selection/rtt"
 
-	for _, file := range testhelpers.FindJSONFilesInDir(t, testsDir) {
+	for _, file := range helpers.FindJSONFilesInDir(t, testsDir) {
 		func(t *testing.T, filename string) {
 			filepath := path.Join(testsDir, filename)
 			content, err := ioutil.ReadFile(filepath)
@@ -53,7 +53,7 @@ func TestServerSelectionRTTSpec(t *testing.T) {
 
 				monitor.addSample(time.Duration(test.NewRttMs * float64(time.Millisecond)))
 				expectedRTT := time.Duration(test.NewAvgRtt * float64(time.Millisecond))
-				actualRTT := monitor.getRTT()
+				actualRTT := monitor.EWMA()
 				assert.Equal(t, expectedRTT, actualRTT, "expected average RTT %s, got %s", expectedRTT, actualRTT)
 			})
 		}(t, file)

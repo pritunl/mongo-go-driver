@@ -8,7 +8,6 @@ package mongo
 
 import (
 	"context"
-	"time"
 
 	"github.com/pritunl/mongo-go-driver/mongo/description"
 	"github.com/pritunl/mongo-go-driver/x/mongo/driver"
@@ -36,8 +35,8 @@ func (c *changeStreamDeployment) Connection(context.Context) (driver.Connection,
 	return c.conn, nil
 }
 
-func (c *changeStreamDeployment) MinRTT() time.Duration {
-	return c.server.MinRTT()
+func (c *changeStreamDeployment) RTTMonitor() driver.RTTMonitor {
+	return c.server.RTTMonitor()
 }
 
 func (c *changeStreamDeployment) ProcessError(err error, conn driver.Connection) driver.ProcessErrorResult {

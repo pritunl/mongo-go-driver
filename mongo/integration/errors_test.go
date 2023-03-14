@@ -23,6 +23,8 @@ import (
 	"github.com/pritunl/mongo-go-driver/mongo"
 	"github.com/pritunl/mongo-go-driver/mongo/integration/mtest"
 	"github.com/pritunl/mongo-go-driver/mongo/options"
+	"github.com/pritunl/mongo-go-driver/x/mongo/driver"
+	"github.com/pritunl/mongo-go-driver/x/mongo/driver/topology"
 )
 
 type netErr struct {
@@ -85,26 +87,26 @@ func TestErrors(t *testing.T) {
 
 			clientOpts := options.Client().ApplyURI(mtest.ClusterURI())
 			testutil.AddTestServerAPIVersion(clientOpts)
-			client, err := mongo.Connect(mtest.Background, clientOpts)
+			client, err := mongo.Connect(context.Background(), clientOpts)
 			assert.Nil(mt, err, "Connect error: %v", err)
-			defer client.Disconnect(mtest.Background)
+			defer client.Disconnect(context.Background())
 
 			// A connection getting closed should manifest as an io.EOF error.
-			err = client.Ping(mtest.Background, mtest.PrimaryRp)
+			err = client.Ping(context.Background(), mtest.PrimaryRp)
 			assert.True(mt, errors.Is(err, io.EOF), "expected error %v, got %v", io.EOF, err)
 		})
 	})
 
 	mt.RunOpts("network timeouts", noClientOpts, func(mt *mtest.T) {
 		mt.Run("context timeouts return DeadlineExceeded", func(mt *mtest.T) {
-			_, err := mt.Coll.InsertOne(mtest.Background, bson.D{{"x", 1}})
+			_, err := mt.Coll.InsertOne(context.Background(), bson.D{{"x", 1}})
 			assert.Nil(mt, err, "InsertOne error: %v", err)
 
 			mt.ClearEvents()
 			filter := bson.M{
 				"$where": "function() { sleep(1000); return false; }",
 			}
-			timeoutCtx, cancel := context.WithTimeout(mtest.Background, 100*time.Millisecond)
+			timeoutCtx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 			defer cancel()
 			_, err = mt.Coll.Find(timeoutCtx, filter)
 
@@ -115,7 +117,7 @@ func TestErrors(t *testing.T) {
 		})
 
 		mt.Run("socketTimeoutMS timeouts return network errors", func(mt *mtest.T) {
-			_, err := mt.Coll.InsertOne(mtest.Background, bson.D{{"x", 1}})
+			_, err := mt.Coll.InsertOne(context.Background(), bson.D{{"x", 1}})
 			assert.Nil(mt, err, "InsertOne error: %v", err)
 
 			// Reset the test client to have a 100ms socket timeout. We do this here rather than passing it in as a
@@ -128,7 +130,7 @@ func TestErrors(t *testing.T) {
 			filter := bson.M{
 				"$where": "function() { sleep(1000); return false; }",
 			}
-			_, err = mt.Coll.Find(mtest.Background, filter)
+			_, err = mt.Coll.Find(context.Background(), filter)
 
 			evt := mt.GetStartedEvent()
 			assert.Equal(mt, "find", evt.CommandName, "expected command 'find', got %q", evt.CommandName)
@@ -158,7 +160,7 @@ func TestErrors(t *testing.T) {
 		}{
 			{
 				"CommandError all true",
-				mongo.CommandError{matchCode, "foo", []string{label}, "name", matchWrapped},
+				mongo.CommandError{matchCode, "foo", []string{label}, "name", matchWrapped, nil},
 				true,
 				true,
 				true,
@@ -167,7 +169,7 @@ func TestErrors(t *testing.T) {
 			},
 			{
 				"CommandError all false",
-				mongo.CommandError{otherCode, "bar", []string{"otherError"}, "name", otherWrapped},
+				mongo.CommandError{otherCode, "bar", []string{"otherError"}, "name", otherWrapped, nil},
 				false,
 				false,
 				false,
@@ -176,7 +178,7 @@ func TestErrors(t *testing.T) {
 			},
 			{
 				"CommandError has code not message",
-				mongo.CommandError{matchCode, "bar", []string{}, "name", nil},
+				mongo.CommandError{matchCode, "bar", []string{}, "name", nil, nil},
 				true,
 				false,
 				false,
@@ -186,9 +188,10 @@ func TestErrors(t *testing.T) {
 			{
 				"WriteException all in writeConcernError",
 				mongo.WriteException{
-					&mongo.WriteConcernError{"name", matchCode, "foo", nil},
+					&mongo.WriteConcernError{"name", matchCode, "foo", nil, nil},
 					nil,
 					[]string{label},
+					nil,
 				},
 				true,
 				true,
@@ -201,10 +204,11 @@ func TestErrors(t *testing.T) {
 				mongo.WriteException{
 					nil,
 					mongo.WriteErrors{
-						mongo.WriteError{0, otherCode, "bar", nil},
-						mongo.WriteError{0, matchCode, "foo", nil},
+						mongo.WriteError{0, otherCode, "bar", nil, nil},
+						mongo.WriteError{0, matchCode, "foo", nil, nil},
 					},
 					[]string{"otherError"},
+					nil,
 				},
 				true,
 				false,
@@ -215,11 +219,12 @@ func TestErrors(t *testing.T) {
 			{
 				"WriteException all false",
 				mongo.WriteException{
-					&mongo.WriteConcernError{"name", otherCode, "bar", nil},
+					&mongo.WriteConcernError{"name", otherCode, "bar", nil, nil},
 					mongo.WriteErrors{
-						mongo.WriteError{0, otherCode, "baz", nil},
+						mongo.WriteError{0, otherCode, "baz", nil, nil},
 					},
 					[]string{"otherError"},
+					nil,
 				},
 				false,
 				false,
@@ -230,11 +235,12 @@ func TestErrors(t *testing.T) {
 			{
 				"WriteException HasErrorCodeAndMessage false",
 				mongo.WriteException{
-					&mongo.WriteConcernError{"name", matchCode, "bar", nil},
+					&mongo.WriteConcernError{"name", matchCode, "bar", nil, nil},
 					mongo.WriteErrors{
-						mongo.WriteError{0, otherCode, "foo", nil},
+						mongo.WriteError{0, otherCode, "foo", nil, nil},
 					},
 					[]string{"otherError"},
+					nil,
 				},
 				true,
 				false,
@@ -245,7 +251,7 @@ func TestErrors(t *testing.T) {
 			{
 				"BulkWriteException all in writeConcernError",
 				mongo.BulkWriteException{
-					&mongo.WriteConcernError{"name", matchCode, "foo", nil},
+					&mongo.WriteConcernError{"name", matchCode, "foo", nil, nil},
 					nil,
 					[]string{label},
 				},
@@ -260,8 +266,8 @@ func TestErrors(t *testing.T) {
 				mongo.BulkWriteException{
 					nil,
 					[]mongo.BulkWriteError{
-						{mongo.WriteError{0, matchCode, "foo", nil}, &mongo.InsertOneModel{}},
-						{mongo.WriteError{0, otherCode, "bar", nil}, &mongo.InsertOneModel{}},
+						{mongo.WriteError{0, matchCode, "foo", nil, nil}, &mongo.InsertOneModel{}},
+						{mongo.WriteError{0, otherCode, "bar", nil, nil}, &mongo.InsertOneModel{}},
 					},
 					[]string{"otherError"},
 				},
@@ -274,9 +280,9 @@ func TestErrors(t *testing.T) {
 			{
 				"BulkWriteException all false",
 				mongo.BulkWriteException{
-					&mongo.WriteConcernError{"name", otherCode, "bar", nil},
+					&mongo.WriteConcernError{"name", otherCode, "bar", nil, nil},
 					[]mongo.BulkWriteError{
-						{mongo.WriteError{0, otherCode, "baz", nil}, &mongo.InsertOneModel{}},
+						{mongo.WriteError{0, otherCode, "baz", nil, nil}, &mongo.InsertOneModel{}},
 					},
 					[]string{"otherError"},
 				},
@@ -289,9 +295,9 @@ func TestErrors(t *testing.T) {
 			{
 				"BulkWriteException HasErrorCodeAndMessage false",
 				mongo.BulkWriteException{
-					&mongo.WriteConcernError{"name", matchCode, "bar", nil},
+					&mongo.WriteConcernError{"name", matchCode, "bar", nil, nil},
 					[]mongo.BulkWriteError{
-						{mongo.WriteError{0, otherCode, "foo", nil}, &mongo.InsertOneModel{}},
+						{mongo.WriteError{0, otherCode, "foo", nil, nil}, &mongo.InsertOneModel{}},
 					},
 					[]string{"otherError"},
 				},
@@ -322,6 +328,86 @@ func TestErrors(t *testing.T) {
 				assert.Equal(mt, errors.Is(tc.err, matchWrapped), tc.isResult, "expected errors.Is result to be %v", tc.isResult)
 			})
 		}
+
+		mtOpts := mtest.NewOptions().MinServerVersion("4.0").Topologies(mtest.ReplicaSet)
+		mt.RunOpts("Raw response", mtOpts, func(mt *mtest.T) {
+			mt.Run("CommandError", func(mt *mtest.T) {
+				// Mock a CommandError via failpoint with an arbitrary code.
+				mt.SetFailPoint(mtest.FailPoint{
+					ConfigureFailPoint: "failCommand",
+					Mode: mtest.FailPointMode{
+						Times: 1,
+					},
+					Data: mtest.FailPointData{
+						FailCommands: []string{"find"},
+						ErrorCode:    123,
+					},
+				})
+
+				res := mt.Coll.FindOne(context.Background(), bson.D{})
+				assert.NotNil(mt, res.Err(), "expected FindOne error, got nil")
+				ce, ok := res.Err().(mongo.CommandError)
+				assert.True(mt, ok, "expected FindOne error to be CommandError, got %T", res.Err())
+
+				// Assert that raw response exists and contains error code 123.
+				assert.NotNil(mt, ce.Raw, "ce.Raw is nil")
+				val, err := ce.Raw.LookupErr("code")
+				assert.Nil(mt, err, "expected 'code' field in ce.Raw, got %v", ce.Raw)
+				code, ok := val.AsInt64OK()
+				assert.True(mt, ok, "expected 'code' to be int64, got %v", val)
+				assert.Equal(mt, code, int64(123), "expected 'code' 123, got %d", code)
+			})
+			mt.Run("WriteError", func(mt *mtest.T) {
+				// Mock a WriteError by inserting documents with duplicate _id fields.
+				_, err := mt.Coll.InsertOne(context.Background(), bson.D{{"_id", 1}})
+				assert.Nil(mt, err, "InsertOne error: %v", err)
+
+				_, err = mt.Coll.InsertOne(context.Background(), bson.D{{"_id", 1}})
+				assert.NotNil(mt, err, "expected InsertOne error, got nil")
+				we, ok := err.(mongo.WriteException)
+				assert.True(mt, ok, "expected InsertOne error to be WriteException, got %T", err)
+
+				assert.NotNil(mt, we.WriteErrors, "expected we.WriteErrors, got nil")
+				assert.NotNil(mt, we.WriteErrors[0], "expected at least one WriteError")
+
+				// Assert that raw response exists for the WriteError and contains error code 11000.
+				raw := we.WriteErrors[0].Raw
+				assert.NotNil(mt, raw, "Raw of WriteError is nil")
+				val, err := raw.LookupErr("code")
+				assert.Nil(mt, err, "expected 'code' field in Raw field, got %v", raw)
+				code, ok := val.AsInt64OK()
+				assert.True(mt, ok, "expected 'code' to be int64, got %v", val)
+				assert.Equal(mt, code, int64(11000), "expected 'code' 11000, got %d", code)
+			})
+			mt.Run("WriteException", func(mt *mtest.T) {
+				// Mock a WriteException via failpoint with an arbitrary WriteConcernError.
+				mt.SetFailPoint(mtest.FailPoint{
+					ConfigureFailPoint: "failCommand",
+					Mode: mtest.FailPointMode{
+						Times: 1,
+					},
+					Data: mtest.FailPointData{
+						FailCommands: []string{"delete"},
+						WriteConcernError: &mtest.WriteConcernErrorData{
+							Code: 123,
+						},
+					},
+				})
+
+				_, err := mt.Coll.DeleteMany(context.Background(), bson.D{})
+				assert.NotNil(mt, err, "expected DeleteMany error, got nil")
+				we, ok := err.(mongo.WriteException)
+				assert.True(mt, ok, "expected DeleteMany error to be WriteException, got %T", err)
+
+				// Assert that raw response exists and contains error code 123.
+				assert.NotNil(mt, we.Raw, "expected RawResponse, got nil")
+				val, err := we.Raw.LookupErr("writeConcernError", "code")
+				assert.Nil(mt, err, "expected 'code' field in RawResponse, got %v", we.Raw)
+				code, ok := val.AsInt64OK()
+				assert.True(mt, ok, "expected 'code' to be int64, got %v", val)
+				assert.Equal(mt, code, int64(123), "expected 'code' 123, got %d", code)
+			})
+		})
 	})
 	mt.Run("error helpers", func(mt *mtest.T) {
 		//IsDuplicateKeyError
@@ -331,15 +417,18 @@ func TestErrors(t *testing.T) {
 				err    error
 				result bool
 			}{
-				{"CommandError true", mongo.CommandError{11000, "", nil, "blah", nil}, true},
-				{"CommandError false", mongo.CommandError{100, "", nil, "blah", nil}, false},
+				{"CommandError true", mongo.CommandError{11000, "", nil, "blah", nil, nil}, true},
+				{"CommandError false", mongo.CommandError{100, "", nil, "blah", nil, nil}, false},
+				{"WriteError true", mongo.WriteError{0, 11000, "", nil, nil}, true},
+				{"WriteError false", mongo.WriteError{0, 100, "", nil, nil}, false},
 				{
 					"WriteException true in writeConcernError",
 					mongo.WriteException{
-						&mongo.WriteConcernError{"name", 11001, "bar", nil},
+						&mongo.WriteConcernError{"name", 11001, "bar", nil, nil},
 						mongo.WriteErrors{
-							mongo.WriteError{0, 100, "baz", nil},
+							mongo.WriteError{0, 100, "baz", nil, nil},
 						},
+						nil,
 						nil,
 					},
 					true,
@@ -347,10 +436,11 @@ func TestErrors(t *testing.T) {
 				{
 					"WriteException true in writeErrors",
 					mongo.WriteException{
-						&mongo.WriteConcernError{"name", 100, "bar", nil},
+						&mongo.WriteConcernError{"name", 100, "bar", nil, nil},
 						mongo.WriteErrors{
-							mongo.WriteError{0, 12582, "baz", nil},
+							mongo.WriteError{0, 12582, "baz", nil, nil},
 						},
+						nil,
 						nil,
 					},
 					true,
@@ -358,10 +448,11 @@ func TestErrors(t *testing.T) {
 				{
 					"WriteException false",
 					mongo.WriteException{
-						&mongo.WriteConcernError{"name", 16460, "bar", nil},
+						&mongo.WriteConcernError{"name", 16460, "bar", nil, nil},
 						mongo.WriteErrors{
-							mongo.WriteError{0, 100, "blah E11000 blah", nil},
+							mongo.WriteError{0, 100, "blah E11000 blah", nil, nil},
 						},
+						nil,
 						nil,
 					},
 					false,
@@ -369,9 +460,9 @@ func TestErrors(t *testing.T) {
 				{
 					"BulkWriteException true",
 					mongo.BulkWriteException{
-						&mongo.WriteConcernError{"name", 100, "bar", nil},
+						&mongo.WriteConcernError{"name", 100, "bar", nil, nil},
 						[]mongo.BulkWriteError{
-							{mongo.WriteError{0, 16460, "blah E11000 blah", nil}, &mongo.InsertOneModel{}},
+							{mongo.WriteError{0, 16460, "blah E11000 blah", nil, nil}, &mongo.InsertOneModel{}},
 						},
 						[]string{"otherError"},
 					},
@@ -380,15 +471,15 @@ func TestErrors(t *testing.T) {
 				{
 					"BulkWriteException false",
 					mongo.BulkWriteException{
-						&mongo.WriteConcernError{"name", 100, "bar", nil},
+						&mongo.WriteConcernError{"name", 100, "bar", nil, nil},
 						[]mongo.BulkWriteError{
-							{mongo.WriteError{0, 110, "blah", nil}, &mongo.InsertOneModel{}},
+							{mongo.WriteError{0, 110, "blah", nil, nil}, &mongo.InsertOneModel{}},
 						},
 						[]string{"otherError"},
 					},
 					false,
 				},
-				{"wrapped error", wrappedError{mongo.CommandError{11000, "", nil, "blah", nil}}, true},
+				{"wrapped error", wrappedError{mongo.CommandError{11000, "", nil, "blah", nil, nil}}, true},
 				{"other error type", errors.New("foo"), false},
 			}
 			for _, tc := range testCases {
@@ -407,9 +498,9 @@ func TestErrors(t *testing.T) {
 				err    error
 				result bool
 			}{
-				{"ServerError true", mongo.CommandError{100, "", []string{networkLabel}, "blah", nil}, true},
-				{"ServerError false", mongo.CommandError{100, "", []string{otherLabel}, "blah", nil}, false},
-				{"wrapped error", wrappedError{mongo.CommandError{100, "", []string{networkLabel}, "blah", nil}}, true},
+				{"ServerError true", mongo.CommandError{100, "", []string{networkLabel}, "blah", nil, nil}, true},
+				{"ServerError false", mongo.CommandError{100, "", []string{otherLabel}, "blah", nil, nil}, false},
+				{"wrapped error", wrappedError{mongo.CommandError{100, "", []string{networkLabel}, "blah", nil, nil}}, true},
 				{"other error type", errors.New("foo"), false},
 			}
 			for _, tc := range testCases {
@@ -426,13 +517,25 @@ func TestErrors(t *testing.T) {
 				err    error
 				result bool
 			}{
-				{"context timeout", mongo.CommandError{100, "", []string{"other"}, "blah", context.DeadlineExceeded}, true},
-				{"ServerError NetworkTimeoutError", mongo.CommandError{100, "", []string{"NetworkTimeoutError"}, "blah", nil}, true},
-				{"ServerError ExceededTimeLimitError", mongo.CommandError{100, "", []string{"ExceededTimeLimitError"}, "blah", nil}, true},
-				{"ServerError false", mongo.CommandError{100, "", []string{"other"}, "blah", nil}, false},
-				{"net error true", mongo.CommandError{100, "", []string{"other"}, "blah", netErr{true}}, true},
+				{"context timeout", mongo.CommandError{
+					100, "", []string{"other"}, "blah", context.DeadlineExceeded, nil}, true},
+				{"deadline would be exceeded", mongo.CommandError{
+					100, "", []string{"other"}, "blah", driver.ErrDeadlineWouldBeExceeded, nil}, true},
+				{"server selection timeout", mongo.CommandError{
+					100, "", []string{"other"}, "blah", topology.ErrServerSelectionTimeout, nil}, true},
+				{"wait queue timeout", mongo.CommandError{
+					100, "", []string{"other"}, "blah", topology.WaitQueueTimeoutError{}, nil}, true},
+				{"ServerError NetworkTimeoutError", mongo.CommandError{
+					100, "", []string{"NetworkTimeoutError"}, "blah", nil, nil}, true},
+				{"ServerError ExceededTimeLimitError", mongo.CommandError{
+					100, "", []string{"ExceededTimeLimitError"}, "blah", nil, nil}, true},
+				{"ServerError false", mongo.CommandError{
+					100, "", []string{"other"}, "blah", nil, nil}, false},
+				{"net error true", mongo.CommandError{
+					100, "", []string{"other"}, "blah", netErr{true}, nil}, true},
 				{"net error false", netErr{false}, false},
-				{"wrapped error", wrappedError{mongo.CommandError{100, "", []string{"other"}, "blah", context.DeadlineExceeded}}, true},
+				{"wrapped error", wrappedError{mongo.CommandError{
+					100, "", []string{"other"}, "blah", context.DeadlineExceeded, nil}}, true},
 				{"other error", errors.New("foo"), false},
 			}
 			for _, tc := range testCases {

@@ -7,6 +7,7 @@
 package integration
 
 import (
+	"context"
 	"fmt"
 	"io/ioutil"
 	"os"
@@ -17,12 +18,13 @@ import (
 
 	"github.com/pritunl/mongo-go-driver/bson"
 	"github.com/pritunl/mongo-go-driver/internal/testutil/assert"
+	"github.com/pritunl/mongo-go-driver/internal/testutil/helpers"
 	"github.com/pritunl/mongo-go-driver/mongo"
 	"github.com/pritunl/mongo-go-driver/mongo/integration/mtest"
 )
 
 const (
-	crudTestsDir = "../../data/crud"
+	crudTestsDir = "../../testdata/crud"
 	crudReadDir  = "v1/read"
 	crudWriteDir = "v1/write"
 )
@@ -110,8 +112,8 @@ func runCrudFile(t *testing.T, file string) {
 
 func runCrudTest(mt *mtest.T, test crudTest, testFile crudTestFile) {
 	if len(testFile.Data) > 0 {
-		docs := rawSliceToInterfaceSlice(testFile.Data)
-		_, err := mt.Coll.InsertMany(mtest.Background, docs)
+		docs := helpers.RawToInterfaces(testFile.Data...)
+		_, err := mt.Coll.InsertMany(context.Background(), docs)
 		assert.Nil(mt, err, "InsertMany error: %v", err)
 	}
 

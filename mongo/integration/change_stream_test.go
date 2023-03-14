@@ -7,6 +7,7 @@
 package integration
 
 import (
+	"context"
 	"testing"
 	"time"
 
@@ -14,6 +15,7 @@ import (
 	"github.com/pritunl/mongo-go-driver/bson/primitive"
 	"github.com/pritunl/mongo-go-driver/event"
 	"github.com/pritunl/mongo-go-driver/internal/testutil/assert"
+	"github.com/pritunl/mongo-go-driver/internal/testutil/monitor"
 	"github.com/pritunl/mongo-go-driver/mongo"
 	"github.com/pritunl/mongo-go-driver/mongo/integration/mtest"
 	"github.com/pritunl/mongo-go-driver/mongo/options"
@@ -47,7 +49,7 @@ func TestChangeStream_Standalone(t *testing.T) {
 	defer mt.Close()
 
 	mt.Run("no custom standalone error", func(mt *mtest.T) {
-		_, err := mt.Coll.Watch(mtest.Background, mongo.Pipeline{})
+		_, err := mt.Coll.Watch(context.Background(), mongo.Pipeline{})
 		_, ok := err.(mongo.CommandError)
 		assert.True(mt, ok, "expected error type %T, got %T", mongo.CommandError{}, err)
 	})
@@ -61,7 +63,7 @@ func TestChangeStream_ReplicaSet(t *testing.T) {
 	mt.Run("first stage is $changeStream", func(mt *mtest.T) {
 		// first stage in the aggregate pipeline must be $changeStream
 
-		cs, err := mt.Coll.Watch(mtest.Background, mongo.Pipeline{})
+		cs, err := mt.Coll.Watch(context.Background(), mongo.Pipeline{})
 		assert.Nil(mt, err, "Watch error: %v", err)
 		defer closeStream(cs)
 		started := mt.GetStartedEvent()
@@ -78,34 +80,34 @@ func TestChangeStream_ReplicaSet(t *testing.T) {
 	mt.Run("track resume token", func(mt *mtest.T) {
 		// ChangeStream must continuously track the last seen resumeToken
 
-		cs, err := mt.Coll.Watch(mtest.Background, mongo.Pipeline{})
+		cs, err := mt.Coll.Watch(context.Background(), mongo.Pipeline{})
 		assert.Nil(mt, err, "Watch error: %v", err)
 		defer closeStream(cs)
 
 		generateEvents(mt, 1)
-		assert.True(mt, cs.Next(mtest.Background), "expected next to return true, got false")
+		assert.True(mt, cs.Next(context.Background()), "expected next to return true, got false")
 		assert.NotNil(mt, cs.ResumeToken(), "expected resume token, got nil")
 	})
 	mt.RunOpts("resume token updated on empty batch", mtest.NewOptions().MinServerVersion("4.0.7"), func(mt *mtest.T) {
 		// The resume token is updated when an empty batch is returned using the server's post batch resume token.
 
-		cs, err := mt.Coll.Watch(mtest.Background, mongo.Pipeline{})
+		cs, err := mt.Coll.Watch(context.Background(), mongo.Pipeline{})
 		assert.Nil(mt, err, "Watch error: %v", err)
 		defer closeStream(cs)
 
 		// cause an event to occur so the resume token is updated
 		generateEvents(mt, 1)
-		assert.True(mt, cs.Next(mtest.Background), "expected next to return true, got false")
+		assert.True(mt, cs.Next(context.Background()), "expected next to return true, got false")
 		firstToken := cs.ResumeToken()
 
 		// cause an event on a different collection than the one being watched so the server's PBRT is updated
 		diffColl := mt.CreateCollection(mtest.Collection{Name: "diffCollUpdatePbrt"}, false)
-		_, err = diffColl.InsertOne(mtest.Background, bson.D{{"x", 1}})
+		_, err = diffColl.InsertOne(context.Background(), bson.D{{"x", 1}})
 		assert.Nil(mt, err, "InsertOne error: %v", err)
 
 		// verify that the resume token is updated using the PBRT from an empty batch
 		mt.ClearEvents()
-		assert.False(mt, cs.TryNext(mtest.Background), "unexpected event document: %v", cs.Current)
+		assert.False(mt, cs.TryNext(context.Background()), "unexpected event document: %v", cs.Current)
 		assert.Nil(mt, cs.Err(), "change stream error getting new batch: %v", cs.Err())
 		newToken := cs.ResumeToken()
 		assert.NotEqual(mt, newToken, firstToken, "resume token was not updated after an empty batch was returned")
@@ -123,12 +125,12 @@ func TestChangeStream_ReplicaSet(t *testing.T) {
 				{"_id", 0},
 			}},
 		}
-		cs, err := mt.Coll.Watch(mtest.Background, mongo.Pipeline{projectDoc})
+		cs, err := mt.Coll.Watch(context.Background(), mongo.Pipeline{projectDoc})
 		assert.Nil(mt, err, "Watch error: %v", err)
 		defer closeStream(cs)
 
 		generateEvents(mt, 2)
-		assert.False(mt, cs.Next(mtest.Background), "expected Next to return false, got true")
+		assert.False(mt, cs.Next(context.Background()), "expected Next to return false, got true")
 		assert.NotNil(mt, cs.Err(), "expected error, got nil")
 	})
 	mt.RunOpts("resume once", mtest.NewOptions().ClientType(mtest.Mock), func(mt *mtest.T) {
@@ -161,15 +163,15 @@ func TestChangeStream_ReplicaSet(t *testing.T) {
 			resumedAggregateRes,
 		)
 
-		cs, err := mt.Coll.Watch(mtest.Background, mongo.Pipeline{})
+		cs, err := mt.Coll.Watch(context.Background(), mongo.Pipeline{})
 		assert.Nil(mt, err, "Watch error: %v", err)
 		defer closeStream(cs)
 		// Consume the first document
-		assert.True(mt, cs.Next(mtest.Background), "expected Next to return true, got false")
+		assert.True(mt, cs.Next(context.Background()), "expected Next to return true, got false")
 
 		// Clear existing events and expect a resume attempt to happen.
 		mt.ClearEvents()
-		assert.True(mt, cs.Next(mtest.Background), "expected Next to return true, got false")
+		assert.True(mt, cs.Next(context.Background()), "expected Next to return true, got false")
 
 		// Next should cause getMore, killCursors, and aggregate to run
 		assert.NotNil(mt, mt.GetStartedEvent(), "expected getMore event, got nil")
@@ -209,11 +211,11 @@ func TestChangeStream_ReplicaSet(t *testing.T) {
 		})
 		mt.AddMockResponses(aggRes, getMoreRes, killCursorsRes, resumedAggRes)
 
-		cs, err := mt.Coll.Watch(mtest.Background, mongo.Pipeline{})
+		cs, err := mt.Coll.Watch(context.Background(), mongo.Pipeline{})
 		assert.Nil(mt, err, "Watch error: %v", err)
 		defer closeStream(cs)
 
-		assert.False(mt, cs.Next(mtest.Background), "expected Next to return false, got true")
+		assert.False(mt, cs.Next(context.Background()), "expected Next to return false, got true")
 	})
 	mt.RunOpts("server selection before resume", mtest.NewOptions().CreateClient(false), func(mt *mtest.T) {
 		// ChangeStream will perform server selection before attempting to resume, using initial readPreference
@@ -222,7 +224,7 @@ func TestChangeStream_ReplicaSet(t *testing.T) {
 	mt.Run("empty batch cursor not closed", func(mt *mtest.T) {
 		// Ensure that a cursor returned from an aggregate command with a cursor id and an initial empty batch is not closed
 
-		cs, err := mt.Coll.Watch(mtest.Background, mongo.Pipeline{})
+		cs, err := mt.Coll.Watch(context.Background(), mongo.Pipeline{})
 		assert.Nil(mt, err, "Watch error: %v", err)
 		defer closeStream(cs)
 		assert.True(mt, cs.ID() > 0, "expected non-zero ID, got 0")
@@ -247,11 +249,11 @@ func TestChangeStream_ReplicaSet(t *testing.T) {
 		resumedAggRes := mtest.CreateCursorResponse(1, ns, mtest.FirstBatch, changeDoc)
 		mt.AddMockResponses(aggRes, getMoreRes, killCursorsRes, resumedAggRes)
 
-		cs, err := mt.Coll.Watch(mtest.Background, mongo.Pipeline{})
+		cs, err := mt.Coll.Watch(context.Background(), mongo.Pipeline{})
 		assert.Nil(mt, err, "Watch error: %v", err)
 		defer closeStream(cs)
 
-		assert.True(mt, cs.Next(mtest.Background), "expected Next to return true, got false")
+		assert.True(mt, cs.Next(context.Background()), "expected Next to return true, got false")
 		assert.Nil(mt, cs.Err(), "change stream error: %v", cs.Err())
 	})
 
@@ -260,7 +262,7 @@ func TestChangeStream_ReplicaSet(t *testing.T) {
 		// $changeStream stage for ChangeStream against a server >=4.0 and <4.0.7 that has not received any results yet
 		// MUST include a startAtOperationTime option when resuming a changestream.
 
-		cs, err := mt.Coll.Watch(mtest.Background, mongo.Pipeline{})
+		cs, err := mt.Coll.Watch(context.Background(), mongo.Pipeline{})
 		assert.Nil(mt, err, "Watch error: %v", err)
 		defer closeStream(cs)
 
@@ -270,7 +272,7 @@ func TestChangeStream_ReplicaSet(t *testing.T) {
 
 		mt.ClearEvents()
 		// change stream should resume once and get new change
-		assert.True(mt, cs.Next(mtest.Background), "expected Next to return true, got false")
+		assert.True(mt, cs.Next(context.Background()), "expected Next to return true, got false")
 		// Next should cause getMore, killCursors, and aggregate to run
 		assert.NotNil(mt, mt.GetStartedEvent(), "expected getMore event, got nil")
 		assert.NotNil(mt, mt.GetStartedEvent(), "expected killCursors event, got nil")
@@ -303,17 +305,17 @@ func TestChangeStream_ReplicaSet(t *testing.T) {
 				var err error
 				switch tc.st {
 				case client:
-					cs, err = mt.Client.Watch(mtest.Background, mongo.Pipeline{})
+					cs, err = mt.Client.Watch(context.Background(), mongo.Pipeline{})
 				case database:
-					cs, err = mt.DB.Watch(mtest.Background, mongo.Pipeline{})
+					cs, err = mt.DB.Watch(context.Background(), mongo.Pipeline{})
 				case collection:
-					cs, err = mt.Coll.Watch(mtest.Background, mongo.Pipeline{})
+					cs, err = mt.Coll.Watch(context.Background(), mongo.Pipeline{})
 				}
 				assert.Nil(mt, err, "Watch error: %v", err)
 				defer closeStream(cs)
 
 				generateEvents(mt, 1)
-				assert.True(mt, cs.Next(mtest.Background), "expected Next true, got false")
+				assert.True(mt, cs.Next(context.Background()), "expected Next true, got false")
 				var res bson.D
 				err = cs.Decode(&res)
 				assert.Nil(mt, err, "Decode error: %v", err)
@@ -325,14 +327,14 @@ func TestChangeStream_ReplicaSet(t *testing.T) {
 		// maxAwaitTimeMS option should be sent as maxTimeMS on getMore
 
 		opts := options.ChangeStream().SetMaxAwaitTime(100 * time.Millisecond)
-		cs, err := mt.Coll.Watch(mtest.Background, mongo.Pipeline{}, opts)
+		cs, err := mt.Coll.Watch(context.Background(), mongo.Pipeline{}, opts)
 		assert.Nil(mt, err, "Watch error: %v", err)
 		defer closeStream(cs)
 
-		_, err = mt.Coll.InsertOne(mtest.Background, bson.D{{"x", 1}})
+		_, err = mt.Coll.InsertOne(context.Background(), bson.D{{"x", 1}})
 		assert.Nil(mt, err, "InsertOne error: %v", err)
 		mt.ClearEvents()
-		assert.True(mt, cs.Next(mtest.Background), "expected Next true, got false")
+		assert.True(mt, cs.Next(context.Background()), "expected Next true, got false")
 
 		e := mt.GetStartedEvent()
 		assert.NotNil(mt, e, "expected getMore event, got nil")
@@ -359,7 +361,7 @@ func TestChangeStream_ReplicaSet(t *testing.T) {
 					mt.RunOpts(tc.name, tcOpts, func(mt *mtest.T) {
 						// create temp stream to get a resume token
 						mt.ClearEvents()
-						cs, err := mt.Coll.Watch(mtest.Background, mongo.Pipeline{})
+						cs, err := mt.Coll.Watch(context.Background(), mongo.Pipeline{})
 						assert.Nil(mt, err, "Watch error: %v", err)
 
 						// Initial resume token should equal the PBRT in the aggregate command
@@ -370,7 +372,7 @@ func TestChangeStream_ReplicaSet(t *testing.T) {
 						generateEvents(mt, numEvents)
 
 						// Iterate over one event to get resume token
-						assert.True(mt, cs.Next(mtest.Background), "expected Next to return true, got false")
+						assert.True(mt, cs.Next(context.Background()), "expected Next to return true, got false")
 						token := cs.ResumeToken()
 						closeStream(cs)
 
@@ -393,7 +395,7 @@ func TestChangeStream_ReplicaSet(t *testing.T) {
 
 						// clear slate and create new change stream
 						mt.ClearEvents()
-						cs, err = mt.Coll.Watch(mtest.Background, mongo.Pipeline{}, opts)
+						cs, err = mt.Coll.Watch(context.Background(), mongo.Pipeline{}, opts)
 						assert.Nil(mt, err, "Watch error: %v", err)
 						defer closeStream(cs)
 
@@ -401,7 +403,7 @@ func TestChangeStream_ReplicaSet(t *testing.T) {
 						compareResumeTokens(mt, cs, initialToken)
 
 						for i := 0; i < numExpectedEvents; i++ {
-							assert.True(mt, cs.Next(mtest.Background), "expected Next to return true, got false")
+							assert.True(mt, cs.Next(context.Background()), "expected Next to return true, got false")
 							// while we're not at the last doc in the batch, the resume token should be the _id of the
 							// document
 							if i != numExpectedEvents-1 {
@@ -418,7 +420,7 @@ func TestChangeStream_ReplicaSet(t *testing.T) {
 			mt.RunOpts("without PBRT support", noPbrtOpts, func(mt *mtest.T) {
 				collName := mt.Coll.Name()
 				dbName := mt.Coll.Database().Name()
-				cs, err := mt.Coll.Watch(mtest.Background, mongo.Pipeline{})
+				cs, err := mt.Coll.Watch(context.Background(), mongo.Pipeline{})
 				assert.Nil(mt, err, "Watch error: %v", err)
 				defer closeStream(cs)
 
@@ -426,7 +428,7 @@ func TestChangeStream_ReplicaSet(t *testing.T) {
 				numEvents := 5
 				generateEvents(mt, numEvents)
 				// iterate once to get a resume token
-				assert.True(mt, cs.Next(mtest.Background), "expected Next to return true, got false")
+				assert.True(mt, cs.Next(context.Background()), "expected Next to return true, got false")
 				token := cs.ResumeToken()
 				assert.NotNil(mt, token, "expected resume token, got nil")
 
@@ -443,7 +445,7 @@ func TestChangeStream_ReplicaSet(t *testing.T) {
 				for _, tc := range testCases {
 					mt.Run(tc.name, func(mt *mtest.T) {
 						coll := mt.Client.Database(dbName).Collection(collName)
-						cs, err := coll.Watch(mtest.Background, mongo.Pipeline{}, tc.opts)
+						cs, err := coll.Watch(context.Background(), mongo.Pipeline{}, tc.opts)
 						assert.Nil(mt, err, "Watch error: %v", err)
 						defer closeStream(cs)
 
@@ -453,7 +455,7 @@ func TestChangeStream_ReplicaSet(t *testing.T) {
 						}
 
 						for i := 0; i < tc.numDocsExpected; i++ {
-							assert.True(mt, cs.Next(mtest.Background), "expected Next to return true, got false")
+							assert.True(mt, cs.Next(context.Background()), "expected Next to return true, got false")
 							// current resume token should always equal _id of current document
 							compareResumeTokens(mt, cs, cs.Current.Lookup("_id").Document())
 						}
@@ -466,18 +468,18 @@ func TestChangeStream_ReplicaSet(t *testing.T) {
 		mt.Run("existing non-empty batch", func(mt *mtest.T) {
 			// If there's already documents in the current batch, TryNext should return true without doing a getMore
 
-			cs, err := mt.Coll.Watch(mtest.Background, mongo.Pipeline{})
+			cs, err := mt.Coll.Watch(context.Background(), mongo.Pipeline{})
 			assert.Nil(mt, err, "Watch error: %v", err)
 			defer closeStream(cs)
 			generateEvents(mt, 5)
 			// call Next to make sure a batch is retrieved
-			assert.True(mt, cs.Next(mtest.Background), "expected Next to return true, got false")
+			assert.True(mt, cs.Next(context.Background()), "expected Next to return true, got false")
 			tryNextExistingBatchTest(mt, cs)
 		})
 		mt.Run("one getMore sent", func(mt *mtest.T) {
 			// If the current batch is empty, TryNext should send one getMore and return.
 
-			cs, err := mt.Coll.Watch(mtest.Background, mongo.Pipeline{})
+			cs, err := mt.Coll.Watch(context.Background(), mongo.Pipeline{})
 			assert.Nil(mt, err, "Watch error: %v", err)
 			defer closeStream(cs)
 
@@ -486,31 +488,25 @@ func TestChangeStream_ReplicaSet(t *testing.T) {
 			// without doing a getMore
 			// next call to TryNext should attempt a getMore
 			for i := 0; i < 2; i++ {
-				assert.False(mt, cs.TryNext(mtest.Background), "TryNext returned true on iteration %v", i)
+				assert.False(mt, cs.TryNext(context.Background()), "TryNext returned true on iteration %v", i)
 			}
-			verifyOneGetmoreSent(mt, cs)
+			verifyOneGetmoreSent(mt)
 		})
 		mt.RunOpts("getMore error", mtest.NewOptions().ClientType(mtest.Mock), func(mt *mtest.T) {
 			// If the getMore attempt errors with a non-resumable error, TryNext returns false
 
 			aggRes := mtest.CreateCursorResponse(50, "foo.bar", mtest.FirstBatch)
 			mt.AddMockResponses(aggRes)
-			cs, err := mt.Coll.Watch(mtest.Background, mongo.Pipeline{})
+			cs, err := mt.Coll.Watch(context.Background(), mongo.Pipeline{})
 			assert.Nil(mt, err, "Watch error: %v", err)
 			defer closeStream(cs)
 			tryNextGetmoreError(mt, cs)
 		})
 	})
 
-	customDeploymentClientOpts := options.Client().
-		SetPoolMonitor(poolMonitor).
-		SetWriteConcern(mtest.MajorityWc).
-		SetReadConcern(mtest.MajorityRc).
-		SetRetryReads(false)
 	customDeploymentOpts := mtest.NewOptions().
 		Topologies(mtest.ReplicaSet). // Avoid complexity of sharded fail points.
 		MinServerVersion("4.0").      // 4.0 is needed to use replica set fail points.
-		ClientOptions(customDeploymentClientOpts).
 		CreateClient(false)
 	mt.RunOpts("custom deployment", customDeploymentOpts, func(mt *mtest.T) {
 		// Tests for the changeStreamDeployment type. These are written as integration tests for ChangeStream rather
@@ -518,7 +514,13 @@ func TestChangeStream_ReplicaSet(t *testing.T) {
 		// by ChangeStream when executing an aggregate.
 
 		mt.Run("errors are processed for SDAM on initial aggregate", func(mt *mtest.T) {
-			clearPoolChan()
+			tpm := monitor.NewTestPoolMonitor()
+			mt.ResetClient(options.Client().
+				SetPoolMonitor(tpm.PoolMonitor).
+				SetWriteConcern(mtest.MajorityWc).
+				SetReadConcern(mtest.MajorityRc).
+				SetRetryReads(false))
+
 			mt.SetFailPoint(mtest.FailPoint{
 				ConfigureFailPoint: "failCommand",
 				Mode: mtest.FailPointMode{
@@ -530,12 +532,18 @@ func TestChangeStream_ReplicaSet(t *testing.T) {
 				},
 			})
 
-			_, err := mt.Coll.Watch(mtest.Background, mongo.Pipeline{})
+			_, err := mt.Coll.Watch(context.Background(), mongo.Pipeline{})
 			assert.NotNil(mt, err, "expected Watch error, got nil")
-			assert.True(mt, isPoolCleared(), "expected pool to be cleared after non-timeout network error but was not")
+			assert.True(mt, tpm.IsPoolCleared(), "expected pool to be cleared after non-timeout network error but was not")
 		})
 		mt.Run("errors are processed for SDAM on getMore", func(mt *mtest.T) {
-			clearPoolChan()
+			tpm := monitor.NewTestPoolMonitor()
+			mt.ResetClient(options.Client().
+				SetPoolMonitor(tpm.PoolMonitor).
+				SetWriteConcern(mtest.MajorityWc).
+				SetReadConcern(mtest.MajorityRc).
+				SetRetryReads(false))
+
 			mt.SetFailPoint(mtest.FailPoint{
 				ConfigureFailPoint: "failCommand",
 				Mode: mtest.FailPointMode{
@@ -547,21 +555,22 @@ func TestChangeStream_ReplicaSet(t *testing.T) {
 				},
 			})
 
-			cs, err := mt.Coll.Watch(mtest.Background, mongo.Pipeline{})
+			cs, err := mt.Coll.Watch(context.Background(), mongo.Pipeline{})
 			assert.Nil(mt, err, "Watch error: %v", err)
 			defer closeStream(cs)
 
-			_, err = mt.Coll.InsertOne(mtest.Background, bson.D{{"x", 1}})
+			_, err = mt.Coll.InsertOne(context.Background(), bson.D{{"x", 1}})
 			assert.Nil(mt, err, "InsertOne error: %v", err)
 
-			assert.True(mt, cs.Next(mtest.Background), "expected Next to return true, got false (iteration error %v)",
+			assert.True(mt, cs.Next(context.Background()), "expected Next to return true, got false (iteration error %v)",
 				cs.Err())
-			assert.True(mt, isPoolCleared(), "expected pool to be cleared after non-timeout network error but was not")
+			assert.True(mt, tpm.IsPoolCleared(), "expected pool to be cleared after non-timeout network error but was not")
 		})
-		retryAggClientOpts := options.Client().SetRetryReads(true).SetPoolMonitor(poolMonitor)
-		retryAggMtOpts := mtest.NewOptions().ClientOptions(retryAggClientOpts)
-		mt.RunOpts("errors are processed for SDAM on retried aggregate", retryAggMtOpts, func(mt *mtest.T) {
-			clearPoolChan()
+		mt.Run("errors are processed for SDAM on retried aggregate", func(mt *mtest.T) {
+			tpm := monitor.NewTestPoolMonitor()
+			mt.ResetClient(options.Client().
+				SetPoolMonitor(tpm.PoolMonitor).
+				SetRetryReads(true))
 
 			mt.SetFailPoint(mtest.FailPoint{
 				ConfigureFailPoint: "failCommand",
@@ -574,69 +583,109 @@ func TestChangeStream_ReplicaSet(t *testing.T) {
 				},
 			})
 
-			_, err := mt.Coll.Watch(mtest.Background, mongo.Pipeline{})
+			_, err := mt.Coll.Watch(context.Background(), mongo.Pipeline{})
 			assert.NotNil(mt, err, "expected Watch error, got nil")
 
-			var numClearedEvents int
-			for len(poolChan) > 0 {
-				curr := <-poolChan
-				if curr.Type == event.PoolCleared {
-					numClearedEvents++
-				}
-			}
-			assert.Equal(mt, 2, numClearedEvents, "expected two PoolCleared events, got %d", numClearedEvents)
+			clearedEvents := tpm.Events(func(evt *event.PoolEvent) bool {
+				return evt.Type == event.PoolCleared
+			})
+			assert.Equal(mt, 2, len(clearedEvents), "expected two PoolCleared events, got %d", len(clearedEvents))
 		})
 	})
 	// Setting min server version as 4.0 since v3.6 does not send a "dropEvent"
 	mt.RunOpts("call to cursor.Next after cursor closed", mtest.NewOptions().MinServerVersion("4.0"), func(mt *mtest.T) {
-		cs, err := mt.Coll.Watch(mtest.Background, mongo.Pipeline{})
+		cs, err := mt.Coll.Watch(context.Background(), mongo.Pipeline{})
 		assert.Nil(mt, err, "Watch error: %v", err)
 		defer closeStream(cs)
 
 		// Generate insert events
 		generateEvents(mt, 5)
 		// Call Coll.Drop to generate drop and invalidate event
-		err = mt.Coll.Drop(mtest.Background)
+		err = mt.Coll.Drop(context.Background())
 		assert.Nil(mt, err, "Drop error: %v", err)
 
 		// Test that all events were successful
 		for i := 0; i < 7; i++ {
-			assert.True(mt, cs.Next(mtest.Background), "Next returned false at index %d; iteration error: %v", i, cs.Err())
+			assert.True(mt, cs.Next(context.Background()), "Next returned false at index %d; iteration error: %v", i, cs.Err())
 		}
 
 		operationType := cs.Current.Lookup("operationType").StringValue()
 		assert.Equal(mt, operationType, "invalidate", "expected invalidate event but returned %q event", operationType)
 		// next call to cs.Next should return False since cursor is closed
-		assert.False(mt, cs.Next(mtest.Background), "expected to return false, but returned true")
+		assert.False(mt, cs.Next(context.Background()), "expected to return false, but returned true")
 	})
 	mt.Run("getMore commands are monitored", func(mt *mtest.T) {
-		cs, err := mt.Coll.Watch(mtest.Background, mongo.Pipeline{})
+		cs, err := mt.Coll.Watch(context.Background(), mongo.Pipeline{})
 		assert.Nil(mt, err, "Watch error: %v", err)
 		defer closeStream(cs)
 
-		_, err = mt.Coll.InsertOne(mtest.Background, bson.M{"x": 1})
+		_, err = mt.Coll.InsertOne(context.Background(), bson.M{"x": 1})
 		assert.Nil(mt, err, "InsertOne error: %v", err)
 
 		mt.ClearEvents()
-		assert.True(mt, cs.Next(mtest.Background), "Next returned false with error %v", cs.Err())
+		assert.True(mt, cs.Next(context.Background()), "Next returned false with error %v", cs.Err())
 		evt := mt.GetStartedEvent()
 		assert.Equal(mt, "getMore", evt.CommandName, "expected command 'getMore', got %q", evt.CommandName)
 	})
 	mt.Run("killCursors commands are monitored", func(mt *mtest.T) {
-		cs, err := mt.Coll.Watch(mtest.Background, mongo.Pipeline{})
+		cs, err := mt.Coll.Watch(context.Background(), mongo.Pipeline{})
 		assert.Nil(mt, err, "Watch error: %v", err)
 		defer closeStream(cs)
 
 		mt.ClearEvents()
-		err = cs.Close(mtest.Background)
+		err = cs.Close(context.Background())
 		assert.Nil(mt, err, "Close error: %v", err)
 		evt := mt.GetStartedEvent()
 		assert.Equal(mt, "killCursors", evt.CommandName, "expected command 'killCursors', got %q", evt.CommandName)
 	})
+	mt.Run("Custom", func(mt *mtest.T) {
+		// Custom options should be a BSON map of option names to Marshalable option values.
+		// We use "allowDiskUse" as an example.
+		customOpts := bson.M{"allowDiskUse": true}
+		opts := options.ChangeStream().SetCustom(customOpts)
+
+		// Create change stream with custom options set.
+		mt.ClearEvents()
+		cs, err := mt.Coll.Watch(context.Background(), mongo.Pipeline{}, opts)
+		assert.Nil(mt, err, "Watch error: %v", err)
+		defer closeStream(cs)
+
+		// Assert that custom option is passed to the initial aggregate.
+		evt := mt.GetStartedEvent()
+		assert.Equal(mt, "aggregate", evt.CommandName, "expected command 'aggregate' got, %q", evt.CommandName)
+
+		aduVal, err := evt.Command.LookupErr("allowDiskUse")
+		assert.Nil(mt, err, "expected field 'allowDiskUse' in started command not found")
+		adu, ok := aduVal.BooleanOK()
+		assert.True(mt, ok, "expected field 'allowDiskUse' to be boolean, got %v", aduVal.Type.String())
+		assert.True(mt, adu, "expected field 'allowDiskUse' to be true, got false")
+	})
+	mt.RunOpts("CustomPipeline", mtest.NewOptions().MinServerVersion("4.0"), func(mt *mtest.T) {
+		// Custom pipeline options should be a BSON map of option names to Marshalable option values.
+		// We use "allChangesForCluster" as an example.
+		customPipelineOpts := bson.M{"allChangesForCluster": false}
+		opts := options.ChangeStream().SetCustomPipeline(customPipelineOpts)
+
+		// Create change stream with custom pipeline options set.
+		mt.ClearEvents()
+		cs, err := mt.Coll.Watch(context.Background(), mongo.Pipeline{}, opts)
+		assert.Nil(mt, err, "Watch error: %v", err)
+		defer closeStream(cs)
+
+		// Assert that custom pipeline option is included in the $changeStream stage.
+		evt := mt.GetStartedEvent()
+		assert.Equal(mt, "aggregate", evt.CommandName, "expected command 'aggregate' got, %q", evt.CommandName)
+
+		acfcVal, err := evt.Command.LookupErr("pipeline", "0", "$changeStream", "allChangesForCluster")
+		assert.Nil(mt, err, "expected field 'allChangesForCluster' in $changeStream stage not found")
+		acfc, ok := acfcVal.BooleanOK()
+		assert.True(mt, ok, "expected field 'allChangesForCluster' to be boolean, got %v", acfcVal.Type.String())
+		assert.False(mt, acfc, "expected field 'allChangesForCluster' to be false, got %v", acfc)
+	})
 }
 
 func closeStream(cs *mongo.ChangeStream) {
-	_ = cs.Close(mtest.Background)
+	_ = cs.Close(context.Background())
 }
 
 func generateEvents(mt *mtest.T, numEvents int) {
@@ -644,7 +693,7 @@ func generateEvents(mt *mtest.T, numEvents int) {
 
 	for i := 0; i < numEvents; i++ {
 		doc := bson.D{{"x", i}}
-		_, err := mt.Coll.InsertOne(mtest.Background, doc)
+		_, err := mt.Coll.InsertOne(context.Background(), doc)
 		assert.Nil(mt, err, "InsertOne error on document %v: %v", doc, err)
 	}
 }
@@ -653,7 +702,7 @@ func killChangeStreamCursor(mt *mtest.T, cs *mongo.ChangeStream) {
 	mt.Helper()
 
 	db := mt.Coll.Database().Client().Database("admin")
-	err := db.RunCommand(mtest.Background, bson.D{
+	err := db.RunCommand(context.Background(), bson.D{
 		{"killCursors", mt.Coll.Name()},
 		{"cursors", bson.A{cs.ID()}},
 	}).Err()

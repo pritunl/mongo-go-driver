@@ -16,7 +16,7 @@ import (
 
 	"github.com/pritunl/mongo-go-driver/bson"
 	"github.com/pritunl/mongo-go-driver/internal/testutil/assert"
-	testhelpers "github.com/pritunl/mongo-go-driver/internal/testutil/helpers"
+	"github.com/pritunl/mongo-go-driver/internal/testutil/helpers"
 	"github.com/pritunl/mongo-go-driver/mongo"
 	"github.com/pritunl/mongo-go-driver/mongo/integration/mtest"
 )
@@ -85,7 +85,7 @@ type TestFile struct {
 // runTestDirectory runs the files in the given directory, which must be in the unified spec format, with
 // expectValidFail determining whether the tests should expect to pass or fail
 func runTestDirectory(t *testing.T, directoryPath string, expectValidFail bool) {
-	for _, filename := range testhelpers.FindJSONFilesInDir(t, directoryPath) {
+	for _, filename := range helpers.FindJSONFilesInDir(t, directoryPath) {
 		t.Run(filename, func(t *testing.T) {
 			runTestFile(t, path.Join(directoryPath, filename), expectValidFail)
 		})
@@ -203,7 +203,7 @@ func (tc *TestCase) Run(ls LoggerSkipper) error {
 		return fmt.Errorf("schema version %q not supported: %v", tc.schemaVersion, err)
 	}
 
-	testCtx := newTestContext(mtest.Background, tc.entities)
+	testCtx := newTestContext(context.Background(), tc.entities)
 
 	defer func() {
 		// If anything fails while doing test cleanup, we only log the error because the actual test may have already
@@ -222,7 +222,7 @@ func (tc *TestCase) Run(ls LoggerSkipper) error {
 		// if the test attempted to commit/abort the transaction because an abortTransaction command can fail if it's
 		// sent to a mongos that isn't aware of the transaction.
 		if tc.startsTransaction() && tc.killAllSessions {
-			if err := terminateOpenSessions(mtest.Background); err != nil {
+			if err := terminateOpenSessions(context.Background()); err != nil {
 				ls.Logf("error terminating open transactions after failed test: %v", err)
 			}
 		}
@@ -272,6 +272,10 @@ func (tc *TestCase) Run(ls LoggerSkipper) error {
 
 	for idx, operation := range tc.Operations {
 		if err := operation.execute(testCtx, tc.loopDone); err != nil {
+			if isSkipTestError(err) {
+				ls.Skip(err)
+			}
+
 			return fmt.Errorf("error running operation %q at index %d: %v", operation.Name, idx, err)
 		}
 	}

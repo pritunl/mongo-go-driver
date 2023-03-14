@@ -10,10 +10,10 @@ import (
 	"path"
 	"testing"
 
-	testhelpers "github.com/pritunl/mongo-go-driver/internal/testutil/helpers"
+	"github.com/pritunl/mongo-go-driver/internal/testutil/helpers"
 )
 
-const selectorTestsDir = "../../data/server-selection/server_selection"
+const selectorTestsDir = "../../testdata/server-selection/server_selection"
 
 // Test case for all SDAM spec tests.
 func TestServerSelectionSpec(t *testing.T) {
@@ -28,7 +28,7 @@ func TestServerSelectionSpec(t *testing.T) {
 		for _, subdir := range [...]string{"read", "write"} {
 			subdirPath := path.Join(topology, subdir)
 
-			for _, file := range testhelpers.FindJSONFilesInDir(t,
+			for _, file := range helpers.FindJSONFilesInDir(t,
 				path.Join(selectorTestsDir, subdirPath)) {
 
 				runTest(t, selectorTestsDir, subdirPath, file)
