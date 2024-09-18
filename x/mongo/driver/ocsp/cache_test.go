@@ -11,12 +11,10 @@ import (
 	"crypto"
 	"crypto/tls"
 	"errors"
-	"reflect"
 	"testing"
 	"time"
 
-	"github.com/google/go-cmp/cmp"
-	"github.com/pritunl/mongo-go-driver/internal/testutil/assert"
+	"github.com/pritunl/mongo-go-driver/internal/assert"
 	"golang.org/x/crypto/ocsp"
 )
 
@@ -25,10 +23,6 @@ var (
 )
 
 func TestCache(t *testing.T) {
-	assert.RegisterOpts(reflect.TypeOf(&ocsp.Response{}), cmp.Comparer(func(r1, r2 *ocsp.Response) bool {
-		return r1 == r2
-	}))
-
 	testRequest := &ocsp.Request{
 		HashAlgorithm:  crypto.SHA1,
 		IssuerNameHash: []byte("issuerNameHash"),
@@ -40,8 +34,8 @@ func TestCache(t *testing.T) {
 		err := Verify(ctx, tls.ConnectionState{}, &VerifyOptions{})
 		assert.NotNil(t, err, "expected error, got nil")
 
-		ocspErr, ok := err.(*Error)
-		assert.True(t, ok, "expected error of type %T, got %v of type %T", &Error{}, err, err)
+		var ocspErr *Error
+		assert.True(t, errors.As(err, &ocspErr), "expected error of type %T, got %v of type %T", &Error{}, err, err)
 		expected := &Error{
 			wrapped: errors.New("no OCSP cache provided"),
 		}

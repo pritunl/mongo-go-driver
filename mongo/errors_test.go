@@ -10,8 +10,8 @@ import (
 	"testing"
 
 	"github.com/pritunl/mongo-go-driver/bson"
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
+	"github.com/pritunl/mongo-go-driver/internal/assert"
+	"github.com/pritunl/mongo-go-driver/internal/require"
 )
 
 func TestErrorMessages(t *testing.T) {

@@ -10,6 +10,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/pritunl/mongo-go-driver/bson"
 	"github.com/pritunl/mongo-go-driver/mongo"
@@ -17,6 +18,13 @@ import (
 	"github.com/pritunl/mongo-go-driver/x/bsonx/bsoncore"
 	"github.com/pritunl/mongo-go-driver/x/mongo/driver/session"
 )
+
+// waitForEventTimeout is the amount of time to wait for an event to occur. The
+// maximum amount of time expected for this value is currently 10 seconds, which
+// is the amount of time that the driver will attempt to wait between streamable
+// heartbeats. Increase this value if a new maximum time is expected in another
+// operation.
+var waitForEventTimeout = 11 * time.Second
 
 type loopArgs struct {
 	Operations         []*operation `bson:"operations"`
@@ -42,10 +50,10 @@ func (lp *loopArgs) iterationsStored() bool {
 	return lp.IterationsEntityID != ""
 }
 
-func executeTestRunnerOperation(ctx context.Context, operation *operation, loopDone <-chan struct{}) error {
-	args := operation.Arguments
+func executeTestRunnerOperation(ctx context.Context, op *operation, loopDone <-chan struct{}) error {
+	args := op.Arguments
 
-	switch operation.Name {
+	switch op.Name {
 	case "failPoint":
 		clientID := lookupString(args, "client")
 		client, err := entities(ctx).client(clientID)
@@ -169,14 +177,53 @@ func executeTestRunnerOperation(ctx context.Context, operation *operation, loopD
 
 		for idx, entity := range createEntities {
 			for entityType, entityOptions := range entity {
+				if entityType == "client" && hasOperationalFailpoint(ctx) {
+					entityOptions.setHeartbeatFrequencyMS(lowHeartbeatFrequency)
+				}
+
 				if err := entities(ctx).addEntity(ctx, entityType, entityOptions); err != nil {
 					return fmt.Errorf("error creating entity at index %d: %v", idx, err)
 				}
 			}
 		}
 		return nil
+	case "runOnThread":
+		operationRaw, err := args.LookupErr("operation")
+		if err != nil {
+			return fmt.Errorf("'operation' argument not found in runOnThread operation")
+		}
+		threadOp := new(operation)
+		if err := operationRaw.Unmarshal(threadOp); err != nil {
+			return fmt.Errorf("error unmarshaling 'operation' argument: %v", err)
+		}
+		thread := lookupString(args, "thread")
+		routine, ok := entities(ctx).routinesMap.Load(thread)
+		if !ok {
+			return fmt.Errorf("run on unknown thread: %s", thread)
+		}
+		routine.(*backgroundRoutine).addTask(threadOp.Name, func() error {
+			return threadOp.execute(ctx, loopDone)
+		})
+		return nil
+	case "waitForThread":
+		thread := lookupString(args, "thread")
+		routine, ok := entities(ctx).routinesMap.Load(thread)
+		if !ok {
+			return fmt.Errorf("wait for unknown thread: %s", thread)
+		}
+		return routine.(*backgroundRoutine).stop()
+	case "waitForEvent":
+		var wfeArgs waitForEventArguments
+		if err := bson.Unmarshal(op.Arguments, &wfeArgs); err != nil {
+			return fmt.Errorf("error unmarshalling event to waitForEventArguments: %v", err)
+		}
+
+		wfeCtx, cancel := context.WithTimeout(ctx, waitForEventTimeout)
+		defer cancel()
+
+		return waitForEvent(wfeCtx, wfeArgs)
 	default:
-		return fmt.Errorf("unrecognized testRunner operation %q", operation.Name)
+		return fmt.Errorf("unrecognized testRunner operation %q", op.Name)
 	}
 }
 
@@ -259,6 +306,85 @@ func executeLoop(ctx context.Context, args *loopArgs, loopDone <-chan struct{}) 
 				}
 			}
 		}
+	}
+}
+
+type waitForEventArguments struct {
+	ClientID string              `bson:"client"`
+	Event    map[string]bson.Raw `bson:"event"`
+	Count    int32               `bson:"count"`
+}
+
+// getServerDescriptionChangedEventCount will return "true" if a specific
+// server description change event has occurred, up to the description type.
+//
+// If the bson.Raw value is empty, then this function will only consider if a
+// serverDescriptionChangeEvent has occurred at all.
+//
+// If the bson.Raw contains newDescription and/or previousDescription, this
+// function will attempt to compare them to events up to the fields defined in
+// the UST specifications.
+func getServerDescriptionChangedEventCount(client *clientEntity, raw bson.Raw) int32 {
+	if len(raw) == 0 {
+		return 0
+	}
+
+	// If the document has no values, then we assume that the UST only
+	// intends to check that the event happened.
+	if values, _ := raw.Values(); len(values) == 0 {
+		return client.getEventCount(serverDescriptionChangedEvent)
+	}
+
+	var expectedEvt serverDescriptionChangedEventInfo
+	if err := bson.Unmarshal(raw, &expectedEvt); err != nil {
+		return 0
+	}
+
+	return client.getServerDescriptionChangedEventCount(expectedEvt)
+}
+
+// eventCompleted will check all of the events in the event map and return true if all of the events have at least the
+// specified number of occurrences. If the event map is empty, it will return true.
+func (args waitForEventArguments) eventCompleted(client *clientEntity) bool {
+	for rawEventType, eventDoc := range args.Event {
+		eventType, ok := monitoringEventTypeFromString(rawEventType)
+		if !ok {
+			return false
+		}
+
+		switch eventType {
+		case serverDescriptionChangedEvent:
+			if getServerDescriptionChangedEventCount(client, eventDoc) < args.Count {
+				return false
+			}
+		default:
+			if client.getEventCount(eventType) < args.Count {
+				return false
+			}
+		}
+	}
+
+	return true
+}
+
+func waitForEvent(ctx context.Context, args waitForEventArguments) error {
+	client, err := entities(ctx).client(args.ClientID)
+	if err != nil {
+		return err
+	}
+
+	for {
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("timed out waiting for event: %v", ctx.Err())
+		default:
+			if args.eventCompleted(client) {
+				return nil
+			}
+
+		}
+
+		time.Sleep(100 * time.Millisecond)
 	}
 }
 

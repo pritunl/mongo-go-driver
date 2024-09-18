@@ -8,12 +8,13 @@ package unified
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
 	"github.com/pritunl/mongo-go-driver/bson"
 	"github.com/pritunl/mongo-go-driver/bson/bsontype"
-	"github.com/pritunl/mongo-go-driver/internal/testutil/helpers"
+	"github.com/pritunl/mongo-go-driver/internal/bsonutil"
 	"github.com/pritunl/mongo-go-driver/mongo"
 	"github.com/pritunl/mongo-go-driver/mongo/options"
 	"github.com/pritunl/mongo-go-driver/x/bsonx/bsoncore"
@@ -56,7 +57,7 @@ func executeAggregate(ctx context.Context, operation *operation) (*operationResu
 		case "collation":
 			collation, err := createCollation(val.Document())
 			if err != nil {
-				return nil, fmt.Errorf("error creating collation: %v", err)
+				return nil, fmt.Errorf("error creating collation: %w", err)
 			}
 			opts.SetCollation(collation)
 		case "comment":
@@ -64,13 +65,13 @@ func executeAggregate(ctx context.Context, operation *operation) (*operationResu
 			// TODO with `opts.SetComment(val)`
 			commentString, err := createCommentString(val)
 			if err != nil {
-				return nil, fmt.Errorf("error creating comment: %v", err)
+				return nil, fmt.Errorf("error creating comment: %w", err)
 			}
 			opts.SetComment(commentString)
 		case "hint":
 			hint, err := createHint(val)
 			if err != nil {
-				return nil, fmt.Errorf("error creating hint: %v", err)
+				return nil, fmt.Errorf("error creating hint: %w", err)
 			}
 			opts.SetHint(hint)
 		case "maxTimeMS":
@@ -78,7 +79,7 @@ func executeAggregate(ctx context.Context, operation *operation) (*operationResu
 		case "maxAwaitTimeMS":
 			opts.SetMaxAwaitTime(time.Duration(val.Int32()) * time.Millisecond)
 		case "pipeline":
-			pipeline = helpers.RawToInterfaces(helpers.RawToDocuments(val.Array())...)
+			pipeline = bsonutil.RawToInterfaces(bsonutil.RawToDocuments(val.Array())...)
 		case "let":
 			opts.SetLet(val.Document())
 		default:
@@ -127,7 +128,7 @@ func executeBulkWrite(ctx context.Context, operation *operation) (*operationResu
 		case "requests":
 			models, err = createBulkWriteModels(val.Array())
 			if err != nil {
-				return nil, fmt.Errorf("error creating write models: %v", err)
+				return nil, fmt.Errorf("error creating write models: %w", err)
 			}
 		case "let":
 			opts.SetLet(val.Document())
@@ -147,7 +148,7 @@ func executeBulkWrite(ctx context.Context, operation *operation) (*operationResu
 		if res.UpsertedIDs != nil {
 			rawUpsertedIDs, marshalErr = bson.Marshal(res.UpsertedIDs)
 			if marshalErr != nil {
-				return nil, fmt.Errorf("error marshalling UpsertedIDs map to BSON: %v", marshalErr)
+				return nil, fmt.Errorf("error marshalling UpsertedIDs map to BSON: %w", marshalErr)
 			}
 		}
 
@@ -184,7 +185,7 @@ func executeCountDocuments(ctx context.Context, operation *operation) (*operatio
 		case "collation":
 			collation, err := createCollation(val.Document())
 			if err != nil {
-				return nil, fmt.Errorf("error creating collation: %v", err)
+				return nil, fmt.Errorf("error creating collation: %w", err)
 			}
 			opts.SetCollation(collation)
 		case "comment":
@@ -192,7 +193,7 @@ func executeCountDocuments(ctx context.Context, operation *operation) (*operatio
 			// TODO with `opts.SetComment(val)`
 			commentString, err := createCommentString(val)
 			if err != nil {
-				return nil, fmt.Errorf("error creating comment: %v", err)
+				return nil, fmt.Errorf("error creating comment: %w", err)
 			}
 			opts.SetComment(commentString)
 		case "filter":
@@ -200,7 +201,7 @@ func executeCountDocuments(ctx context.Context, operation *operation) (*operatio
 		case "hint":
 			hint, err := createHint(val)
 			if err != nil {
-				return nil, fmt.Errorf("error creating hint: %v", err)
+				return nil, fmt.Errorf("error creating hint: %w", err)
 			}
 			opts.SetHint(hint)
 		case "limit":
@@ -253,7 +254,7 @@ func executeCreateIndex(ctx context.Context, operation *operation) (*operationRe
 		case "collation":
 			collation, err := createCollation(val.Document())
 			if err != nil {
-				return nil, fmt.Errorf("error creating collation: %v", err)
+				return nil, fmt.Errorf("error creating collation: %w", err)
 			}
 			indexOpts.SetCollation(collation)
 		case "defaultLanguage":
@@ -304,6 +305,99 @@ func executeCreateIndex(ctx context.Context, operation *operation) (*operationRe
 	return newValueResult(bsontype.String, bsoncore.AppendString(nil, name), err), nil
 }
 
+func executeCreateSearchIndex(ctx context.Context, operation *operation) (*operationResult, error) {
+	coll, err := entities(ctx).collection(operation.Object)
+	if err != nil {
+		return nil, err
+	}
+
+	var model mongo.SearchIndexModel
+
+	elems, err := operation.Arguments.Elements()
+	if err != nil {
+		return nil, err
+	}
+	for _, elem := range elems {
+		key := elem.Key()
+		val := elem.Value()
+
+		switch key {
+		case "model":
+			var m struct {
+				Definition interface{}
+				Name       *string
+				Type       *string
+			}
+			err = bson.Unmarshal(val.Document(), &m)
+			if err != nil {
+				return nil, err
+			}
+			model.Definition = m.Definition
+			model.Options = options.SearchIndexes()
+			model.Options.Name = m.Name
+			model.Options.Type = m.Type
+		default:
+			return nil, fmt.Errorf("unrecognized createSearchIndex option %q", key)
+		}
+	}
+
+	name, err := coll.SearchIndexes().CreateOne(ctx, model)
+	return newValueResult(bsontype.String, bsoncore.AppendString(nil, name), err), nil
+}
+
+func executeCreateSearchIndexes(ctx context.Context, operation *operation) (*operationResult, error) {
+	coll, err := entities(ctx).collection(operation.Object)
+	if err != nil {
+		return nil, err
+	}
+
+	var models []mongo.SearchIndexModel
+
+	elems, err := operation.Arguments.Elements()
+	if err != nil {
+		return nil, err
+	}
+	for _, elem := range elems {
+		key := elem.Key()
+		val := elem.Value()
+
+		switch key {
+		case "models":
+			vals, err := val.Array().Values()
+			if err != nil {
+				return nil, err
+			}
+			for _, val := range vals {
+				var m struct {
+					Definition interface{}
+					Name       *string
+					Type       *string
+				}
+				err = bson.Unmarshal(val.Value, &m)
+				if err != nil {
+					return nil, err
+				}
+				model := mongo.SearchIndexModel{
+					Definition: m.Definition,
+					Options:    options.SearchIndexes(),
+				}
+				model.Options.Name = m.Name
+				model.Options.Type = m.Type
+				models = append(models, model)
+			}
+		default:
+			return nil, fmt.Errorf("unrecognized createSearchIndexes option %q", key)
+		}
+	}
+
+	names, err := coll.SearchIndexes().CreateMany(ctx, models)
+	builder := bsoncore.NewArrayBuilder()
+	for _, name := range names {
+		builder.AppendString(name)
+	}
+	return newValueResult(bsontype.Array, builder.Build(), err), nil
+}
+
 func executeDeleteOne(ctx context.Context, operation *operation) (*operationResult, error) {
 	coll, err := entities(ctx).collection(operation.Object)
 	if err != nil {
@@ -325,7 +419,7 @@ func executeDeleteOne(ctx context.Context, operation *operation) (*operationResu
 		case "collation":
 			collation, err := createCollation(val.Document())
 			if err != nil {
-				return nil, fmt.Errorf("error creating collation: %v", err)
+				return nil, fmt.Errorf("error creating collation: %w", err)
 			}
 			opts.SetCollation(collation)
 		case "comment":
@@ -335,7 +429,7 @@ func executeDeleteOne(ctx context.Context, operation *operation) (*operationResu
 		case "hint":
 			hint, err := createHint(val)
 			if err != nil {
-				return nil, fmt.Errorf("error creating hint: %v", err)
+				return nil, fmt.Errorf("error creating hint: %w", err)
 			}
 			opts.SetHint(hint)
 		case "let":
@@ -381,7 +475,7 @@ func executeDeleteMany(ctx context.Context, operation *operation) (*operationRes
 		case "collation":
 			collation, err := createCollation(val.Document())
 			if err != nil {
-				return nil, fmt.Errorf("error creating collation: %v", err)
+				return nil, fmt.Errorf("error creating collation: %w", err)
 			}
 			opts.SetCollation(collation)
 		case "filter":
@@ -389,7 +483,7 @@ func executeDeleteMany(ctx context.Context, operation *operation) (*operationRes
 		case "hint":
 			hint, err := createHint(val)
 			if err != nil {
-				return nil, fmt.Errorf("error creating hint: %v", err)
+				return nil, fmt.Errorf("error creating hint: %w", err)
 			}
 			opts.SetHint(hint)
 		case "let":
@@ -434,7 +528,7 @@ func executeDistinct(ctx context.Context, operation *operation) (*operationResul
 		case "collation":
 			collation, err := createCollation(val.Document())
 			if err != nil {
-				return nil, fmt.Errorf("error creating collation: %v", err)
+				return nil, fmt.Errorf("error creating collation: %w", err)
 			}
 			opts.SetCollation(collation)
 		case "comment":
@@ -462,7 +556,7 @@ func executeDistinct(ctx context.Context, operation *operation) (*operationResul
 	}
 	_, rawRes, err := bson.MarshalValue(res)
 	if err != nil {
-		return nil, fmt.Errorf("error converting Distinct result to raw BSON: %v", err)
+		return nil, fmt.Errorf("error converting Distinct result to raw BSON: %w", err)
 	}
 	return newValueResult(bsontype.Array, rawRes, nil), nil
 }
@@ -522,6 +616,34 @@ func executeDropIndexes(ctx context.Context, operation *operation) (*operationRe
 	return newDocumentResult(res, err), nil
 }
 
+func executeDropSearchIndex(ctx context.Context, operation *operation) (*operationResult, error) {
+	coll, err := entities(ctx).collection(operation.Object)
+	if err != nil {
+		return nil, err
+	}
+
+	var name string
+
+	elems, err := operation.Arguments.Elements()
+	if err != nil {
+		return nil, err
+	}
+	for _, elem := range elems {
+		key := elem.Key()
+		val := elem.Value()
+
+		switch key {
+		case "name":
+			name = val.StringValue()
+		default:
+			return nil, fmt.Errorf("unrecognized dropSearchIndex option %q", key)
+		}
+	}
+
+	err = coll.SearchIndexes().DropOne(ctx, name)
+	return newValueResult(bsontype.Null, nil, err), nil
+}
+
 func executeEstimatedDocumentCount(ctx context.Context, operation *operation) (*operationResult, error) {
 	coll, err := entities(ctx).collection(operation.Object)
 	if err != nil {
@@ -571,7 +693,7 @@ func executeCreateFindCursor(ctx context.Context, operation *operation) (*operat
 		return nil, fmt.Errorf("no entity name provided to store executeCreateFindCursor result")
 	}
 	if err := entities(ctx).addCursorEntity(*operation.ResultEntityID, result.cursor); err != nil {
-		return nil, fmt.Errorf("error storing result as cursor entity: %v", err)
+		return nil, fmt.Errorf("error storing result as cursor entity: %w", err)
 	}
 	return newEmptyResult(), nil
 }
@@ -610,7 +732,7 @@ func executeFindOne(ctx context.Context, operation *operation) (*operationResult
 		case "collation":
 			collation, err := createCollation(val.Document())
 			if err != nil {
-				return nil, fmt.Errorf("error creating collation: %v", err)
+				return nil, fmt.Errorf("error creating collation: %w", err)
 			}
 			opts.SetCollation(collation)
 		case "filter":
@@ -618,7 +740,7 @@ func executeFindOne(ctx context.Context, operation *operation) (*operationResult
 		case "hint":
 			hint, err := createHint(val)
 			if err != nil {
-				return nil, fmt.Errorf("error creating hint: %v", err)
+				return nil, fmt.Errorf("error creating hint: %w", err)
 			}
 			opts.SetHint(hint)
 		case "maxTimeMS":
@@ -635,11 +757,11 @@ func executeFindOne(ctx context.Context, operation *operation) (*operationResult
 		return nil, newMissingArgumentError("filter")
 	}
 
-	res, err := coll.FindOne(ctx, filter, opts).DecodeBytes()
-	// Ignore ErrNoDocuments errors from DecodeBytes. In the event that the cursor
-	// returned in a find operation has no associated documents, DecodeBytes will
+	res, err := coll.FindOne(ctx, filter, opts).Raw()
+	// Ignore ErrNoDocuments errors from Raw. In the event that the cursor
+	// returned in a find operation has no associated documents, Raw will
 	// return ErrNoDocuments.
-	if err == mongo.ErrNoDocuments {
+	if errors.Is(err, mongo.ErrNoDocuments) {
 		err = nil
 	}
 
@@ -667,7 +789,7 @@ func executeFindOneAndDelete(ctx context.Context, operation *operation) (*operat
 		case "collation":
 			collation, err := createCollation(val.Document())
 			if err != nil {
-				return nil, fmt.Errorf("error creating collation: %v", err)
+				return nil, fmt.Errorf("error creating collation: %w", err)
 			}
 			opts.SetCollation(collation)
 		case "comment":
@@ -677,7 +799,7 @@ func executeFindOneAndDelete(ctx context.Context, operation *operation) (*operat
 		case "hint":
 			hint, err := createHint(val)
 			if err != nil {
-				return nil, fmt.Errorf("error creating hint: %v", err)
+				return nil, fmt.Errorf("error creating hint: %w", err)
 			}
 			opts.SetHint(hint)
 		case "maxTimeMS":
@@ -696,11 +818,11 @@ func executeFindOneAndDelete(ctx context.Context, operation *operation) (*operat
 		return nil, newMissingArgumentError("filter")
 	}
 
-	res, err := coll.FindOneAndDelete(ctx, filter, opts).DecodeBytes()
-	// Ignore ErrNoDocuments errors from DecodeBytes. In the event that the cursor
-	// returned in a find operation has no associated documents, DecodeBytes will
+	res, err := coll.FindOneAndDelete(ctx, filter, opts).Raw()
+	// Ignore ErrNoDocuments errors from Raw. In the event that the cursor
+	// returned in a find operation has no associated documents, Raw will
 	// return ErrNoDocuments.
-	if err == mongo.ErrNoDocuments {
+	if errors.Is(err, mongo.ErrNoDocuments) {
 		err = nil
 	}
 
@@ -731,7 +853,7 @@ func executeFindOneAndReplace(ctx context.Context, operation *operation) (*opera
 		case "collation":
 			collation, err := createCollation(val.Document())
 			if err != nil {
-				return nil, fmt.Errorf("error creating collation: %v", err)
+				return nil, fmt.Errorf("error creating collation: %w", err)
 			}
 			opts.SetCollation(collation)
 		case "comment":
@@ -741,7 +863,7 @@ func executeFindOneAndReplace(ctx context.Context, operation *operation) (*opera
 		case "hint":
 			hint, err := createHint(val)
 			if err != nil {
-				return nil, fmt.Errorf("error creating hint: %v", err)
+				return nil, fmt.Errorf("error creating hint: %w", err)
 			}
 			opts.SetHint(hint)
 		case "let":
@@ -776,11 +898,11 @@ func executeFindOneAndReplace(ctx context.Context, operation *operation) (*opera
 		return nil, newMissingArgumentError("replacement")
 	}
 
-	res, err := coll.FindOneAndReplace(ctx, filter, replacement, opts).DecodeBytes()
-	// Ignore ErrNoDocuments errors from DecodeBytes. In the event that the cursor
-	// returned in a find operation has no associated documents, DecodeBytes will
+	res, err := coll.FindOneAndReplace(ctx, filter, replacement, opts).Raw()
+	// Ignore ErrNoDocuments errors from Raw. In the event that the cursor
+	// returned in a find operation has no associated documents, Raw will
 	// return ErrNoDocuments.
-	if err == mongo.ErrNoDocuments {
+	if errors.Is(err, mongo.ErrNoDocuments) {
 		err = nil
 	}
 
@@ -808,14 +930,14 @@ func executeFindOneAndUpdate(ctx context.Context, operation *operation) (*operat
 		switch key {
 		case "arrayFilters":
 			opts.SetArrayFilters(options.ArrayFilters{
-				Filters: helpers.RawToInterfaces(helpers.RawToDocuments(val.Array())...),
+				Filters: bsonutil.RawToInterfaces(bsonutil.RawToDocuments(val.Array())...),
 			})
 		case "bypassDocumentValidation":
 			opts.SetBypassDocumentValidation(val.Boolean())
 		case "collation":
 			collation, err := createCollation(val.Document())
 			if err != nil {
-				return nil, fmt.Errorf("error creating collation: %v", err)
+				return nil, fmt.Errorf("error creating collation: %w", err)
 			}
 			opts.SetCollation(collation)
 		case "comment":
@@ -825,7 +947,7 @@ func executeFindOneAndUpdate(ctx context.Context, operation *operation) (*operat
 		case "hint":
 			hint, err := createHint(val)
 			if err != nil {
-				return nil, fmt.Errorf("error creating hint: %v", err)
+				return nil, fmt.Errorf("error creating hint: %w", err)
 			}
 			opts.SetHint(hint)
 		case "let":
@@ -863,11 +985,11 @@ func executeFindOneAndUpdate(ctx context.Context, operation *operation) (*operat
 		return nil, newMissingArgumentError("update")
 	}
 
-	res, err := coll.FindOneAndUpdate(ctx, filter, update, opts).DecodeBytes()
-	// Ignore ErrNoDocuments errors from DecodeBytes. In the event that the cursor
-	// returned in a find operation has no associated documents, DecodeBytes will
+	res, err := coll.FindOneAndUpdate(ctx, filter, update, opts).Raw()
+	// Ignore ErrNoDocuments errors from Raw. In the event that the cursor
+	// returned in a find operation has no associated documents, Raw will
 	// return ErrNoDocuments.
-	if err == mongo.ErrNoDocuments {
+	if errors.Is(err, mongo.ErrNoDocuments) {
 		err = nil
 	}
 
@@ -895,7 +1017,7 @@ func executeInsertMany(ctx context.Context, operation *operation) (*operationRes
 		case "comment":
 			opts.SetComment(val)
 		case "documents":
-			documents = helpers.RawToInterfaces(helpers.RawToDocuments(val.Array())...)
+			documents = bsonutil.RawToInterfaces(bsonutil.RawToDocuments(val.Array())...)
 		case "ordered":
 			opts.SetOrdered(val.Boolean())
 		default:
@@ -961,7 +1083,7 @@ func executeInsertOne(ctx context.Context, operation *operation) (*operationResu
 	if res != nil {
 		t, data, err := bson.MarshalValue(res.InsertedID)
 		if err != nil {
-			return nil, fmt.Errorf("error converting InsertedID field to BSON: %v", err)
+			return nil, fmt.Errorf("error converting InsertedID field to BSON: %w", err)
 		}
 		raw = bsoncore.NewDocumentBuilder().
 			AppendValue("insertedId", bsoncore.Value{Type: t, Data: data}).
@@ -1009,6 +1131,44 @@ func executeListIndexes(ctx context.Context, operation *operation) (*operationRe
 	return newCursorResult(docs), nil
 }
 
+func executeListSearchIndexes(ctx context.Context, operation *operation) (*operationResult, error) {
+	coll, err := entities(ctx).collection(operation.Object)
+	if err != nil {
+		return nil, err
+	}
+
+	searchIdxOpts := options.SearchIndexes()
+	var opts []*options.ListSearchIndexesOptions
+
+	elems, err := operation.Arguments.Elements()
+	if err != nil {
+		return nil, err
+	}
+	for _, elem := range elems {
+		key := elem.Key()
+		val := elem.Value()
+
+		switch key {
+		case "name":
+			searchIdxOpts.SetName(val.StringValue())
+		case "aggregationOptions":
+			var opt options.AggregateOptions
+			err = bson.Unmarshal(val.Document(), &opt)
+			if err != nil {
+				return nil, err
+			}
+			opts = append(opts, &options.ListSearchIndexesOptions{
+				AggregateOpts: &opt,
+			})
+		default:
+			return nil, fmt.Errorf("unrecognized listSearchIndexes option %q", key)
+		}
+	}
+
+	_, err = coll.SearchIndexes().List(ctx, searchIdxOpts, opts...)
+	return newValueResult(bsontype.Null, nil, err), nil
+}
+
 func executeRenameCollection(ctx context.Context, operation *operation) (*operationResult, error) {
 	coll, err := entities(ctx).collection(operation.Object)
 	if err != nil {
@@ -1047,7 +1207,7 @@ func executeRenameCollection(ctx context.Context, operation *operation) (*operat
 	}
 	// rename can only be run on the 'admin' database.
 	admin := coll.Database().Client().Database("admin")
-	res, err := admin.RunCommand(context.Background(), renameCmd).DecodeBytes()
+	res, err := admin.RunCommand(context.Background(), renameCmd).Raw()
 	return newDocumentResult(res, err), nil
 }
 
@@ -1075,7 +1235,7 @@ func executeReplaceOne(ctx context.Context, operation *operation) (*operationRes
 		case "collation":
 			collation, err := createCollation(val.Document())
 			if err != nil {
-				return nil, fmt.Errorf("error creating collation: %v", err)
+				return nil, fmt.Errorf("error creating collation: %w", err)
 			}
 			opts.SetCollation(collation)
 		case "comment":
@@ -1085,7 +1245,7 @@ func executeReplaceOne(ctx context.Context, operation *operation) (*operationRes
 		case "hint":
 			hint, err := createHint(val)
 			if err != nil {
-				return nil, fmt.Errorf("error creating hint: %v", err)
+				return nil, fmt.Errorf("error creating hint: %w", err)
 			}
 			opts.SetHint(hint)
 		case "replacement":
@@ -1145,6 +1305,40 @@ func executeUpdateMany(ctx context.Context, operation *operation) (*operationRes
 	return newDocumentResult(raw, err), nil
 }
 
+func executeUpdateSearchIndex(ctx context.Context, operation *operation) (*operationResult, error) {
+	coll, err := entities(ctx).collection(operation.Object)
+	if err != nil {
+		return nil, err
+	}
+
+	var name string
+	var definition interface{}
+
+	elems, err := operation.Arguments.Elements()
+	if err != nil {
+		return nil, err
+	}
+	for _, elem := range elems {
+		key := elem.Key()
+		val := elem.Value()
+
+		switch key {
+		case "name":
+			name = val.StringValue()
+		case "definition":
+			err = bson.Unmarshal(val.Value, &definition)
+			if err != nil {
+				return nil, err
+			}
+		default:
+			return nil, fmt.Errorf("unrecognized updateSearchIndex option %q", key)
+		}
+	}
+
+	err = coll.SearchIndexes().UpdateOne(ctx, name, definition)
+	return newValueResult(bsontype.Null, nil, err), nil
+}
+
 func buildUpdateResultDocument(res *mongo.UpdateResult) (bsoncore.Document, error) {
 	if res == nil {
 		return emptyCoreDocument, nil
@@ -1158,7 +1352,7 @@ func buildUpdateResultDocument(res *mongo.UpdateResult) (bsoncore.Document, erro
 	if res.UpsertedID != nil {
 		t, data, err := bson.MarshalValue(res.UpsertedID)
 		if err != nil {
-			return nil, fmt.Errorf("error converting UpsertedID to BSON: %v", err)
+			return nil, fmt.Errorf("error converting UpsertedID to BSON: %w", err)
 		}
 		builder.AppendValue("upsertedId", bsoncore.Value{Type: t, Data: data})
 	}
@@ -1202,7 +1396,7 @@ func createFindCursor(ctx context.Context, operation *operation) (*cursorResult,
 		case "collation":
 			collation, err := createCollation(val.Document())
 			if err != nil {
-				return nil, fmt.Errorf("error creating collation: %v", err)
+				return nil, fmt.Errorf("error creating collation: %w", err)
 			}
 			opts.SetCollation(collation)
 		case "comment":
@@ -1210,7 +1404,7 @@ func createFindCursor(ctx context.Context, operation *operation) (*cursorResult,
 			// TODO with `opts.SetComment(val)`
 			commentString, err := createCommentString(val)
 			if err != nil {
-				return nil, fmt.Errorf("error creating comment: %v", err)
+				return nil, fmt.Errorf("error creating comment: %w", err)
 			}
 			opts.SetComment(commentString)
 		case "filter":
@@ -1218,7 +1412,7 @@ func createFindCursor(ctx context.Context, operation *operation) (*cursorResult,
 		case "hint":
 			hint, err := createHint(val)
 			if err != nil {
-				return nil, fmt.Errorf("error creating hint: %v", err)
+				return nil, fmt.Errorf("error creating hint: %w", err)
 			}
 			opts.SetHint(hint)
 		case "let":

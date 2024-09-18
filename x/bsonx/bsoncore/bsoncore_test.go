@@ -14,9 +14,10 @@ import (
 	"testing"
 
 	"github.com/google/go-cmp/cmp"
+
 	"github.com/pritunl/mongo-go-driver/bson/bsontype"
 	"github.com/pritunl/mongo-go-driver/bson/primitive"
-	"github.com/pritunl/mongo-go-driver/internal/testutil/assert"
+	"github.com/pritunl/mongo-go-driver/internal/assert"
 )
 
 func compareErrors(err1, err2 error) bool {
@@ -940,6 +941,18 @@ func TestNullBytes(t *testing.T) {
 			NewDocumentBuilder().StartDocument("foobar").AppendDocument("a\x00", []byte("foo")).FinishDocument()
 		}
 		assertBSONCreationPanics(t, createDocFn, invalidKeyPanicMsg)
+	})
+}
+
+func TestInvalidBytes(t *testing.T) {
+	t.Parallel()
+
+	t.Run("read length less than 4 int bytes", func(t *testing.T) {
+		t.Parallel()
+
+		_, src, ok := readLengthBytes([]byte{0x01, 0x00, 0x00, 0x00})
+		assert.False(t, ok, "expected not ok response for invalid length read")
+		assert.Equal(t, 4, len(src), "expected src to contain the size parameter still")
 	})
 }
 

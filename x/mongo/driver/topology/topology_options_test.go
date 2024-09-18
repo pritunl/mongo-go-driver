@@ -12,8 +12,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/pritunl/mongo-go-driver/internal/assert"
 	"github.com/pritunl/mongo-go-driver/mongo/options"
-	"github.com/stretchr/testify/assert"
 )
 
 func TestDirectConnectionFromConnString(t *testing.T) {

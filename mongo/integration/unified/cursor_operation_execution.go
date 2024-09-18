@@ -13,17 +13,6 @@ import (
 	"github.com/pritunl/mongo-go-driver/bson"
 )
 
-func executeClose(ctx context.Context, operation *operation) error {
-	cursor, err := entities(ctx).cursor(operation.Object)
-	if err != nil {
-		return err
-	}
-
-	// Per the spec, we ignore all errors from Close.
-	_ = cursor.Close(ctx)
-	return nil
-}
-
 func executeIterateOnce(ctx context.Context, operation *operation) (*operationResult, error) {
 	cursor, err := entities(ctx).cursor(operation.Object)
 	if err != nil {
@@ -36,7 +25,7 @@ func executeIterateOnce(ctx context.Context, operation *operation) (*operationRe
 		// as fatal.
 		var res bson.Raw
 		if err := cursor.Decode(&res); err != nil {
-			return nil, fmt.Errorf("error decoding cursor result: %v", err)
+			return nil, fmt.Errorf("error decoding cursor result: %w", err)
 		}
 
 		return newDocumentResult(res, nil), nil
@@ -55,7 +44,7 @@ func executeIterateUntilDocumentOrError(ctx context.Context, operation *operatio
 		// We don't expect the server to return malformed documents, so any errors from Decode are treated as fatal.
 		var res bson.Raw
 		if err := cursor.Decode(&res); err != nil {
-			return nil, fmt.Errorf("error decoding cursor result: %v", err)
+			return nil, fmt.Errorf("error decoding cursor result: %w", err)
 		}
 
 		return newDocumentResult(res, nil), nil

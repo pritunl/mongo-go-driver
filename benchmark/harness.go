@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/stretchr/testify/require"
+	"github.com/pritunl/mongo-go-driver/internal/require"
 )
 
 const (
@@ -45,20 +45,6 @@ func WrapCase(bench BenchCase) BenchFunction {
 
 func getAllCases() []*CaseDefinition {
 	return []*CaseDefinition{
-		{
-			Bench:              CanaryIncCase,
-			Count:              million,
-			Size:               -1,
-			Runtime:            MinimumRuntime,
-			RequiredIterations: ten,
-		},
-		{
-			Bench:              GlobalCanaryIncCase,
-			Count:              million,
-			Size:               -1,
-			Runtime:            MinimumRuntime,
-			RequiredIterations: ten,
-		},
 		{
 			Bench:   BSONFlatDocumentEncoding,
 			Count:   tenThousand,

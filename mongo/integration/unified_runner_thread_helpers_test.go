@@ -11,7 +11,7 @@ import (
 	"sync"
 
 	"github.com/pritunl/mongo-go-driver/bson"
-	"github.com/pritunl/mongo-go-driver/internal/testutil/assert"
+	"github.com/pritunl/mongo-go-driver/internal/assert"
 	"github.com/pritunl/mongo-go-driver/mongo/integration/mtest"
 )
 
@@ -52,7 +52,7 @@ func (b *backgroundRoutine) start() {
 			}
 
 			if err := runOperation(b.mt, b.testCase, op, nil, nil); err != nil {
-				b.err = fmt.Errorf("error running operation %s: %v", op.Name, err)
+				b.err = fmt.Errorf("error running operation %s: %w", op.Name, err)
 			}
 		}
 	}()

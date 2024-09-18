@@ -10,14 +10,23 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/stretchr/testify/require"
+	"github.com/pritunl/mongo-go-driver/internal/israce"
+	"github.com/pritunl/mongo-go-driver/internal/require"
 )
 
 // GODRIVER-2349
 // Test that initializing many package-global UUID sources concurrently never leads to any duplicate
 // UUIDs being generated.
 func TestGlobalSource(t *testing.T) {
+	t.Parallel()
+
 	t.Run("exp rand 1 UUID x 1,000,000 goroutines using a global source", func(t *testing.T) {
+		t.Parallel()
+
+		if israce.Enabled {
+			t.Skip("skipping as race detector is enabled and test exceeds 8128 goroutine limit")
+		}
+
 		// Read a UUID from each of 1,000,000 goroutines and assert that there is never a duplicate value.
 		const iterations = 1e6
 		uuids := new(sync.Map)
@@ -36,6 +45,12 @@ func TestGlobalSource(t *testing.T) {
 		wg.Wait()
 	})
 	t.Run("exp rand 1 UUID x 1,000,000 goroutines each initializing a new source", func(t *testing.T) {
+		t.Parallel()
+
+		if israce.Enabled {
+			t.Skip("skipping as race detector is enabled and test exceeds 8128 goroutine limit")
+		}
+
 		// Read a UUID from each of 1,000,000 goroutines and assert that there is never a duplicate value.
 		// The goal is to emulate many separate Go driver processes starting at the same time and
 		// initializing the uuid package at the same time.
@@ -57,6 +72,8 @@ func TestGlobalSource(t *testing.T) {
 		wg.Wait()
 	})
 	t.Run("exp rand 1,000 UUIDs x 1,000 goroutines each initializing a new source", func(t *testing.T) {
+		t.Parallel()
+
 		// Read 1,000 UUIDs from each goroutine and assert that there is never a duplicate value, either
 		// from the same goroutine or from separate goroutines.
 		const iterations = 1000

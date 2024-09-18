@@ -11,8 +11,8 @@ import (
 	"testing"
 
 	"github.com/pritunl/mongo-go-driver/event"
-	"github.com/pritunl/mongo-go-driver/internal/testutil"
-	"github.com/pritunl/mongo-go-driver/internal/testutil/assert"
+	"github.com/pritunl/mongo-go-driver/internal/assert"
+	"github.com/pritunl/mongo-go-driver/internal/integtest"
 	"github.com/pritunl/mongo-go-driver/mongo"
 	"github.com/pritunl/mongo-go-driver/mongo/options"
 	"github.com/pritunl/mongo-go-driver/mongo/readpref"
@@ -28,7 +28,7 @@ func TestGridFS(t *testing.T) {
 		t.Skip("skipping integration test in short mode")
 	}
 
-	cs := testutil.ConnString(t)
+	cs := integtest.ConnString(t)
 	poolMonitor := &event.PoolMonitor{
 		Event: func(evt *event.PoolEvent) {
 			switch evt.Type {

@@ -12,14 +12,15 @@ package integration
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"testing"
 	"time"
 
 	"github.com/pritunl/mongo-go-driver/bson"
-	"github.com/pritunl/mongo-go-driver/internal/testutil"
-	"github.com/pritunl/mongo-go-driver/internal/testutil/assert"
+	"github.com/pritunl/mongo-go-driver/internal/assert"
+	"github.com/pritunl/mongo-go-driver/internal/integtest"
 	"github.com/pritunl/mongo-go-driver/mongo"
 	"github.com/pritunl/mongo-go-driver/mongo/integration/mtest"
 	"github.com/pritunl/mongo-go-driver/mongo/options"
@@ -45,21 +46,8 @@ func (n netErr) Temporary() bool {
 
 var _ net.Error = (*netErr)(nil)
 
-type wrappedError struct {
-	err error
-}
-
-func (we wrappedError) Error() string {
-	return we.err.Error()
-}
-
-func (we wrappedError) Unwrap() error {
-	return we.err
-}
-
 func TestErrors(t *testing.T) {
 	mt := mtest.New(t, noClientOpts)
-	defer mt.Close()
 
 	mt.RunOpts("errors are wrapped", noClientOpts, func(mt *mtest.T) {
 		mt.Run("network error during application operation", func(mt *mtest.T) {
@@ -86,10 +74,10 @@ func TestErrors(t *testing.T) {
 			})
 
 			clientOpts := options.Client().ApplyURI(mtest.ClusterURI())
-			testutil.AddTestServerAPIVersion(clientOpts)
+			integtest.AddTestServerAPIVersion(clientOpts)
 			client, err := mongo.Connect(context.Background(), clientOpts)
 			assert.Nil(mt, err, "Connect error: %v", err)
-			defer client.Disconnect(context.Background())
+			defer func() { _ = client.Disconnect(context.Background()) }()
 
 			// A connection getting closed should manifest as an io.EOF error.
 			err = client.Ping(context.Background(), mtest.PrimaryRp)
@@ -479,7 +467,7 @@ func TestErrors(t *testing.T) {
 					},
 					false,
 				},
-				{"wrapped error", wrappedError{mongo.CommandError{11000, "", nil, "blah", nil, nil}}, true},
+				{"wrapped error", fmt.Errorf("%w", mongo.CommandError{11000, "", nil, "blah", nil, nil}), true},
 				{"other error type", errors.New("foo"), false},
 			}
 			for _, tc := range testCases {
@@ -500,7 +488,7 @@ func TestErrors(t *testing.T) {
 			}{
 				{"ServerError true", mongo.CommandError{100, "", []string{networkLabel}, "blah", nil, nil}, true},
 				{"ServerError false", mongo.CommandError{100, "", []string{otherLabel}, "blah", nil, nil}, false},
-				{"wrapped error", wrappedError{mongo.CommandError{100, "", []string{networkLabel}, "blah", nil, nil}}, true},
+				{"wrapped error", fmt.Errorf("%w", mongo.CommandError{100, "", []string{networkLabel}, "blah", nil, nil}), true},
 				{"other error type", errors.New("foo"), false},
 			}
 			for _, tc := range testCases {
@@ -534,8 +522,8 @@ func TestErrors(t *testing.T) {
 				{"net error true", mongo.CommandError{
 					100, "", []string{"other"}, "blah", netErr{true}, nil}, true},
 				{"net error false", netErr{false}, false},
-				{"wrapped error", wrappedError{mongo.CommandError{
-					100, "", []string{"other"}, "blah", context.DeadlineExceeded, nil}}, true},
+				{"wrapped error", fmt.Errorf("%w", mongo.CommandError{
+					100, "", []string{"other"}, "blah", context.DeadlineExceeded, nil}), true},
 				{"other error", errors.New("foo"), false},
 			}
 			for _, tc := range testCases {

@@ -12,10 +12,10 @@ import (
 
 	"github.com/pritunl/mongo-go-driver/bson"
 	"github.com/pritunl/mongo-go-driver/bson/bsoncodec"
+	"github.com/pritunl/mongo-go-driver/internal/assert"
 	"github.com/pritunl/mongo-go-driver/mongo"
 	"github.com/pritunl/mongo-go-driver/mongo/integration/mtest"
 	"github.com/pritunl/mongo-go-driver/mongo/options"
-	"github.com/stretchr/testify/assert"
 )
 
 // finder is an object that implements FindOne and Find.
@@ -69,7 +69,6 @@ func getItems(f finder) ([]ShopItem, error) {
 
 func TestMockFind(t *testing.T) {
 	mt := mtest.New(t, mtest.NewOptions().CreateClient(false))
-	defer mt.Close()
 
 	insertItems := []interface{}{
 		ShopItem{ID: 0, Price: 1.5},

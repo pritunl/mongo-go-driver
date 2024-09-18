@@ -8,14 +8,15 @@ package session
 
 import (
 	"bytes"
+	"errors"
 	"testing"
 
 	"github.com/pritunl/mongo-go-driver/bson/primitive"
-	"github.com/pritunl/mongo-go-driver/internal/testutil/assert"
+	"github.com/pritunl/mongo-go-driver/internal/assert"
+	"github.com/pritunl/mongo-go-driver/internal/require"
 	"github.com/pritunl/mongo-go-driver/internal/uuid"
 	"github.com/pritunl/mongo-go-driver/mongo/description"
 	"github.com/pritunl/mongo-go-driver/x/bsonx/bsoncore"
-	"github.com/stretchr/testify/require"
 )
 
 var consistent = true
@@ -125,12 +126,12 @@ func TestClientSession(t *testing.T) {
 		require.Nil(t, err, "Unexpected error")
 
 		err = sess.CommitTransaction()
-		if err != ErrNoTransactStarted {
+		if !errors.Is(err, ErrNoTransactStarted) {
 			t.Errorf("expected error, got %v", err)
 		}
 
 		err = sess.AbortTransaction()
-		if err != ErrNoTransactStarted {
+		if !errors.Is(err, ErrNoTransactStarted) {
 			t.Errorf("expected error, got %v", err)
 		}
 
@@ -145,7 +146,7 @@ func TestClientSession(t *testing.T) {
 		}
 
 		err = sess.StartTransaction(nil)
-		if err != ErrTransactInProgress {
+		if !errors.Is(err, ErrTransactInProgress) {
 			t.Errorf("expected error, got %v", err)
 		}
 
@@ -156,7 +157,7 @@ func TestClientSession(t *testing.T) {
 		}
 
 		err = sess.StartTransaction(nil)
-		if err != ErrTransactInProgress {
+		if !errors.Is(err, ErrTransactInProgress) {
 			t.Errorf("expected error, got %v", err)
 		}
 
@@ -167,7 +168,7 @@ func TestClientSession(t *testing.T) {
 		}
 
 		err = sess.AbortTransaction()
-		if err != ErrAbortAfterCommit {
+		if !errors.Is(err, ErrAbortAfterCommit) {
 			t.Errorf("expected error, got %v", err)
 		}
 
@@ -184,12 +185,12 @@ func TestClientSession(t *testing.T) {
 		}
 
 		err = sess.AbortTransaction()
-		if err != ErrAbortTwice {
+		if !errors.Is(err, ErrAbortTwice) {
 			t.Errorf("expected error, got %v", err)
 		}
 
 		err = sess.CommitTransaction()
-		if err != ErrCommitAfterAbort {
+		if !errors.Is(err, ErrCommitAfterAbort) {
 			t.Errorf("expected error, got %v", err)
 		}
 	})

@@ -15,6 +15,7 @@ import (
 	"github.com/pritunl/mongo-go-driver/bson"
 	"github.com/pritunl/mongo-go-driver/bson/bsontype"
 	"github.com/pritunl/mongo-go-driver/event"
+	"github.com/pritunl/mongo-go-driver/internal/driverutil"
 	"github.com/pritunl/mongo-go-driver/mongo/description"
 	"github.com/pritunl/mongo-go-driver/mongo/writeconcern"
 	"github.com/pritunl/mongo-go-driver/x/bsonx/bsoncore"
@@ -24,7 +25,7 @@ import (
 
 // FindAndModify performs a findAndModify operation.
 type FindAndModify struct {
-	arrayFilters             bsoncore.Document
+	arrayFilters             bsoncore.Array
 	bypassDocumentValidation *bool
 	collation                bsoncore.Document
 	comment                  bsoncore.Value
@@ -143,6 +144,7 @@ func (fam *FindAndModify) Execute(ctx context.Context) error {
 		Crypt:          fam.crypt,
 		ServerAPI:      fam.serverAPI,
 		Timeout:        fam.timeout,
+		Name:           driverutil.FindAndModifyOp,
 	}.Execute(ctx)
 
 }
@@ -215,7 +217,7 @@ func (fam *FindAndModify) command(dst []byte, desc description.SelectedServer) (
 }
 
 // ArrayFilters specifies an array of filter documents that determines which array elements to modify for an update operation on an array field.
-func (fam *FindAndModify) ArrayFilters(arrayFilters bsoncore.Document) *FindAndModify {
+func (fam *FindAndModify) ArrayFilters(arrayFilters bsoncore.Array) *FindAndModify {
 	if fam == nil {
 		fam = new(FindAndModify)
 	}

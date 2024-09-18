@@ -18,7 +18,7 @@ import (
 	"time"
 
 	"github.com/pritunl/mongo-go-driver/bson"
-	"github.com/pritunl/mongo-go-driver/internal/testutil/assert"
+	"github.com/pritunl/mongo-go-driver/internal/assert"
 	"github.com/pritunl/mongo-go-driver/mongo"
 	"github.com/pritunl/mongo-go-driver/mongo/description"
 	"github.com/pritunl/mongo-go-driver/mongo/integration/mtest"
@@ -45,7 +45,6 @@ type seedlistTest struct {
 
 func TestInitialDNSSeedlistDiscoverySpec(t *testing.T) {
 	mt := mtest.New(t, noClientOpts)
-	defer mt.Close()
 
 	mt.RunOpts("replica set", mtest.NewOptions().Topologies(mtest.ReplicaSet).CreateClient(false), func(mt *mtest.T) {
 		mt.Parallel()
@@ -173,7 +172,7 @@ func buildSet(list []string) map[string]struct{} {
 	return set
 }
 
-func verifyConnstringOptions(mt *mtest.T, expected bson.Raw, cs connstring.ConnString) {
+func verifyConnstringOptions(mt *mtest.T, expected bson.Raw, cs *connstring.ConnString) {
 	mt.Helper()
 
 	elems, _ := expected.Elements()

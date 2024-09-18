@@ -15,12 +15,12 @@ import (
 	"testing"
 	"time"
 
-	"github.com/pritunl/mongo-go-driver/internal/testutil/assert"
+	"github.com/pritunl/mongo-go-driver/internal/assert"
+	"github.com/pritunl/mongo-go-driver/internal/require"
 	"github.com/pritunl/mongo-go-driver/mongo/address"
 	"github.com/pritunl/mongo-go-driver/mongo/description"
 	"github.com/pritunl/mongo-go-driver/mongo/options"
 	"github.com/pritunl/mongo-go-driver/x/mongo/driver/dns"
-	"github.com/stretchr/testify/require"
 )
 
 type mockResolver struct {
@@ -75,7 +75,7 @@ func (r *mockResolver) LookupSRV(service, proto, name string) (string, []*net.SR
 	return str, addresses, err
 }
 
-func (r *mockResolver) LookupTXT(name string) ([]string, error) { return nil, nil }
+func (r *mockResolver) LookupTXT(string) ([]string, error) { return nil, nil }
 
 var srvPollingTests = []struct {
 	name            string
@@ -105,6 +105,7 @@ func (ss serverSorter) Less(i, j int) bool {
 }
 
 func compareHosts(t *testing.T, received []description.Server, expected []string) {
+	t.Helper()
 	if len(received) != len(expected) {
 		t.Fatalf("Number of hosts in topology does not match expected value. Got %v; want %v.", len(received), len(expected))
 	}
@@ -182,8 +183,12 @@ func TestPollSRVRecords(t *testing.T) {
 		topo.serversLock.Lock()
 		topo.fsm.Kind = description.Single
 		topo.desc.Store(description.Topology{
-			Kind:                  topo.fsm.Kind,
-			Servers:               topo.fsm.Servers,
+			Kind:                     topo.fsm.Kind,
+			Servers:                  topo.fsm.Servers,
+			SessionTimeoutMinutesPtr: topo.fsm.SessionTimeoutMinutesPtr,
+
+			// TODO(GODRIVER-2885): This field can be removed once
+			// legacy SessionTimeoutMinutes is removed.
 			SessionTimeoutMinutes: topo.fsm.SessionTimeoutMinutes,
 		})
 		topo.serversLock.Unlock()
@@ -308,7 +313,7 @@ func TestPollingSRVRecordsLoadBalanced(t *testing.T) {
 
 func TestPollSRVRecordsMaxHosts(t *testing.T) {
 	// simulateSRVPoll creates a topology with srvMaxHosts, mocks the DNS changes described by
-	// recordsToAdd and recordsToRemove, and returns the the topology.
+	// recordsToAdd and recordsToRemove, and returns the topology.
 	simulateSRVPoll := func(srvMaxHosts int, recordsToAdd []*net.SRV, recordsToRemove []*net.SRV) (*Topology, func(ctx context.Context) error) {
 		t.Helper()
 

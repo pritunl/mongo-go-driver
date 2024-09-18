@@ -14,6 +14,7 @@ import (
 
 	"github.com/pritunl/mongo-go-driver/bson/bsontype"
 	"github.com/pritunl/mongo-go-driver/event"
+	"github.com/pritunl/mongo-go-driver/internal/driverutil"
 	"github.com/pritunl/mongo-go-driver/mongo/description"
 	"github.com/pritunl/mongo-go-driver/mongo/readconcern"
 	"github.com/pritunl/mongo-go-driver/mongo/readpref"
@@ -126,6 +127,7 @@ func (c *Count) Execute(ctx context.Context) error {
 		Selector:          c.selector,
 		ServerAPI:         c.serverAPI,
 		Timeout:           c.timeout,
+		Name:              driverutil.CountOp,
 	}.Execute(ctx)
 
 	// Swallow error if NamespaceNotFound(26) is returned from aggregate on non-existent namespace
@@ -138,7 +140,7 @@ func (c *Count) Execute(ctx context.Context) error {
 	return err
 }
 
-func (c *Count) command(dst []byte, desc description.SelectedServer) ([]byte, error) {
+func (c *Count) command(dst []byte, _ description.SelectedServer) ([]byte, error) {
 	dst = bsoncore.AppendStringElement(dst, "count", c.collection)
 	if c.query != nil {
 		dst = bsoncore.AppendDocumentElement(dst, "query", c.query)

@@ -13,6 +13,7 @@ import (
 
 	"github.com/pritunl/mongo-go-driver/bson/bsontype"
 	"github.com/pritunl/mongo-go-driver/event"
+	"github.com/pritunl/mongo-go-driver/internal/driverutil"
 	"github.com/pritunl/mongo-go-driver/mongo/description"
 	"github.com/pritunl/mongo-go-driver/mongo/readconcern"
 	"github.com/pritunl/mongo-go-driver/mongo/readpref"
@@ -105,6 +106,7 @@ func (d *Distinct) Execute(ctx context.Context) error {
 		Selector:          d.selector,
 		ServerAPI:         d.serverAPI,
 		Timeout:           d.timeout,
+		Name:              driverutil.DistinctOp,
 	}.Execute(ctx)
 
 }

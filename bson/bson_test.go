@@ -19,7 +19,7 @@ import (
 	"github.com/pritunl/mongo-go-driver/bson/bsoncodec"
 	"github.com/pritunl/mongo-go-driver/bson/bsonoptions"
 	"github.com/pritunl/mongo-go-driver/bson/bsontype"
-	"github.com/pritunl/mongo-go-driver/internal/testutil/assert"
+	"github.com/pritunl/mongo-go-driver/internal/assert"
 	"github.com/pritunl/mongo-go-driver/x/bsonx/bsoncore"
 )
 

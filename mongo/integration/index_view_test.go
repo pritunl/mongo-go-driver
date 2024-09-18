@@ -8,12 +8,13 @@ package integration
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
 	"github.com/google/go-cmp/cmp"
 	"github.com/pritunl/mongo-go-driver/bson"
-	"github.com/pritunl/mongo-go-driver/internal/testutil/assert"
+	"github.com/pritunl/mongo-go-driver/internal/assert"
 	"github.com/pritunl/mongo-go-driver/mongo"
 	"github.com/pritunl/mongo-go-driver/mongo/integration/mtest"
 	"github.com/pritunl/mongo-go-driver/mongo/options"
@@ -28,7 +29,6 @@ type index struct {
 
 func TestIndexView(t *testing.T) {
 	mt := mtest.New(t, noClientOpts)
-	defer mt.Close()
 
 	var pbool = func(b bool) *bool { return &b }
 	var pint32 = func(i int32) *int32 { return &i }
@@ -271,7 +271,7 @@ func TestIndexView(t *testing.T) {
 			MinServerVersion("3.6")
 		mt.RunOpts("unacknowledged write", unackMtOpts, func(mt *mtest.T) {
 			_, err := mt.Coll.Indexes().CreateOne(context.Background(), mongo.IndexModel{Keys: bson.D{{"x", 1}}})
-			if err != mongo.ErrUnacknowledgedWrite {
+			if !errors.Is(err, mongo.ErrUnacknowledgedWrite) {
 				// Use a direct comparison rather than assert.Equal because assert.Equal will compare the error strings,
 				// so the assertion would succeed even if the error had not been wrapped.
 				mt.Fatalf("expected CreateOne error %v, got %v", mongo.ErrUnacknowledgedWrite, err)

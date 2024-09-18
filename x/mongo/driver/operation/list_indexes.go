@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/pritunl/mongo-go-driver/event"
+	"github.com/pritunl/mongo-go-driver/internal/driverutil"
 	"github.com/pritunl/mongo-go-driver/mongo/description"
 	"github.com/pritunl/mongo-go-driver/x/bsonx/bsoncore"
 	"github.com/pritunl/mongo-go-driver/x/mongo/driver"
@@ -83,11 +84,12 @@ func (li *ListIndexes) Execute(ctx context.Context) error {
 		Type:           driver.Read,
 		ServerAPI:      li.serverAPI,
 		Timeout:        li.timeout,
+		Name:           driverutil.ListIndexesOp,
 	}.Execute(ctx)
 
 }
 
-func (li *ListIndexes) command(dst []byte, desc description.SelectedServer) ([]byte, error) {
+func (li *ListIndexes) command(dst []byte, _ description.SelectedServer) ([]byte, error) {
 	dst = bsoncore.AppendStringElement(dst, "listIndexes", li.collection)
 	cursorIdx, cursorDoc := bsoncore.AppendDocumentStart(nil)
 

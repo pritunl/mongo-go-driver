@@ -13,17 +13,17 @@ import (
 	"testing"
 
 	"github.com/pritunl/mongo-go-driver/bson"
-	"github.com/pritunl/mongo-go-driver/internal/testutil"
+	"github.com/pritunl/mongo-go-driver/internal/integtest"
+	"github.com/pritunl/mongo-go-driver/internal/require"
 	"github.com/pritunl/mongo-go-driver/mongo"
 	"github.com/pritunl/mongo-go-driver/mongo/options"
-	"github.com/stretchr/testify/require"
 )
 
 func TestClientOptions_CustomDialer(t *testing.T) {
 	td := &testDialer{d: &net.Dialer{}}
-	cs := testutil.ConnString(t)
+	cs := integtest.ConnString(t)
 	opts := options.Client().ApplyURI(cs.String()).SetDialer(td)
-	testutil.AddTestServerAPIVersion(opts)
+	integtest.AddTestServerAPIVersion(opts)
 	client, err := mongo.NewClient(opts)
 	require.NoError(t, err)
 	err = client.Connect(context.Background())

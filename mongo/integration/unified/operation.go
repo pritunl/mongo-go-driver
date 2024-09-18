@@ -12,7 +12,7 @@ import (
 	"time"
 
 	"github.com/pritunl/mongo-go-driver/bson"
-	"github.com/pritunl/mongo-go-driver/internal"
+	"github.com/pritunl/mongo-go-driver/internal/csot"
 	"github.com/pritunl/mongo-go-driver/mongo"
 )
 
@@ -93,7 +93,7 @@ func (op *operation) run(ctx context.Context, loopDone <-chan struct{}) (*operat
 	// Special handling for the "timeoutMS" field because it applies to (almost) all operations.
 	if tms, ok := op.Arguments.Lookup("timeoutMS").Int32OK(); ok {
 		timeout := time.Duration(tms) * time.Millisecond
-		newCtx, cancelFunc := internal.MakeTimeoutContext(ctx, timeout)
+		newCtx, cancelFunc := csot.MakeTimeoutContext(ctx, timeout)
 		// Redefine ctx to be the new timeout-derived context.
 		ctx = newCtx
 		// Cancel the timeout-derived context at the end of run to avoid a context leak.
@@ -138,6 +138,10 @@ func (op *operation) run(ctx context.Context, loopDone <-chan struct{}) (*operat
 		return executeListCollectionNames(ctx, op)
 	case "runCommand":
 		return executeRunCommand(ctx, op)
+	case "runCursorCommand":
+		return executeRunCursorCommand(ctx, op)
+	case "createCommandCursor":
+		return executeCreateRunCursorCommand(ctx, op)
 
 	// Collection operations
 	case "aggregate":
@@ -146,10 +150,14 @@ func (op *operation) run(ctx context.Context, loopDone <-chan struct{}) (*operat
 		return executeBulkWrite(ctx, op)
 	case "countDocuments":
 		return executeCountDocuments(ctx, op)
-	case "createIndex":
-		return executeCreateIndex(ctx, op)
 	case "createFindCursor":
 		return executeCreateFindCursor(ctx, op)
+	case "createIndex":
+		return executeCreateIndex(ctx, op)
+	case "createSearchIndex":
+		return executeCreateSearchIndex(ctx, op)
+	case "createSearchIndexes":
+		return executeCreateSearchIndexes(ctx, op)
 	case "deleteOne":
 		return executeDeleteOne(ctx, op)
 	case "deleteMany":
@@ -160,6 +168,8 @@ func (op *operation) run(ctx context.Context, loopDone <-chan struct{}) (*operat
 		return executeDropIndex(ctx, op)
 	case "dropIndexes":
 		return executeDropIndexes(ctx, op)
+	case "dropSearchIndex":
+		return executeDropSearchIndex(ctx, op)
 	case "estimatedDocumentCount":
 		return executeEstimatedDocumentCount(ctx, op)
 	case "find":
@@ -178,6 +188,8 @@ func (op *operation) run(ctx context.Context, loopDone <-chan struct{}) (*operat
 		return executeInsertOne(ctx, op)
 	case "listIndexes":
 		return executeListIndexes(ctx, op)
+	case "listSearchIndexes":
+		return executeListSearchIndexes(ctx, op)
 	case "rename":
 		// "rename" can either target a collection or a GridFS bucket.
 		if _, err := entities(ctx).collection(op.Object); err == nil {
@@ -193,10 +205,14 @@ func (op *operation) run(ctx context.Context, loopDone <-chan struct{}) (*operat
 		return executeUpdateOne(ctx, op)
 	case "updateMany":
 		return executeUpdateMany(ctx, op)
+	case "updateSearchIndex":
+		return executeUpdateSearchIndex(ctx, op)
 
 	// GridFS operations
 	case "delete":
 		return executeBucketDelete(ctx, op)
+	case "downloadByName":
+		return executeBucketDownloadByName(ctx, op)
 	case "download":
 		return executeBucketDownload(ctx, op)
 	case "drop":
@@ -206,7 +222,19 @@ func (op *operation) run(ctx context.Context, loopDone <-chan struct{}) (*operat
 
 	// Cursor operations
 	case "close":
-		return newEmptyResult(), executeClose(ctx, op)
+		if cursor, err := entities(ctx).cursor(op.Object); err == nil {
+			_ = cursor.Close(ctx)
+
+			return newEmptyResult(), nil
+		}
+
+		if clientEntity, err := entities(ctx).client(op.Object); err == nil {
+			_ = clientEntity.disconnect(context.Background())
+
+			return newEmptyResult(), nil
+		}
+
+		return nil, fmt.Errorf("failed to find a cursor or client named %q", op.Object)
 	case "iterateOnce":
 		return executeIterateOnce(ctx, op)
 	case "iterateUntilDocumentOrError":

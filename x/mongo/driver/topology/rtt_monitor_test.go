@@ -17,13 +17,13 @@ import (
 	"testing"
 	"time"
 
+	"github.com/pritunl/mongo-go-driver/internal/assert"
+	"github.com/pritunl/mongo-go-driver/internal/require"
 	"github.com/pritunl/mongo-go-driver/mongo/address"
 	"github.com/pritunl/mongo-go-driver/x/bsonx/bsoncore"
 	"github.com/pritunl/mongo-go-driver/x/mongo/driver"
 	"github.com/pritunl/mongo-go-driver/x/mongo/driver/drivertest"
 	"github.com/pritunl/mongo-go-driver/x/mongo/driver/operation"
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 )
 
 func makeHelloReply() []byte {

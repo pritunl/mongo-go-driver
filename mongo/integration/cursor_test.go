@@ -14,7 +14,7 @@ import (
 	"time"
 
 	"github.com/pritunl/mongo-go-driver/bson"
-	"github.com/pritunl/mongo-go-driver/internal/testutil/assert"
+	"github.com/pritunl/mongo-go-driver/internal/assert"
 	"github.com/pritunl/mongo-go-driver/mongo"
 	"github.com/pritunl/mongo-go-driver/mongo/integration/mtest"
 	"github.com/pritunl/mongo-go-driver/mongo/options"
@@ -26,7 +26,6 @@ const (
 
 func TestCursor(t *testing.T) {
 	mt := mtest.New(t, mtest.NewOptions().CreateClient(false))
-	defer mt.Close()
 	cappedCollectionOpts := options.CreateCollection().SetCapped(true).SetSizeInBytes(64 * 1024)
 
 	// Server versions 2.6 and 3.0 use OP_GET_MORE so this works on >= 3.2 and when RequireAPIVersion is false;
@@ -131,7 +130,7 @@ func TestCursor(t *testing.T) {
 			evt := mt.GetStartedEvent()
 			assert.Nil(mt, evt, "expected no events, got %v", evt)
 
-			// The batch is exhaused, so the batch length should be 0. Do one Next call, which should do a getMore and
+			// The batch is exhausted, so the batch length should be 0. Do one Next call, which should do a getMore and
 			// fetch batchSize more documents. The batch length after the call should be (batchSize-1) because Next consumes
 			// one document.
 			assertCursorBatchLength(mt, cursor, 0)

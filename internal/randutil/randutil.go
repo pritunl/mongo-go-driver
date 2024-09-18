@@ -12,7 +12,7 @@ import (
 	"fmt"
 	"io"
 
-	xrand "github.com/pritunl/mongo-go-driver/internal/randutil/rand"
+	xrand "github.com/pritunl/mongo-go-driver/internal/rand"
 )
 
 // NewLockedRand returns a new "x/exp/rand" pseudo-random number generator seeded with a

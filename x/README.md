@@ -1,6 +1,9 @@
-MongoDB Go Driver Unstable Libraries
-====================================
-This directory contains unstable MongoDB Go driver libraries and packages. The APIs of these
-packages are not stable and there is no backward compatibility guarantee.
+# MongoDB Go Driver Experimental Packages
 
-**THESE PACKAGES ARE EXPERIMENTAL AND SUBJECT TO CHANGE.**
+**WARNING: THESE PACKAGES ARE EXPERIMENTAL AND MAY BE MODIFIED OR REMOVED
+WITHOUT NOTICE.**
+
+This directory contains packages intended only for internal use. They are made
+available to facilitate use cases that require access to internal MongoDB driver
+functionality and state. The APIs of these packages are not stable and there is
+no backward compatibility guarantee. Use with extreme caution!

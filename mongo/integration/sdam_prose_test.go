@@ -8,20 +8,27 @@ package integration
 
 import (
 	"context"
+	"net"
+	"os"
 	"runtime"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
-	"github.com/pritunl/mongo-go-driver/internal"
-	"github.com/pritunl/mongo-go-driver/internal/testutil/assert"
+	"github.com/pritunl/mongo-go-driver/bson/primitive"
+	"github.com/pritunl/mongo-go-driver/event"
+	"github.com/pritunl/mongo-go-driver/internal/assert"
+	"github.com/pritunl/mongo-go-driver/internal/handshake"
+	"github.com/pritunl/mongo-go-driver/internal/require"
 	"github.com/pritunl/mongo-go-driver/mongo/description"
 	"github.com/pritunl/mongo-go-driver/mongo/integration/mtest"
 	"github.com/pritunl/mongo-go-driver/mongo/options"
+	"github.com/pritunl/mongo-go-driver/x/mongo/driver/topology"
 )
 
 func TestSDAMProse(t *testing.T) {
 	mt := mtest.New(t)
-	defer mt.Close()
 
 	// Server limits non-streaming heartbeats and explicit server transition checks to at most one
 	// per 500ms. Set the test interval to 500ms to minimize the difference between the behavior of
@@ -32,7 +39,8 @@ func TestSDAMProse(t *testing.T) {
 	heartbeatIntervalMtOpts := mtest.NewOptions().
 		ClientOptions(heartbeatIntervalClientOpts).
 		CreateCollection(false).
-		ClientType(mtest.Proxy)
+		ClientType(mtest.Proxy).
+		MinServerVersion("4.4") // RTT Monitor / Streaming protocol is not supported for versions < 4.4.
 	mt.RunOpts("heartbeats processed more frequently", heartbeatIntervalMtOpts, func(mt *mtest.T) {
 		// Test that setting heartbeat interval to 500ms causes the client to process heartbeats
 		// approximately every 500ms instead of the default 10s. Note that a Client doesn't
@@ -53,6 +61,9 @@ func TestSDAMProse(t *testing.T) {
 		// sent messages. The sleep duration will be at least the specified duration but
 		// possibly longer, which could lead to extra heartbeat messages, so account for that in
 		// the assertions.
+		if len(os.Getenv("DOCKER_RUNNING")) > 0 {
+			mt.Skip("skipping test in docker environment")
+		}
 		start := time.Now()
 		time.Sleep(2 * time.Second)
 		messages := mt.GetProxiedMessages()
@@ -108,34 +119,29 @@ func TestSDAMProse(t *testing.T) {
 					Times: 1000,
 				},
 				Data: mtest.FailPointData{
-					FailCommands:    []string{internal.LegacyHello, "hello"},
+					FailCommands:    []string{handshake.LegacyHello, "hello"},
 					BlockConnection: true,
 					BlockTimeMS:     500,
 					AppName:         "streamingRttTest",
 				},
 			})
-			callback := func(ctx context.Context) {
-				for {
-					// Stop loop if callback has been canceled.
-					select {
-					case <-ctx.Done():
-						return
-					default:
+			callback := func() bool {
+				// We don't know which server received the failpoint command, so we wait until any of the server
+				// RTTs cross the threshold.
+				for _, serverDesc := range testTopology.Description().Servers {
+					if serverDesc.AverageRTT > 250*time.Millisecond {
+						return true
 					}
-
-					// We don't know which server received the failpoint command, so we wait until any of the server
-					// RTTs cross the threshold.
-					for _, serverDesc := range testTopology.Description().Servers {
-						if serverDesc.AverageRTT > 250*time.Millisecond {
-							return
-						}
-					}
-
-					// The next update will be in ~500ms.
-					time.Sleep(500 * time.Millisecond)
 				}
+
+				// The next update will be in ~500ms.
+				return false
 			}
-			assert.Soon(t, callback, defaultCallbackTimeout)
+			assert.Eventually(t,
+				callback,
+				defaultCallbackTimeout,
+				500*time.Millisecond,
+				"expected average rtt heartbeats at least within every 500 ms period")
 		})
 	})
 
@@ -147,7 +153,7 @@ func TestSDAMProse(t *testing.T) {
 				Times: 5,
 			},
 			Data: mtest.FailPointData{
-				FailCommands: []string{internal.LegacyHello, "hello"},
+				FailCommands: []string{handshake.LegacyHello, "hello"},
 				ErrorCode:    1234,
 				AppName:      "SDAMMinHeartbeatFrequencyTest",
 			},
@@ -167,5 +173,105 @@ func TestSDAMProse(t *testing.T) {
 		assert.True(mt, pingTime > 2000*time.Millisecond && pingTime < 3500*time.Millisecond,
 			"expected Ping to take between 2 and 3.5 seconds, took %v seconds", pingTime.Seconds())
 
+	})
+}
+
+func TestServerHeartbeatStartedEvent(t *testing.T) {
+	t.Run("emits the first HeartbeatStartedEvent before the monitoring socket was created", func(t *testing.T) {
+		t.Parallel()
+
+		const address = address.Address("localhost:9999")
+		expectedEvents := []string{
+			"serverHeartbeatStartedEvent",
+			"client connected",
+			"client hello received",
+			"serverHeartbeatFailedEvent",
+		}
+
+		events := make(chan string)
+
+		listener, err := net.Listen("tcp", address.String())
+		assert.NoError(t, err)
+		defer listener.Close()
+		go func() {
+			conn, err := listener.Accept()
+			assert.NoError(t, err)
+			defer conn.Close()
+
+			events <- "client connected"
+			_, _ = conn.Read(nil)
+			events <- "client hello received"
+		}()
+
+		server := topology.NewServer(
+			address,
+			primitive.NewObjectID(),
+			topology.WithServerMonitor(func(*event.ServerMonitor) *event.ServerMonitor {
+				return &event.ServerMonitor{
+					ServerHeartbeatStarted: func(e *event.ServerHeartbeatStartedEvent) {
+						events <- "serverHeartbeatStartedEvent"
+					},
+					ServerHeartbeatFailed: func(e *event.ServerHeartbeatFailedEvent) {
+						events <- "serverHeartbeatFailedEvent"
+					},
+				}
+			}),
+		)
+		require.NoError(t, server.Connect(nil))
+
+		ticker := time.NewTicker(5 * time.Second)
+		defer ticker.Stop()
+
+		actualEvents := make([]string, 0, len(expectedEvents))
+		for len(actualEvents) < len(expectedEvents) {
+			select {
+			case event := <-events:
+				actualEvents = append(actualEvents, event)
+			case <-ticker.C:
+				assert.FailNow(t, "timed out for incoming event")
+			}
+		}
+		assert.Equal(t, expectedEvents, actualEvents)
+	})
+
+	mt := mtest.New(t)
+
+	mt.Run("polling must await frequency", func(mt *mtest.T) {
+		var heartbeatStartedCount atomic.Int64
+
+		servers := map[string]bool{}
+		serversMu := sync.RWMutex{} // Guard the servers set
+
+		serverMonitor := &event.ServerMonitor{
+			ServerHeartbeatStarted: func(*event.ServerHeartbeatStartedEvent) {
+				heartbeatStartedCount.Add(1)
+			},
+			TopologyDescriptionChanged: func(evt *event.TopologyDescriptionChangedEvent) {
+				serversMu.Lock()
+				defer serversMu.Unlock()
+
+				for _, srv := range evt.NewDescription.Servers {
+					servers[srv.Addr.String()] = true
+				}
+			},
+		}
+
+		// Create a client with  heartbeatFrequency=100ms,
+		// serverMonitoringMode=poll. Use SDAM to record the number of times the
+		// a heartbeat is started and the number of servers discovered.
+		mt.ResetClient(options.Client().
+			SetServerMonitor(serverMonitor).
+			SetServerMonitoringMode(options.ServerMonitoringModePoll))
+
+		// Per specifications, minHeartbeatFrequencyMS=500ms. So, within the first
+		// 500ms the heartbeatStartedCount should be LEQ to the number of discovered
+		// servers.
+		time.Sleep(500 * time.Millisecond)
+
+		serversMu.Lock()
+		serverCount := int64(len(servers))
+		serversMu.Unlock()
+
+		assert.LessOrEqual(mt, heartbeatStartedCount.Load(), serverCount)
 	})
 }

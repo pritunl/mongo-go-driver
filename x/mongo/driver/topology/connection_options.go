@@ -15,7 +15,7 @@ import (
 
 	"github.com/pritunl/mongo-go-driver/bson/primitive"
 	"github.com/pritunl/mongo-go-driver/event"
-	"github.com/pritunl/mongo-go-driver/internal"
+	"github.com/pritunl/mongo-go-driver/internal/httputil"
 	"github.com/pritunl/mongo-go-driver/x/mongo/driver"
 	"github.com/pritunl/mongo-go-driver/x/mongo/driver/ocsp"
 )
@@ -72,7 +72,7 @@ func newConnectionConfig(opts ...ConnectionOption) *connectionConfig {
 		connectTimeout:      30 * time.Second,
 		dialer:              nil,
 		tlsConnectionSource: defaultTLSConnectionSource,
-		httpClient:          internal.DefaultHTTPClient,
+		httpClient:          httputil.DefaultHTTPClient,
 	}
 
 	for _, opt := range opts {
@@ -83,6 +83,8 @@ func newConnectionConfig(opts ...ConnectionOption) *connectionConfig {
 	}
 
 	if cfg.dialer == nil {
+		// Use a zero value of net.Dialer when nothing is specified, so the Go driver applies default default behaviors
+		// such as Timeout, KeepAlive, DNS resolving, etc. See https://golang.org/pkg/net/#Dialer for more information.
 		cfg.dialer = &net.Dialer{}
 	}
 

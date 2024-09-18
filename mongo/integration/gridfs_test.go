@@ -18,8 +18,8 @@ import (
 	"github.com/pritunl/mongo-go-driver/bson"
 	"github.com/pritunl/mongo-go-driver/bson/primitive"
 	"github.com/pritunl/mongo-go-driver/event"
-	"github.com/pritunl/mongo-go-driver/internal/testutil/assert"
-	"github.com/pritunl/mongo-go-driver/internal/testutil/israce"
+	"github.com/pritunl/mongo-go-driver/internal/assert"
+	"github.com/pritunl/mongo-go-driver/internal/israce"
 	"github.com/pritunl/mongo-go-driver/mongo"
 	"github.com/pritunl/mongo-go-driver/mongo/gridfs"
 	"github.com/pritunl/mongo-go-driver/mongo/integration/mtest"
@@ -28,7 +28,6 @@ import (
 
 func TestGridFS(x *testing.T) {
 	mt := mtest.New(x, noClientOpts)
-	defer mt.Close()
 
 	mt.Run("skipping download", func(mt *mtest.T) {
 		data := []byte("abc.def.ghi")
@@ -298,7 +297,7 @@ func TestGridFS(x *testing.T) {
 					// The uploadDate field is calculated when the upload is complete. Manually fetch it from the
 					// fs.files collection to use in assertions.
 					filesColl := mt.DB.Collection("fs.files")
-					uploadedFileDoc, err := filesColl.FindOne(context.Background(), bson.D{}).DecodeBytes()
+					uploadedFileDoc, err := filesColl.FindOne(context.Background(), bson.D{}).Raw()
 					assert.Nil(mt, err, "FindOne error: %v", err)
 					uploadTime := uploadedFileDoc.Lookup("uploadDate").Time().UTC()
 

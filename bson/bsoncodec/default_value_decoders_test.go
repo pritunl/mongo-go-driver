@@ -23,7 +23,7 @@ import (
 	"github.com/pritunl/mongo-go-driver/bson/bsonrw/bsonrwtest"
 	"github.com/pritunl/mongo-go-driver/bson/bsontype"
 	"github.com/pritunl/mongo-go-driver/bson/primitive"
-	"github.com/pritunl/mongo-go-driver/internal/testutil/assert"
+	"github.com/pritunl/mongo-go-driver/internal/assert"
 	"github.com/pritunl/mongo-go-driver/x/bsonx/bsoncore"
 )
 
@@ -1530,8 +1530,17 @@ func TestDefaultValueDecoders(t *testing.T) {
 					errors.New("copy error"),
 				},
 				{
-					"Unmarshaler",
+					// Only the pointer form of testUnmarshaler implements Unmarshaler
+					"value does not implement Unmarshaler",
 					testUnmarshaler{Val: bsoncore.AppendDouble(nil, 3.14159)},
+					nil,
+					&bsonrwtest.ValueReaderWriter{BSONType: bsontype.Double, Return: float64(3.14159)},
+					bsonrwtest.ReadDouble,
+					nil,
+				},
+				{
+					"Unmarshaler",
+					&testUnmarshaler{Val: bsoncore.AppendDouble(nil, 3.14159)},
 					nil,
 					&bsonrwtest.ValueReaderWriter{BSONType: bsontype.Double, Return: float64(3.14159)},
 					bsonrwtest.ReadDouble,
@@ -2361,8 +2370,8 @@ func TestDefaultValueDecoders(t *testing.T) {
 						return
 					}
 					if rc.val == cansettest { // We're doing an IsValid and CanSet test
-						wanterr, ok := rc.err.(ValueDecoderError)
-						if !ok {
+						var wanterr ValueDecoderError
+						if !errors.As(rc.err, &wanterr) {
 							t.Fatalf("Error must be a DecodeValueError, but got a %T", rc.err)
 						}
 
@@ -3676,8 +3685,8 @@ func TestDefaultValueDecoders(t *testing.T) {
 			val := reflect.New(reflect.TypeOf(outer{})).Elem()
 			err := defaultTestStructCodec.DecodeValue(dc, vr, val)
 
-			decodeErr, ok := err.(*DecodeError)
-			assert.True(t, ok, "expected DecodeError, got %v of type %T", err, err)
+			var decodeErr *DecodeError
+			assert.True(t, errors.As(err, &decodeErr), "expected DecodeError, got %v of type %T", err, err)
 			expectedKeys := []string{"foo", "bar"}
 			assert.Equal(t, expectedKeys, decodeErr.Keys(), "expected keys slice %v, got %v", expectedKeys,
 				decodeErr.Keys())
@@ -3791,4 +3800,11 @@ func buildDocument(elems []byte) []byte {
 	doc = append(doc, elems...)
 	doc, _ = bsoncore.AppendDocumentEnd(doc, idx)
 	return doc
+}
+
+func buildDefaultRegistry() *Registry {
+	rb := NewRegistryBuilder()
+	defaultValueEncoders.RegisterDefaultEncoders(rb)
+	defaultValueDecoders.RegisterDefaultDecoders(rb)
+	return rb.Build()
 }

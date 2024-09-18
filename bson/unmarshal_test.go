@@ -7,16 +7,17 @@
 package bson
 
 import (
+	"errors"
 	"math/rand"
 	"reflect"
+	"sync"
 	"testing"
-	"unsafe"
 
 	"github.com/pritunl/mongo-go-driver/bson/bsoncodec"
 	"github.com/pritunl/mongo-go-driver/bson/bsonrw"
 	"github.com/pritunl/mongo-go-driver/bson/primitive"
+	"github.com/pritunl/mongo-go-driver/internal/assert"
 	"github.com/pritunl/mongo-go-driver/x/bsonx/bsoncore"
-	"github.com/stretchr/testify/assert"
 )
 
 func TestUnmarshal(t *testing.T) {
@@ -100,7 +101,7 @@ func TestUnmarshalExtJSONWithRegistry(t *testing.T) {
 	t.Run("UnmarshalExtJSONInvalidInput", func(t *testing.T) {
 		data := []byte("invalid")
 		err := UnmarshalExtJSONWithRegistry(DefaultRegistry, data, true, &M{})
-		if err != bsonrw.ErrInvalidJSON {
+		if !errors.Is(err, bsonrw.ErrInvalidJSON) {
 			t.Fatalf("wanted ErrInvalidJSON, got %v", err)
 		}
 	})
@@ -770,49 +771,25 @@ func TestUnmarshalByteSlicesUseDistinctArrays(t *testing.T) {
 
 			// Assert that the byte slice in the unmarshaled value does not share any memory
 			// addresses with the input byte slice.
-			assertDifferentArrays(t, data, tc.getByteSlice(got))
+			assert.DifferentAddressRanges(t, data, tc.getByteSlice(got))
 		})
 	}
 }
 
-// assertDifferentArrays asserts that two byte slices reference distinct memory ranges, meaning
-// they reference different underlying byte arrays.
-func assertDifferentArrays(t *testing.T, a, b []byte) {
-	// Find the start and end memory addresses for the underlying byte array for each input byte
-	// slice.
-	sliceAddrRange := func(b []byte) (uintptr, uintptr) {
-		sh := (*reflect.SliceHeader)(unsafe.Pointer(&b))
-		return sh.Data, sh.Data + uintptr(sh.Cap-1)
-	}
-	aStart, aEnd := sliceAddrRange(a)
-	bStart, bEnd := sliceAddrRange(b)
+func TestUnmarshalConcurrently(t *testing.T) {
+	t.Parallel()
 
-	// If "b" starts after "a" ends or "a" starts after "b" ends, there is no overlap.
-	if bStart > aEnd || aStart > bEnd {
-		return
-	}
+	const size = 10_000
 
-	// Otherwise, calculate the overlap start and end and print the memory overlap error message.
-	min := func(a, b uintptr) uintptr {
-		if a < b {
-			return a
-		}
-		return b
+	data := []byte{16, 0, 0, 0, 10, 108, 97, 115, 116, 101, 114, 114, 111, 114, 0, 0}
+	wg := sync.WaitGroup{}
+	wg.Add(size)
+	for i := 0; i < size; i++ {
+		go func() {
+			defer wg.Done()
+			var res struct{ LastError error }
+			_ = Unmarshal(data, &res)
+		}()
 	}
-	max := func(a, b uintptr) uintptr {
-		if a > b {
-			return a
-		}
-		return b
-	}
-	overlapLow := max(aStart, bStart)
-	overlapHigh := min(aEnd, bEnd)
-
-	t.Errorf("Byte slices point to the same the same underlying byte array:\n"+
-		"\ta addresses:\t%d ... %d\n"+
-		"\tb addresses:\t%d ... %d\n"+
-		"\toverlap:\t%d ... %d",
-		aStart, aEnd,
-		bStart, bEnd,
-		overlapLow, overlapHigh)
+	wg.Wait()
 }

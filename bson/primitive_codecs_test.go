@@ -28,7 +28,7 @@ import (
 func bytesFromDoc(doc interface{}) []byte {
 	b, err := Marshal(doc)
 	if err != nil {
-		panic(fmt.Errorf("Couldn't marshal BSON document: %v", err))
+		panic(fmt.Errorf("Couldn't marshal BSON document: %w", err))
 	}
 	return b
 }
@@ -65,6 +65,8 @@ func compareErrors(err1, err2 error) bool {
 }
 
 func TestDefaultValueEncoders(t *testing.T) {
+	t.Parallel()
+
 	var pc PrimitiveCodecs
 
 	var wrong = func(string, string) string { return "wrong" }
@@ -106,6 +108,28 @@ func TestDefaultValueEncoders(t *testing.T) {
 					nil,
 					bsonrwtest.WriteDouble,
 					nil,
+				},
+				{
+					"RawValue Type is zero with non-zero value",
+					RawValue{
+						Type:  0x00,
+						Value: bsoncore.AppendDouble(nil, 3.14159),
+					},
+					nil,
+					nil,
+					bsonrwtest.Nothing,
+					fmt.Errorf("the RawValue Type specifies an invalid BSON type: 0x0"),
+				},
+				{
+					"RawValue Type is invalid",
+					RawValue{
+						Type:  0x8F,
+						Value: bsoncore.AppendDouble(nil, 3.14159),
+					},
+					nil,
+					nil,
+					bsonrwtest.Nothing,
+					fmt.Errorf("the RawValue Type specifies an invalid BSON type: 0x8f"),
 				},
 			},
 		},
@@ -166,9 +190,17 @@ func TestDefaultValueEncoders(t *testing.T) {
 	}
 
 	for _, tc := range testCases {
+		tc := tc // Capture the range variable
+
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
 			for _, subtest := range tc.subtests {
+				subtest := subtest // Capture the range variable
+
 				t.Run(subtest.name, func(t *testing.T) {
+					t.Parallel()
+
 					var ec bsoncodec.EncodeContext
 					if subtest.ectx != nil {
 						ec = *subtest.ectx
@@ -192,6 +224,8 @@ func TestDefaultValueEncoders(t *testing.T) {
 	}
 
 	t.Run("success path", func(t *testing.T) {
+		t.Parallel()
+
 		oid := primitive.NewObjectID()
 		oids := []primitive.ObjectID{primitive.NewObjectID(), primitive.NewObjectID(), primitive.NewObjectID()}
 		var str = new(string)
@@ -224,6 +258,36 @@ func TestDefaultValueEncoders(t *testing.T) {
 				"D to Symbol",
 				D{{"a", primitive.Symbol("foobarbaz")}},
 				docToBytes(D{{"a", primitive.Symbol("foobarbaz")}}),
+				nil,
+			},
+			{
+				"omitempty map",
+				struct {
+					T map[string]string `bson:",omitempty"`
+				}{
+					T: map[string]string{},
+				},
+				docToBytes(D{}),
+				nil,
+			},
+			{
+				"omitempty slice",
+				struct {
+					T []struct{} `bson:",omitempty"`
+				}{
+					T: []struct{}{},
+				},
+				docToBytes(D{}),
+				nil,
+			},
+			{
+				"omitempty string",
+				struct {
+					T string `bson:",omitempty"`
+				}{
+					T: "",
+				},
+				docToBytes(D{}),
 				nil,
 			},
 			{
@@ -426,14 +490,18 @@ func TestDefaultValueEncoders(t *testing.T) {
 		}
 
 		for _, tc := range testCases {
+			tc := tc // Capture the range variable
+
 			t.Run(tc.name, func(t *testing.T) {
+				t.Parallel()
+
 				b := make(bsonrw.SliceWriter, 0, 512)
 				vw, err := bsonrw.NewBSONValueWriter(&b)
 				noerr(t, err)
 				enc, err := NewEncoder(vw)
 				noerr(t, err)
 				err = enc.Encode(tc.value)
-				if err != tc.err {
+				if !errors.Is(err, tc.err) {
 					t.Errorf("Did not receive expected error. got %v; want %v", err, tc.err)
 				}
 				if diff := cmp.Diff([]byte(b), tc.b); diff != "" {
@@ -560,7 +628,6 @@ func TestDefaultValueDecoders(t *testing.T) {
 						llvrw = rc.llvrw
 					}
 					llvrw.T = t
-					// var got interface{}
 					if rc.val == cansetreflectiontest { // We're doing a CanSet reflection test
 						err := tc.vd.DecodeValue(dc, llvrw, reflect.Value{})
 						if !compareErrors(err, rc.err) {

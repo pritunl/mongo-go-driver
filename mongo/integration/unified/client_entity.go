@@ -10,13 +10,15 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
 	"github.com/pritunl/mongo-go-driver/bson"
 	"github.com/pritunl/mongo-go-driver/event"
-	"github.com/pritunl/mongo-go-driver/internal"
-	"github.com/pritunl/mongo-go-driver/internal/testutil"
+	"github.com/pritunl/mongo-go-driver/internal/handshake"
+	"github.com/pritunl/mongo-go-driver/internal/integtest"
+	"github.com/pritunl/mongo-go-driver/internal/logger"
 	"github.com/pritunl/mongo-go-driver/mongo"
 	"github.com/pritunl/mongo-go-driver/mongo/integration/mtest"
 	"github.com/pritunl/mongo-go-driver/mongo/options"
@@ -24,29 +26,51 @@ import (
 	"github.com/pritunl/mongo-go-driver/x/bsonx/bsoncore"
 )
 
+// There are no automated tests for truncation. Given that, setting the
+// "MaxDocumentLength" to 10_000 will ensure that the default truncation
+// length does not interfere with tests with commands/replies that
+// exceed the default truncation length.
+const defaultMaxDocumentLen = 10_000
+
 // Security-sensitive commands that should be ignored in command monitoring by default.
-var securitySensitiveCommands = []string{"authenticate", "saslStart", "saslContinue", "getnonce",
-	"createUser", "updateUser", "copydbgetnonce", "copydbsaslstart", "copydb"}
+var securitySensitiveCommands = []string{
+	"authenticate", "saslStart", "saslContinue", "getnonce",
+	"createUser", "updateUser", "copydbgetnonce", "copydbsaslstart", "copydb",
+}
 
 // clientEntity is a wrapper for a mongo.Client object that also holds additional information required during test
 // execution.
 type clientEntity struct {
 	*mongo.Client
+	disconnected bool
 
-	recordEvents             atomic.Value
-	started                  []*event.CommandStartedEvent
-	succeeded                []*event.CommandSucceededEvent
-	failed                   []*event.CommandFailedEvent
-	pooled                   []*event.PoolEvent
-	ignoredCommands          map[string]struct{}
-	observeSensitiveCommands *bool
-	numConnsCheckedOut       int32
+	recordEvents                atomic.Value
+	started                     []*event.CommandStartedEvent
+	succeeded                   []*event.CommandSucceededEvent
+	failed                      []*event.CommandFailedEvent
+	pooled                      []*event.PoolEvent
+	serverDescriptionChanged    []*event.ServerDescriptionChangedEvent
+	serverHeartbeatFailedEvent  []*event.ServerHeartbeatFailedEvent
+	serverHeartbeatStartedEvent []*event.ServerHeartbeatStartedEvent
+	serverHeartbeatSucceeded    []*event.ServerHeartbeatSucceededEvent
+	topologyDescriptionChanged  []*event.TopologyDescriptionChangedEvent
+	ignoredCommands             map[string]struct{}
+	observeSensitiveCommands    *bool
+	numConnsCheckedOut          int32
 
 	// These should not be changed after the clientEntity is initialized
-	observedEvents map[monitoringEventType]struct{}
-	storedEvents   map[monitoringEventType][]string // maps an entity type to an array of entityIDs for entities that store it
+	observedEvents                      map[monitoringEventType]struct{}
+	storedEvents                        map[monitoringEventType][]string
+	eventsCount                         map[monitoringEventType]int32
+	serverDescriptionChangedEventsCount map[serverDescriptionChangedEventInfo]int32
+
+	eventsCountLock                         sync.RWMutex
+	serverDescriptionChangedEventsCountLock sync.RWMutex
+	eventProcessMu                          sync.RWMutex
 
 	entityMap *EntityMap
+
+	logQueue chan orderedLogMessage
 }
 
 func newClientEntity(ctx context.Context, em *EntityMap, entityOptions *entityOptions) (*clientEntity, error) {
@@ -62,11 +86,13 @@ func newClientEntity(ctx context.Context, em *EntityMap, entityOptions *entityOp
 		}
 	}
 	entity := &clientEntity{
-		ignoredCommands:          ignoredCommands,
-		observedEvents:           make(map[monitoringEventType]struct{}),
-		storedEvents:             make(map[monitoringEventType][]string),
-		entityMap:                em,
-		observeSensitiveCommands: entityOptions.ObserveSensitiveCommands,
+		ignoredCommands:                     ignoredCommands,
+		observedEvents:                      make(map[monitoringEventType]struct{}),
+		storedEvents:                        make(map[monitoringEventType][]string),
+		eventsCount:                         make(map[monitoringEventType]int32),
+		serverDescriptionChangedEventsCount: make(map[serverDescriptionChangedEventInfo]int32),
+		entityMap:                           em,
+		observeSensitiveCommands:            entityOptions.ObserveSensitiveCommands,
 	}
 	entity.setRecordEvents(true)
 
@@ -76,8 +102,32 @@ func newClientEntity(ctx context.Context, em *EntityMap, entityOptions *entityOp
 	clientOpts := options.Client().ApplyURI(uri)
 	if entityOptions.URIOptions != nil {
 		if err := setClientOptionsFromURIOptions(clientOpts, entityOptions.URIOptions); err != nil {
-			return nil, fmt.Errorf("error parsing URI options: %v", err)
+			return nil, fmt.Errorf("error parsing URI options: %w", err)
 		}
+	}
+
+	if olm := entityOptions.ObserveLogMessages; olm != nil {
+		expectedLogMessagesCount := expectedLogMessagesCount(ctx, entityOptions.ID)
+		ignoreLogMessages := ignoreLogMessages(ctx, entityOptions.ID)
+
+		clientLogger := newLogger(olm, expectedLogMessagesCount, ignoreLogMessages)
+
+		wrap := func(str string) options.LogLevel {
+			return options.LogLevel(logger.ParseLevel(str))
+		}
+
+		// Assign the log queue to the entity so that it can be used to
+		// retrieve log messages.
+		entity.logQueue = clientLogger.logQueue
+
+		// Update the client options to add the clientLogger.
+		clientOpts.LoggerOptions = options.Logger().
+			SetComponentLevel(options.LogComponentCommand, wrap(olm.Command)).
+			SetComponentLevel(options.LogComponentTopology, wrap(olm.Topology)).
+			SetComponentLevel(options.LogComponentServerSelection, wrap(olm.ServerSelection)).
+			SetComponentLevel(options.LogComponentConnection, wrap(olm.Connection)).
+			SetMaxDocumentLength(defaultMaxDocumentLen).
+			SetSink(clientLogger)
 	}
 
 	// UseMultipleMongoses requires validation when connecting to a sharded cluster. Options changes and validation are
@@ -98,10 +148,20 @@ func newClientEntity(ctx context.Context, em *EntityMap, entityOptions *entityOp
 			Succeeded: entity.processSucceededEvent,
 			Failed:    entity.processFailedEvent,
 		}
+
 		poolMonitor := &event.PoolMonitor{
 			Event: entity.processPoolEvent,
 		}
-		clientOpts.SetMonitor(commandMonitor).SetPoolMonitor(poolMonitor)
+
+		serverMonitor := &event.ServerMonitor{
+			ServerDescriptionChanged:   entity.processServerDescriptionChangedEvent,
+			ServerHeartbeatFailed:      entity.processServerHeartbeatFailedEvent,
+			ServerHeartbeatStarted:     entity.processServerHeartbeatStartedEvent,
+			ServerHeartbeatSucceeded:   entity.processServerHeartbeatSucceededEvent,
+			TopologyDescriptionChanged: entity.processTopologyDescriptionChangedEvent,
+		}
+
+		clientOpts.SetMonitor(commandMonitor).SetPoolMonitor(poolMonitor).SetServerMonitor(serverMonitor)
 
 		for _, eventTypeStr := range entityOptions.ObserveEvents {
 			eventType, ok := monitoringEventTypeFromString(eventTypeStr)
@@ -126,7 +186,7 @@ func newClientEntity(ctx context.Context, em *EntityMap, entityOptions *entityOp
 		}
 		clientOpts.SetServerAPIOptions(entityOptions.ServerAPIOptions.ServerAPIOptions)
 	} else {
-		testutil.AddTestServerAPIVersion(clientOpts)
+		integtest.AddTestServerAPIVersion(clientOpts)
 	}
 	for _, cmd := range entityOptions.IgnoredCommands {
 		entity.ignoredCommands[cmd] = struct{}{}
@@ -134,7 +194,7 @@ func newClientEntity(ctx context.Context, em *EntityMap, entityOptions *entityOp
 
 	client, err := mongo.Connect(ctx, clientOpts)
 	if err != nil {
-		return nil, fmt.Errorf("error creating mongo.Client: %v", err)
+		return nil, fmt.Errorf("error creating mongo.Client: %w", err)
 	}
 
 	entity.Client = client
@@ -156,6 +216,25 @@ func getURIForClient(opts *entityOptions) string {
 	}
 }
 
+// disconnect disconnects the client associated with this entity. It is an
+// idempotent operation, unlike the mongo client's disconnect method. This
+// property will help avoid unnecessary errors when calling disconnect on a
+// client that has already been disconnected, such as the case when the test
+// runner is required to run the closure as part of an operation.
+func (c *clientEntity) disconnect(ctx context.Context) error {
+	if c.disconnected {
+		return nil
+	}
+
+	if err := c.Client.Disconnect(ctx); err != nil {
+		return err
+	}
+
+	c.disconnected = true
+
+	return nil
+}
+
 func (c *clientEntity) stopListeningForEvents() {
 	c.setRecordEvents(false)
 }
@@ -166,7 +245,7 @@ func (c *clientEntity) isIgnoredEvent(commandName string, eventDoc bson.Raw) boo
 		return true
 	}
 
-	if commandName == "hello" || strings.ToLower(commandName) == internal.LegacyHelloLowercase {
+	if commandName == "hello" || strings.ToLower(commandName) == handshake.LegacyHelloLowercase {
 		// If observeSensitiveCommands is false (or unset) and hello command has been
 		// redacted at operation level, hello command should be ignored as it contained
 		// speculativeAuthenticate.
@@ -220,6 +299,34 @@ func (c *clientEntity) numberConnectionsCheckedOut() int32 {
 	return c.numConnsCheckedOut
 }
 
+func (c *clientEntity) addEventsCount(eventType monitoringEventType) {
+	c.eventsCountLock.Lock()
+	defer c.eventsCountLock.Unlock()
+
+	c.eventsCount[eventType]++
+}
+
+func (c *clientEntity) addServerDescriptionChangedEventCount(evt serverDescriptionChangedEventInfo) {
+	c.serverDescriptionChangedEventsCountLock.Lock()
+	defer c.serverDescriptionChangedEventsCountLock.Unlock()
+
+	c.serverDescriptionChangedEventsCount[evt]++
+}
+
+func (c *clientEntity) getEventCount(eventType monitoringEventType) int32 {
+	c.eventsCountLock.RLock()
+	defer c.eventsCountLock.RUnlock()
+
+	return c.eventsCount[eventType]
+}
+
+func (c *clientEntity) getServerDescriptionChangedEventCount(evt serverDescriptionChangedEventInfo) int32 {
+	c.serverDescriptionChangedEventsCountLock.Lock()
+	defer c.serverDescriptionChangedEventsCountLock.Unlock()
+
+	return c.serverDescriptionChangedEventsCount[evt]
+}
+
 func getSecondsSinceEpoch() float64 {
 	return float64(time.Now().UnixNano()) / float64(time.Second/time.Nanosecond)
 }
@@ -231,6 +338,9 @@ func (c *clientEntity) processStartedEvent(_ context.Context, evt *event.Command
 	if _, ok := c.observedEvents[commandStartedEvent]; ok {
 		c.started = append(c.started, evt)
 	}
+
+	c.addEventsCount(commandStartedEvent)
+
 	eventListIDs, ok := c.storedEvents[commandStartedEvent]
 	if !ok {
 		return
@@ -258,6 +368,9 @@ func (c *clientEntity) processSucceededEvent(_ context.Context, evt *event.Comma
 	if _, ok := c.observedEvents[commandSucceededEvent]; ok {
 		c.succeeded = append(c.succeeded, evt)
 	}
+
+	c.addEventsCount(commandSucceededEvent)
+
 	eventListIDs, ok := c.storedEvents["CommandSucceededEvent"]
 	if !ok {
 		return
@@ -284,6 +397,9 @@ func (c *clientEntity) processFailedEvent(_ context.Context, evt *event.CommandF
 	if _, ok := c.observedEvents[commandFailedEvent]; ok {
 		c.failed = append(c.failed, evt)
 	}
+
+	c.addEventsCount(commandFailedEvent)
+
 	eventListIDs, ok := c.storedEvents["CommandFailedEvent"]
 	if !ok {
 		return
@@ -291,7 +407,7 @@ func (c *clientEntity) processFailedEvent(_ context.Context, evt *event.CommandF
 	bsonBuilder := bsoncore.NewDocumentBuilder().
 		AppendString("name", "CommandFailedEvent").
 		AppendDouble("observedAt", getSecondsSinceEpoch()).
-		AppendInt64("durationNanos", evt.DurationNanos).
+		AppendInt64("durationNanos", evt.Duration.Nanoseconds()).
 		AppendString("commandName", evt.CommandName).
 		AppendInt64("requestId", evt.RequestID).
 		AppendString("connectionId", evt.ConnectionID).
@@ -347,12 +463,94 @@ func (c *clientEntity) processPoolEvent(evt *event.PoolEvent) {
 	if _, ok := c.observedEvents[eventType]; ok {
 		c.pooled = append(c.pooled, evt)
 	}
+
+	c.addEventsCount(eventType)
+
 	if eventListIDs, ok := c.storedEvents[eventType]; ok {
 		eventBSON := getPoolEventDocument(evt, eventType)
 		for _, id := range eventListIDs {
 			c.entityMap.appendEventsEntity(id, eventBSON)
 		}
 	}
+}
+
+func (c *clientEntity) processServerDescriptionChangedEvent(evt *event.ServerDescriptionChangedEvent) {
+	c.eventProcessMu.Lock()
+	defer c.eventProcessMu.Unlock()
+
+	if !c.getRecordEvents() {
+		return
+	}
+
+	if _, ok := c.observedEvents[serverDescriptionChangedEvent]; ok {
+		c.serverDescriptionChanged = append(c.serverDescriptionChanged, evt)
+	}
+
+	// Record object-specific unified spec test data on an event.
+	c.addServerDescriptionChangedEventCount(*newServerDescriptionChangedEventInfo(evt))
+
+	// Record the event generally.
+	c.addEventsCount(serverDescriptionChangedEvent)
+}
+
+func (c *clientEntity) processServerHeartbeatFailedEvent(evt *event.ServerHeartbeatFailedEvent) {
+	c.eventProcessMu.Lock()
+	defer c.eventProcessMu.Unlock()
+
+	if !c.getRecordEvents() {
+		return
+	}
+
+	if _, ok := c.observedEvents[serverHeartbeatFailedEvent]; ok {
+		c.serverHeartbeatFailedEvent = append(c.serverHeartbeatFailedEvent, evt)
+	}
+
+	c.addEventsCount(serverHeartbeatFailedEvent)
+}
+
+func (c *clientEntity) processServerHeartbeatStartedEvent(evt *event.ServerHeartbeatStartedEvent) {
+	c.eventProcessMu.Lock()
+	defer c.eventProcessMu.Unlock()
+
+	if !c.getRecordEvents() {
+		return
+	}
+
+	if _, ok := c.observedEvents[serverHeartbeatStartedEvent]; ok {
+		c.serverHeartbeatStartedEvent = append(c.serverHeartbeatStartedEvent, evt)
+	}
+
+	c.addEventsCount(serverHeartbeatStartedEvent)
+}
+
+func (c *clientEntity) processServerHeartbeatSucceededEvent(evt *event.ServerHeartbeatSucceededEvent) {
+	c.eventProcessMu.Lock()
+	defer c.eventProcessMu.Unlock()
+
+	if !c.getRecordEvents() {
+		return
+	}
+
+	if _, ok := c.observedEvents[serverHeartbeatSucceededEvent]; ok {
+		c.serverHeartbeatSucceeded = append(c.serverHeartbeatSucceeded, evt)
+	}
+
+	c.addEventsCount(serverHeartbeatSucceededEvent)
+}
+
+func (c *clientEntity) processTopologyDescriptionChangedEvent(evt *event.TopologyDescriptionChangedEvent) {
+	c.eventProcessMu.Lock()
+	defer c.eventProcessMu.Unlock()
+
+	if !c.getRecordEvents() {
+		return
+	}
+
+	if _, ok := c.observedEvents[topologyDescriptionChangedEvent]; ok {
+		c.topologyDescriptionChanged = append(c.topologyDescriptionChanged, evt)
+	}
+
+	c.addEventsCount(topologyDescriptionChangedEvent)
 }
 
 func (c *clientEntity) setRecordEvents(record bool) {
@@ -370,30 +568,44 @@ func setClientOptionsFromURIOptions(clientOpts *options.ClientOptions, uriOpts b
 	var wcSet bool
 
 	for key, value := range uriOpts {
-		switch key {
+		switch strings.ToLower(key) {
 		case "appname":
 			clientOpts.SetAppName(value.(string))
-		case "heartbeatFrequencyMS":
+		case "connecttimeoutms":
+			clientOpts.SetConnectTimeout(time.Duration(value.(int32)) * time.Millisecond)
+		case "heartbeatfrequencyms":
 			clientOpts.SetHeartbeatInterval(time.Duration(value.(int32)) * time.Millisecond)
-		case "loadBalanced":
+		case "loadbalanced":
 			clientOpts.SetLoadBalanced(value.(bool))
-		case "maxPoolSize":
+		case "maxidletimems":
+			clientOpts.SetMaxConnIdleTime(time.Duration(value.(int32)) * time.Millisecond)
+		case "minpoolsize":
+			clientOpts.SetMinPoolSize(uint64(value.(int32)))
+		case "maxpoolsize":
 			clientOpts.SetMaxPoolSize(uint64(value.(int32)))
-		case "readConcernLevel":
+		case "maxconnecting":
+			clientOpts.SetMaxConnecting(uint64(value.(int32)))
+		case "readconcernlevel":
 			clientOpts.SetReadConcern(readconcern.New(readconcern.Level(value.(string))))
-		case "retryReads":
+		case "retryreads":
 			clientOpts.SetRetryReads(value.(bool))
-		case "retryWrites":
+		case "retrywrites":
 			clientOpts.SetRetryWrites(value.(bool))
-		case "socketTimeoutMS":
+		case "sockettimeoutms":
 			clientOpts.SetSocketTimeout(time.Duration(value.(int32)) * time.Millisecond)
 		case "w":
 			wc.W = value
 			wcSet = true
-		case "waitQueueTimeoutMS":
+		case "waitqueuetimeoutms":
 			return newSkipTestError("the waitQueueTimeoutMS client option is not supported")
-		case "timeoutMS":
+		case "waitqueuesize":
+			return newSkipTestError("the waitQueueSize client option is not supported")
+		case "timeoutms":
 			clientOpts.SetTimeout(time.Duration(value.(int32)) * time.Millisecond)
+		case "serverselectiontimeoutms":
+			clientOpts.SetServerSelectionTimeout(time.Duration(value.(int32)) * time.Millisecond)
+		case "servermonitoringmode":
+			clientOpts.SetServerMonitoringMode(value.(string))
 		default:
 			return fmt.Errorf("unrecognized URI option %s", key)
 		}
@@ -402,7 +614,7 @@ func setClientOptionsFromURIOptions(clientOpts *options.ClientOptions, uriOpts b
 	if wcSet {
 		converted, err := wc.toWriteConcernOption()
 		if err != nil {
-			return fmt.Errorf("error creating write concern: %v", err)
+			return fmt.Errorf("error creating write concern: %w", err)
 		}
 		clientOpts.SetWriteConcern(converted)
 	}

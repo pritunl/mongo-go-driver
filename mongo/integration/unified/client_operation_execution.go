@@ -12,7 +12,7 @@ import (
 	"time"
 
 	"github.com/pritunl/mongo-go-driver/bson/primitive"
-	"github.com/pritunl/mongo-go-driver/internal/testutil/helpers"
+	"github.com/pritunl/mongo-go-driver/internal/bsonutil"
 	"github.com/pritunl/mongo-go-driver/mongo"
 	"github.com/pritunl/mongo-go-driver/mongo/options"
 	"github.com/pritunl/mongo-go-driver/x/bsonx/bsoncore"
@@ -51,13 +51,13 @@ func executeCreateChangeStream(ctx context.Context, operation *operation) (*oper
 		case "collation":
 			collation, err := createCollation(val.Document())
 			if err != nil {
-				return nil, fmt.Errorf("error creating collation: %v", err)
+				return nil, fmt.Errorf("error creating collation: %w", err)
 			}
 			opts.SetCollation(*collation)
 		case "comment":
 			commentString, err := createCommentString(val)
 			if err != nil {
-				return nil, fmt.Errorf("error creating comment: %v", err)
+				return nil, fmt.Errorf("error creating comment: %w", err)
 			}
 			opts.SetComment(commentString)
 		case "fullDocument":
@@ -85,7 +85,7 @@ func executeCreateChangeStream(ctx context.Context, operation *operation) (*oper
 		case "maxAwaitTimeMS":
 			opts.SetMaxAwaitTime(time.Duration(val.Int32()) * time.Millisecond)
 		case "pipeline":
-			pipeline = helpers.RawToInterfaces(helpers.RawToDocuments(val.Array())...)
+			pipeline = bsonutil.RawToInterfaces(bsonutil.RawToDocuments(val.Array())...)
 		case "resumeAfter":
 			opts.SetResumeAfter(val.Document())
 		case "showExpandedEvents":
@@ -112,7 +112,7 @@ func executeCreateChangeStream(ctx context.Context, operation *operation) (*oper
 	// empty result in this case.
 	if operation.ResultEntityID != nil {
 		if err := entities(ctx).addCursorEntity(*operation.ResultEntityID, stream); err != nil {
-			return nil, fmt.Errorf("error storing result as cursor entity: %v", err)
+			return nil, fmt.Errorf("error storing result as cursor entity: %w", err)
 		}
 	}
 	return newEmptyResult(), nil

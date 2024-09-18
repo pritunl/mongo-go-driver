@@ -13,7 +13,7 @@ import (
 	"time"
 
 	"github.com/pritunl/mongo-go-driver/bson"
-	"github.com/pritunl/mongo-go-driver/internal/testutil/assert"
+	"github.com/pritunl/mongo-go-driver/internal/assert"
 	"github.com/pritunl/mongo-go-driver/mongo"
 	"github.com/pritunl/mongo-go-driver/mongo/integration/mtest"
 	"github.com/pritunl/mongo-go-driver/mongo/options"
@@ -24,7 +24,6 @@ func TestMongosPinning(t *testing.T) {
 	mtOpts := mtest.NewOptions().Topologies(mtest.Sharded).MinServerVersion("4.1").CreateClient(false).
 		ClientOptions(clientOpts)
 	mt := mtest.New(t, mtOpts)
-	defer mt.Close()
 
 	if len(options.Client().ApplyURI(mtest.ClusterURI()).Hosts) < 2 {
 		mt.Skip("skipping because at least 2 mongoses are required")

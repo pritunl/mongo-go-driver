@@ -12,8 +12,8 @@ import (
 	"testing"
 
 	"github.com/pritunl/mongo-go-driver/bson"
-	"github.com/pritunl/mongo-go-driver/internal"
-	"github.com/pritunl/mongo-go-driver/internal/testutil/assert"
+	"github.com/pritunl/mongo-go-driver/internal/assert"
+	"github.com/pritunl/mongo-go-driver/internal/handshake"
 	"github.com/pritunl/mongo-go-driver/mongo/address"
 	"github.com/pritunl/mongo-go-driver/x/bsonx/bsoncore"
 	"github.com/pritunl/mongo-go-driver/x/mongo/driver/drivertest"
@@ -60,7 +60,7 @@ func TestSpeculativeX509(t *testing.T) {
 			numResponses, len(conn.Written))
 		hello, err := drivertest.GetCommandFromQueryWireMessage(<-conn.Written)
 		assert.Nil(t, err, "error parsing hello command: %v", err)
-		assertCommandName(t, hello, internal.LegacyHello)
+		assertCommandName(t, hello, handshake.LegacyHello)
 
 		authDocVal, err := hello.LookupErr("speculativeAuthenticate")
 		assert.Nil(t, err, "expected command %s to contain 'speculativeAuthenticate'", bson.Raw(hello))
@@ -105,7 +105,7 @@ func TestSpeculativeX509(t *testing.T) {
 			numResponses, len(conn.Written))
 		hello, err := drivertest.GetCommandFromQueryWireMessage(<-conn.Written)
 		assert.Nil(t, err, "error parsing hello command: %v", err)
-		assertCommandName(t, hello, internal.LegacyHello)
+		assertCommandName(t, hello, handshake.LegacyHello)
 		_, err = hello.LookupErr("speculativeAuthenticate")
 		assert.Nil(t, err, "expected command %s to contain 'speculativeAuthenticate'", bson.Raw(hello))
 
@@ -125,7 +125,7 @@ func createSpeculativeX509Handshake() []bsoncore.Document {
 	return []bsoncore.Document{hello}
 }
 
-// createSpeculativeX509Handshake creates the server replies for a handshake + X509 authentication attempt.
+// createRegularX509Handshake creates the server replies for a handshake + X509 authentication attempt.
 // There are two replies:
 //
 // 1. hello reply

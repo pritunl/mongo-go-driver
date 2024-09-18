@@ -13,9 +13,9 @@ import (
 	"path"
 	"testing"
 
-	"github.com/pritunl/mongo-go-driver/internal/testutil/helpers"
+	"github.com/pritunl/mongo-go-driver/internal/require"
+	"github.com/pritunl/mongo-go-driver/internal/spectest"
 	"github.com/pritunl/mongo-go-driver/mongo/options"
-	"github.com/stretchr/testify/require"
 )
 
 type credential struct {
@@ -105,7 +105,7 @@ func mapInterfaceToString(m map[string]interface{}) map[string]string {
 
 // Test case for all connection string spec tests.
 func TestAuthSpec(t *testing.T) {
-	for _, file := range helpers.FindJSONFilesInDir(t, authTestsDir) {
+	for _, file := range spectest.FindJSONFilesInDir(t, authTestsDir) {
 		runTestsInFile(t, authTestsDir, file)
 	}
 }

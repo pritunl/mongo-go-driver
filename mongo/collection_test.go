@@ -11,7 +11,7 @@ import (
 	"testing"
 
 	"github.com/pritunl/mongo-go-driver/bson"
-	"github.com/pritunl/mongo-go-driver/internal/testutil/assert"
+	"github.com/pritunl/mongo-go-driver/internal/assert"
 	"github.com/pritunl/mongo-go-driver/mongo/options"
 	"github.com/pritunl/mongo-go-driver/mongo/readconcern"
 	"github.com/pritunl/mongo-go-driver/mongo/readpref"
@@ -206,7 +206,7 @@ func TestCollection(t *testing.T) {
 		_, err = coll.BulkWrite(bgCtx, []WriteModel{nil})
 		assert.Equal(t, ErrNilDocument, err, "expected error %v, got %v", ErrNilDocument, err)
 
-		aggErr := errors.New("can only transform slices and arrays into aggregation pipelines, but got invalid")
+		aggErr := errors.New("can only marshal slices and arrays into aggregation pipelines, but got invalid")
 		_, err = coll.Aggregate(bgCtx, nil)
 		assert.Equal(t, aggErr, err, "expected error %v, got %v", aggErr, err)
 

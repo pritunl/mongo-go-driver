@@ -14,7 +14,8 @@ import (
 	"time"
 
 	"github.com/pritunl/mongo-go-driver/bson"
-	"github.com/pritunl/mongo-go-driver/internal/testutil/assert"
+	"github.com/pritunl/mongo-go-driver/internal/assert"
+	"github.com/pritunl/mongo-go-driver/internal/require"
 	"github.com/pritunl/mongo-go-driver/mongo"
 	"github.com/pritunl/mongo-go-driver/mongo/integration/mtest"
 	"github.com/pritunl/mongo-go-driver/mongo/options"
@@ -22,7 +23,6 @@ import (
 
 func TestLoadBalancerSupport(t *testing.T) {
 	mt := mtest.New(t, mtest.NewOptions().Topologies(mtest.LoadBalanced).CreateClient(false))
-	defer mt.Close()
 
 	mt.Run("RunCommandCursor pins to a connection", func(mt *mtest.T) {
 		// The LB spec tests cover the behavior for cursors created by CRUD operations, but RunCommandCursor is
@@ -81,21 +81,51 @@ func TestLoadBalancerSupport(t *testing.T) {
 			assertErrorHasInfo(mt, err, 1, 0, 0)
 		})
 		mt.RunOpts("transactions", maxPoolSizeMtOpts, func(mt *mtest.T) {
-			sess, err := mt.Client.StartSession()
-			assert.Nil(mt, err, "StartSession error: %v", err)
-			defer sess.EndSession(context.Background())
-			sessCtx := mongo.NewSessionContext(context.Background(), sess)
+			{
+				sess, err := mt.Client.StartSession()
+				assert.Nil(mt, err, "StartSession error: %v", err)
+				defer sess.EndSession(context.Background())
+				ctx := mongo.NewSessionContext(context.Background(), sess)
 
-			// Start a transaction and perform one transactional operation to pin a connection.
-			err = sess.StartTransaction()
-			assert.Nil(mt, err, "StartTransaction error: %v", err)
-			_, err = mt.Coll.InsertOne(sessCtx, bson.M{"x": 1})
-			assert.Nil(mt, err, "InsertOne error: %v", err)
+				// Start a transaction and perform one transactional operation to pin a connection.
+				err = sess.StartTransaction()
+				assert.Nil(mt, err, "StartTransaction error: %v", err)
+				_, err = mt.Coll.InsertOne(ctx, bson.M{"x": 1})
+				assert.Nil(mt, err, "InsertOne error: %v", err)
+			}
 
 			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Millisecond)
 			defer cancel()
-			_, err = mt.Coll.InsertOne(ctx, bson.M{"x": 1})
+			_, err := mt.Coll.InsertOne(ctx, bson.M{"x": 1})
 			assertErrorHasInfo(mt, err, 0, 1, 0)
+		})
+
+		// GODRIVER-2867: Test that connections are unpinned from transactions
+		// when the transaction session is ended. Create a Client with
+		// maxPoolSize=1 and expect that it can start and commit 5 transactions
+		// with that 1 connection.
+		mt.RunOpts("transaction connections are unpinned", maxPoolSizeMtOpts, func(mt *mtest.T) {
+			{
+				ctx, cancel := context.WithTimeout(context.Background(), 1*time.Minute)
+				defer cancel()
+
+				for i := 0; i < 5; i++ {
+					sess, err := mt.Client.StartSession()
+					require.NoError(mt, err, "StartSession error")
+
+					err = sess.StartTransaction()
+					require.NoError(mt, err, "StartTransaction error")
+
+					ctx := mongo.NewSessionContext(ctx, sess)
+					_, err = mt.Coll.InsertOne(ctx, bson.M{"x": 1})
+					assert.NoError(mt, err, "InsertOne error")
+
+					err = sess.CommitTransaction(ctx)
+					assert.NoError(mt, err, "CommitTransaction error")
+
+					sess.EndSession(ctx)
+				}
+			}
 		})
 	})
 }

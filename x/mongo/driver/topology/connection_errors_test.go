@@ -15,7 +15,7 @@ import (
 	"net"
 	"testing"
 
-	"github.com/pritunl/mongo-go-driver/internal/testutil/assert"
+	"github.com/pritunl/mongo-go-driver/internal/assert"
 	"github.com/pritunl/mongo-go-driver/mongo/address"
 	"github.com/pritunl/mongo-go-driver/x/mongo/driver/auth"
 )

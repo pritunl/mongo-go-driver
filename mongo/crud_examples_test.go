@@ -8,6 +8,7 @@ package mongo_test
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"sync"
@@ -387,7 +388,7 @@ func ExampleCollection_FindOne() {
 	if err != nil {
 		// ErrNoDocuments means that the filter did not match any documents in
 		// the collection.
-		if err == mongo.ErrNoDocuments {
+		if errors.Is(err, mongo.ErrNoDocuments) {
 			return
 		}
 		log.Fatal(err)
@@ -413,7 +414,7 @@ func ExampleCollection_FindOneAndDelete() {
 	if err != nil {
 		// ErrNoDocuments means that the filter did not match any documents in
 		// the collection.
-		if err == mongo.ErrNoDocuments {
+		if errors.Is(err, mongo.ErrNoDocuments) {
 			return
 		}
 		log.Fatal(err)
@@ -442,7 +443,7 @@ func ExampleCollection_FindOneAndReplace() {
 	if err != nil {
 		// ErrNoDocuments means that the filter did not match any documents in
 		// the collection.
-		if err == mongo.ErrNoDocuments {
+		if errors.Is(err, mongo.ErrNoDocuments) {
 			return
 		}
 		log.Fatal(err)
@@ -471,7 +472,7 @@ func ExampleCollection_FindOneAndUpdate() {
 	if err != nil {
 		// ErrNoDocuments means that the filter did not match any documents in
 		// the collection.
-		if err == mongo.ErrNoDocuments {
+		if errors.Is(err, mongo.ErrNoDocuments) {
 			return
 		}
 		log.Fatal(err)
@@ -625,16 +626,17 @@ func ExampleWithSession() {
 	err = mongo.WithSession(
 		context.TODO(),
 		sess,
-		func(sessCtx mongo.SessionContext) error {
-			// Use sessCtx as the Context parameter for InsertOne and FindOne so
-			// both operations are run under the new Session.
+		func(ctx mongo.SessionContext) error {
+			// Use the mongo.SessionContext as the Context parameter for
+			// InsertOne and FindOne so both operations are run under the new
+			// Session.
 
 			if err := sess.StartTransaction(); err != nil {
 				return err
 			}
 
 			coll := client.Database("db").Collection("coll")
-			res, err := coll.InsertOne(sessCtx, bson.D{{"x", 1}})
+			res, err := coll.InsertOne(ctx, bson.D{{"x", 1}})
 			if err != nil {
 				// Abort the transaction after an error. Use
 				// context.Background() to ensure that the abort can complete
@@ -646,7 +648,7 @@ func ExampleWithSession() {
 
 			var result bson.M
 			err = coll.FindOne(
-				sessCtx,
+				ctx,
 				bson.D{{"_id", res.InsertedID}},
 			).Decode(result)
 			if err != nil {
@@ -681,28 +683,29 @@ func ExampleClient_UseSessionWithOptions() {
 	err := client.UseSessionWithOptions(
 		context.TODO(),
 		opts,
-		func(sessCtx mongo.SessionContext) error {
-			// Use sessCtx as the Context parameter for InsertOne and FindOne so
-			// both operations are run under the new Session.
+		func(ctx mongo.SessionContext) error {
+			// Use the mongo.SessionContext as the Context parameter for
+			// InsertOne and FindOne so both operations are run under the new
+			// Session.
 
-			if err := sessCtx.StartTransaction(); err != nil {
+			if err := ctx.StartTransaction(); err != nil {
 				return err
 			}
 
 			coll := client.Database("db").Collection("coll")
-			res, err := coll.InsertOne(sessCtx, bson.D{{"x", 1}})
+			res, err := coll.InsertOne(ctx, bson.D{{"x", 1}})
 			if err != nil {
 				// Abort the transaction after an error. Use
 				// context.Background() to ensure that the abort can complete
 				// successfully even if the context passed to mongo.WithSession
 				// is changed to have a timeout.
-				_ = sessCtx.AbortTransaction(context.Background())
+				_ = ctx.AbortTransaction(context.Background())
 				return err
 			}
 
 			var result bson.M
 			err = coll.FindOne(
-				sessCtx,
+				ctx,
 				bson.D{{"_id", res.InsertedID}},
 			).Decode(result)
 			if err != nil {
@@ -710,7 +713,7 @@ func ExampleClient_UseSessionWithOptions() {
 				// context.Background() to ensure that the abort can complete
 				// successfully even if the context passed to mongo.WithSession
 				// is changed to have a timeout.
-				_ = sessCtx.AbortTransaction(context.Background())
+				_ = ctx.AbortTransaction(context.Background())
 				return err
 			}
 			fmt.Println(result)
@@ -718,7 +721,7 @@ func ExampleClient_UseSessionWithOptions() {
 			// Use context.Background() to ensure that the commit can complete
 			// successfully even if the context passed to mongo.WithSession is
 			// changed to have a timeout.
-			return sessCtx.CommitTransaction(context.Background())
+			return ctx.CommitTransaction(context.Background())
 		})
 	if err != nil {
 		log.Fatal(err)
@@ -748,20 +751,20 @@ func ExampleClient_StartSession_withTransaction() {
 		SetReadPreference(readpref.PrimaryPreferred())
 	result, err := sess.WithTransaction(
 		context.TODO(),
-		func(sessCtx mongo.SessionContext) (interface{}, error) {
+		func(ctx mongo.SessionContext) (interface{}, error) {
 			// Use the mongo.SessionContext as the Context parameter for
 			// InsertOne and FindOne so both operations are run in the same
 			// transaction.
 
 			coll := client.Database("db").Collection("coll")
-			res, err := coll.InsertOne(sessCtx, bson.D{{"x", 1}})
+			res, err := coll.InsertOne(ctx, bson.D{{"x", 1}})
 			if err != nil {
 				return nil, err
 			}
 
 			var result bson.M
 			err = coll.FindOne(
-				sessCtx,
+				ctx,
 				bson.D{{"_id", res.InsertedID}},
 			).Decode(result)
 			if err != nil {
@@ -785,16 +788,17 @@ func ExampleNewSessionContext() {
 		panic(err)
 	}
 	defer sess.EndSession(context.TODO())
-	sessCtx := mongo.NewSessionContext(context.TODO(), sess)
+	ctx := mongo.NewSessionContext(context.TODO(), sess)
 
-	// Start a transaction and sessCtx as the Context parameter to InsertOne and
-	// FindOne so both operations will be run in the transaction.
+	// Start a transaction and use the mongo.SessionContext as the Context
+	// parameter for InsertOne and FindOne so both operations are run in the
+	// transaction.
 	if err = sess.StartTransaction(); err != nil {
 		panic(err)
 	}
 
 	coll := client.Database("db").Collection("coll")
-	res, err := coll.InsertOne(sessCtx, bson.D{{"x", 1}})
+	res, err := coll.InsertOne(ctx, bson.D{{"x", 1}})
 	if err != nil {
 		// Abort the transaction after an error. Use context.Background() to
 		// ensure that the abort can complete successfully even if the context
@@ -805,7 +809,7 @@ func ExampleNewSessionContext() {
 
 	var result bson.M
 	err = coll.FindOne(
-		sessCtx,
+		ctx,
 		bson.D{{"_id", res.InsertedID}},
 	).Decode(&result)
 	if err != nil {
@@ -1070,4 +1074,86 @@ func ExampleIndexView_List() {
 		log.Fatal(err)
 	}
 	fmt.Println(results)
+}
+
+func ExampleCollection_Find_primitiveRegex() {
+	ctx := context.TODO()
+	clientOptions := options.Client().ApplyURI("mongodb://localhost:27017")
+
+	// Connect to a mongodb server.
+	client, err := mongo.Connect(ctx, clientOptions)
+	if err != nil {
+		panic(err)
+	}
+
+	defer func() { _ = client.Disconnect(ctx) }()
+
+	type Pet struct {
+		Type string `bson:"type"`
+		Name string `bson:"name"`
+	}
+
+	// Create a slice of documents to insert. We will lookup a subset of
+	// these documents using regex.
+	toInsert := []interface{}{
+		Pet{Type: "cat", Name: "Mo"},
+		Pet{Type: "dog", Name: "Loki"},
+	}
+
+	coll := client.Database("test").Collection("test")
+
+	if _, err := coll.InsertMany(ctx, toInsert); err != nil {
+		panic(err)
+	}
+
+	// Create a filter to find a document with key "name" and any value that
+	// starts with letter "m". Use the "i" option to indicate
+	// case-insensitivity.
+	filter := bson.D{{"name", primitive.Regex{Pattern: "^m", Options: "i"}}}
+
+	_, err = coll.Find(ctx, filter)
+	if err != nil {
+		panic(err)
+	}
+}
+
+func ExampleCollection_Find_regex() {
+	ctx := context.TODO()
+	clientOptions := options.Client().ApplyURI("mongodb://localhost:27017")
+
+	// Connect to a mongodb server.
+	client, err := mongo.Connect(ctx, clientOptions)
+	if err != nil {
+		panic(err)
+	}
+
+	defer func() { _ = client.Disconnect(ctx) }()
+
+	type Pet struct {
+		Type string `bson:"type"`
+		Name string `bson:"name"`
+	}
+
+	// Create a slice of documents to insert. We will lookup a subset of
+	// these documents using regex.
+	toInsert := []interface{}{
+		Pet{Type: "cat", Name: "Mo"},
+		Pet{Type: "dog", Name: "Loki"},
+	}
+
+	coll := client.Database("test").Collection("test")
+
+	if _, err := coll.InsertMany(ctx, toInsert); err != nil {
+		panic(err)
+	}
+
+	// Create a filter to find a document with key "name" and any value that
+	// starts with letter "m". Use the "i" option to indicate
+	// case-insensitivity.
+	filter := bson.D{{"name", bson.D{{"$regex", "^m"}, {"$options", "i"}}}}
+
+	_, err = coll.Find(ctx, filter)
+	if err != nil {
+		panic(err)
+	}
 }

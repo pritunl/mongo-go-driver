@@ -8,14 +8,17 @@ package integration
 
 import (
 	"context"
+	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/pritunl/mongo-go-driver/bson"
 	"github.com/pritunl/mongo-go-driver/bson/primitive"
 	"github.com/pritunl/mongo-go-driver/event"
-	"github.com/pritunl/mongo-go-driver/internal/testutil/assert"
-	"github.com/pritunl/mongo-go-driver/internal/testutil/monitor"
+	"github.com/pritunl/mongo-go-driver/internal/assert"
+	"github.com/pritunl/mongo-go-driver/internal/eventtest"
+	"github.com/pritunl/mongo-go-driver/internal/require"
 	"github.com/pritunl/mongo-go-driver/mongo"
 	"github.com/pritunl/mongo-go-driver/mongo/integration/mtest"
 	"github.com/pritunl/mongo-go-driver/mongo/options"
@@ -46,7 +49,6 @@ const (
 func TestChangeStream_Standalone(t *testing.T) {
 	mtOpts := mtest.NewOptions().MinServerVersion(minChangeStreamVersion).CreateClient(false).Topologies(mtest.Single)
 	mt := mtest.New(t, mtOpts)
-	defer mt.Close()
 
 	mt.Run("no custom standalone error", func(mt *mtest.T) {
 		_, err := mt.Coll.Watch(context.Background(), mongo.Pipeline{})
@@ -58,7 +60,6 @@ func TestChangeStream_Standalone(t *testing.T) {
 func TestChangeStream_ReplicaSet(t *testing.T) {
 	mtOpts := mtest.NewOptions().MinServerVersion(minChangeStreamVersion).CreateClient(false).Topologies(mtest.ReplicaSet)
 	mt := mtest.New(t, mtOpts)
-	defer mt.Close()
 
 	mt.Run("first stage is $changeStream", func(mt *mtest.T) {
 		// first stage in the aggregate pipeline must be $changeStream
@@ -98,6 +99,7 @@ func TestChangeStream_ReplicaSet(t *testing.T) {
 		// cause an event to occur so the resume token is updated
 		generateEvents(mt, 1)
 		assert.True(mt, cs.Next(context.Background()), "expected next to return true, got false")
+		assert.Equal(mt, 0, cs.RemainingBatchLength())
 		firstToken := cs.ResumeToken()
 
 		// cause an event on a different collection than the one being watched so the server's PBRT is updated
@@ -373,6 +375,7 @@ func TestChangeStream_ReplicaSet(t *testing.T) {
 
 						// Iterate over one event to get resume token
 						assert.True(mt, cs.Next(context.Background()), "expected Next to return true, got false")
+						assert.Equal(mt, numEvents-1, cs.RemainingBatchLength())
 						token := cs.ResumeToken()
 						closeStream(cs)
 
@@ -514,7 +517,7 @@ func TestChangeStream_ReplicaSet(t *testing.T) {
 		// by ChangeStream when executing an aggregate.
 
 		mt.Run("errors are processed for SDAM on initial aggregate", func(mt *mtest.T) {
-			tpm := monitor.NewTestPoolMonitor()
+			tpm := eventtest.NewTestPoolMonitor()
 			mt.ResetClient(options.Client().
 				SetPoolMonitor(tpm.PoolMonitor).
 				SetWriteConcern(mtest.MajorityWc).
@@ -537,7 +540,7 @@ func TestChangeStream_ReplicaSet(t *testing.T) {
 			assert.True(mt, tpm.IsPoolCleared(), "expected pool to be cleared after non-timeout network error but was not")
 		})
 		mt.Run("errors are processed for SDAM on getMore", func(mt *mtest.T) {
-			tpm := monitor.NewTestPoolMonitor()
+			tpm := eventtest.NewTestPoolMonitor()
 			mt.ResetClient(options.Client().
 				SetPoolMonitor(tpm.PoolMonitor).
 				SetWriteConcern(mtest.MajorityWc).
@@ -567,7 +570,7 @@ func TestChangeStream_ReplicaSet(t *testing.T) {
 			assert.True(mt, tpm.IsPoolCleared(), "expected pool to be cleared after non-timeout network error but was not")
 		})
 		mt.Run("errors are processed for SDAM on retried aggregate", func(mt *mtest.T) {
-			tpm := monitor.NewTestPoolMonitor()
+			tpm := eventtest.NewTestPoolMonitor()
 			mt.ResetClient(options.Client().
 				SetPoolMonitor(tpm.PoolMonitor).
 				SetRetryReads(true))
@@ -681,6 +684,131 @@ func TestChangeStream_ReplicaSet(t *testing.T) {
 		acfc, ok := acfcVal.BooleanOK()
 		assert.True(mt, ok, "expected field 'allChangesForCluster' to be boolean, got %v", acfcVal.Type.String())
 		assert.False(mt, acfc, "expected field 'allChangesForCluster' to be false, got %v", acfc)
+	})
+
+	withBSONOpts := mtest.NewOptions().ClientOptions(
+		options.Client().SetBSONOptions(&options.BSONOptions{
+			UseJSONStructTags: true,
+		}))
+	mt.RunOpts("with BSONOptions", withBSONOpts, func(mt *mtest.T) {
+		cs, err := mt.Coll.Watch(context.Background(), mongo.Pipeline{})
+		require.NoError(mt, err, "Watch error")
+		defer closeStream(cs)
+
+		type myDocument struct {
+			A string `json:"x"`
+		}
+
+		var wg sync.WaitGroup
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			_, err := mt.Coll.InsertOne(context.Background(), myDocument{A: "foo"})
+			require.NoError(mt, err, "InsertOne error")
+		}()
+
+		cs.Next(context.Background())
+
+		var got struct {
+			FullDocument myDocument `bson:"fullDocument"`
+		}
+		err = cs.Decode(&got)
+		require.NoError(mt, err, "Decode error")
+
+		want := myDocument{
+			A: "foo",
+		}
+		assert.Equal(mt, want, got.FullDocument, "expected and actual Decode results are different")
+
+		wg.Wait()
+	})
+
+	splitLargeChangesCollOpts := options.
+		CreateCollection().
+		SetChangeStreamPreAndPostImages(bson.M{"enabled": true})
+
+	splitLargeChangesOpts := mtOpts.
+		MinServerVersion("6.0.9").
+		CreateClient(true).
+		CollectionCreateOptions(splitLargeChangesCollOpts)
+
+	mt.RunOpts("split large changes", splitLargeChangesOpts, func(mt *mtest.T) {
+		type idValue struct {
+			ID    int32  `bson:"_id"`
+			Value string `bson:"value"`
+		}
+
+		doc := idValue{
+			ID:    1,
+			Value: "q" + strings.Repeat("q", 10*1024*1024),
+		}
+
+		// Insert the document
+		_, err := mt.Coll.InsertOne(context.Background(), doc)
+		require.NoError(t, err, "failed to insert idValue")
+
+		// Watch for change events
+		pipeline := mongo.Pipeline{
+			{{"$changeStreamSplitLargeEvent", bson.D{}}},
+		}
+
+		opts := options.ChangeStream().SetFullDocument(options.Required)
+
+		cs, err := mt.Coll.Watch(context.Background(), pipeline, opts)
+		require.NoError(t, err, "failed to watch collection")
+
+		defer closeStream(cs)
+
+		var wg sync.WaitGroup
+		wg.Add(1)
+
+		go func() {
+			defer wg.Done()
+
+			filter := bson.D{{"_id", int32(1)}}
+			update := bson.D{{"$set", bson.D{{"value", "z" + strings.Repeat("q", 10*1024*1024)}}}}
+
+			_, err := mt.Coll.UpdateOne(context.Background(), filter, update)
+			require.NoError(mt, err, "failed to update idValue")
+		}()
+
+		nextCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		t.Cleanup(cancel)
+
+		type splitEvent struct {
+			Fragment int32 `bson:"fragment"`
+			Of       int32 `bson:"of"`
+		}
+
+		got := struct {
+			SplitEvent splitEvent `bson:"splitEvent"`
+		}{}
+
+		cs.Next(nextCtx)
+
+		err = cs.Decode(&got)
+		require.NoError(mt, err, "failed to decode first iteration")
+
+		want := splitEvent{
+			Fragment: 1,
+			Of:       2,
+		}
+
+		assert.Equal(mt, want, got.SplitEvent, "expected and actual Decode results are different")
+
+		cs.Next(nextCtx)
+
+		err = cs.Decode(&got)
+		require.NoError(mt, err, "failed to decoded second iteration")
+
+		want = splitEvent{
+			Fragment: 2,
+			Of:       2,
+		}
+
+		assert.Equal(mt, want, got.SplitEvent, "expected and actual decode results are different")
+
+		wg.Wait()
 	})
 }
 

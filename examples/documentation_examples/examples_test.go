@@ -15,10 +15,10 @@ import (
 	"time"
 
 	"github.com/pritunl/mongo-go-driver/examples/documentation_examples"
+	"github.com/pritunl/mongo-go-driver/internal/assert"
 	"github.com/pritunl/mongo-go-driver/mongo"
 	"github.com/pritunl/mongo-go-driver/mongo/integration/mtest"
 	"github.com/pritunl/mongo-go-driver/mongo/options"
-	"github.com/stretchr/testify/require"
 )
 
 func TestMain(m *testing.M) {
@@ -45,7 +45,7 @@ func TestDocumentationExamples(t *testing.T) {
 	defer cancel()
 
 	client, err := mongo.Connect(context.Background(), options.Client().ApplyURI(mtest.ClusterURI()))
-	require.NoError(t, err)
+	assert.NoError(t, err)
 	defer client.Disconnect(ctx)
 
 	db := client.Database("documentation_examples")
@@ -88,7 +88,6 @@ func TestDocumentationExamples(t *testing.T) {
 	})
 
 	mt := mtest.New(t)
-	defer mt.Close()
 
 	// Stable API is supported in 5.0+
 	mtOpts := mtest.NewOptions().MinServerVersion("5.0")

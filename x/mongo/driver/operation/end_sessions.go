@@ -11,6 +11,7 @@ import (
 	"errors"
 
 	"github.com/pritunl/mongo-go-driver/event"
+	"github.com/pritunl/mongo-go-driver/internal/driverutil"
 	"github.com/pritunl/mongo-go-driver/mongo/description"
 	"github.com/pritunl/mongo-go-driver/x/bsonx/bsoncore"
 	"github.com/pritunl/mongo-go-driver/x/mongo/driver"
@@ -59,11 +60,12 @@ func (es *EndSessions) Execute(ctx context.Context) error {
 		Deployment:        es.deployment,
 		Selector:          es.selector,
 		ServerAPI:         es.serverAPI,
+		Name:              driverutil.EndSessionsOp,
 	}.Execute(ctx)
 
 }
 
-func (es *EndSessions) command(dst []byte, desc description.SelectedServer) ([]byte, error) {
+func (es *EndSessions) command(dst []byte, _ description.SelectedServer) ([]byte, error) {
 	if es.sessionIDs != nil {
 		dst = bsoncore.AppendArrayElement(dst, "endSessions", es.sessionIDs)
 	}

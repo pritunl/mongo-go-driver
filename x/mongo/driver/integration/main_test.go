@@ -7,19 +7,27 @@
 package integration
 
 import (
+	"context"
 	"flag"
 	"fmt"
 	"os"
 	"strings"
 	"testing"
 
+	"github.com/pritunl/mongo-go-driver/internal/integtest"
+	"github.com/pritunl/mongo-go-driver/internal/require"
+	"github.com/pritunl/mongo-go-driver/mongo/description"
+	"github.com/pritunl/mongo-go-driver/mongo/writeconcern"
+	"github.com/pritunl/mongo-go-driver/x/bsonx/bsoncore"
+	"github.com/pritunl/mongo-go-driver/x/mongo/driver"
 	"github.com/pritunl/mongo-go-driver/x/mongo/driver/auth"
 	"github.com/pritunl/mongo-go-driver/x/mongo/driver/connstring"
+	"github.com/pritunl/mongo-go-driver/x/mongo/driver/operation"
 	"github.com/pritunl/mongo-go-driver/x/mongo/driver/topology"
 )
 
 var host *string
-var connectionString connstring.ConnString
+var connectionString *connstring.ConnString
 var dbName string
 
 func TestMain(m *testing.M) {
@@ -61,8 +69,7 @@ func autherr(t *testing.T, err error) {
 	t.Helper()
 	switch e := err.(type) {
 	case topology.ConnectionError:
-		_, ok := e.Wrapped.(*auth.Error)
-		if !ok {
+		if _, ok := e.Wrapped.(*auth.Error); !ok {
 			t.Fatal("Expected auth error and didn't get one")
 		}
 	case *auth.Error:
@@ -110,4 +117,40 @@ func addCompressorToURI(uri string) string {
 	}
 
 	return uri + "compressors=" + comp
+}
+
+// runCommand runs an arbitrary command on a given database of target server
+func runCommand(s driver.Server, db string, cmd bsoncore.Document) (bsoncore.Document, error) {
+	op := operation.NewCommand(cmd).
+		Database(db).Deployment(driver.SingleServerDeployment{Server: s})
+	err := op.Execute(context.Background())
+	res := op.Result()
+	return res, err
+}
+
+// dropCollection drops the collection in the test cluster.
+func dropCollection(t *testing.T, dbname, colname string) {
+	err := operation.NewCommand(bsoncore.BuildDocument(nil, bsoncore.AppendStringElement(nil, "drop", colname))).
+		Database(dbname).ServerSelector(description.WriteSelector()).Deployment(integtest.Topology(t)).
+		Execute(context.Background())
+	if de, ok := err.(driver.Error); err != nil && !(ok && de.NamespaceNotFound()) {
+		require.NoError(t, err)
+	}
+}
+
+// autoInsertDocs inserts the docs into the test cluster.
+func autoInsertDocs(t *testing.T, writeConcern *writeconcern.WriteConcern, docs ...bsoncore.Document) {
+	insertDocs(t, integtest.DBName(t), integtest.ColName(t), writeConcern, docs...)
+}
+
+// insertDocs inserts the docs into the test cluster.
+func insertDocs(t *testing.T, dbname, colname string, writeConcern *writeconcern.WriteConcern, docs ...bsoncore.Document) {
+	err := operation.NewInsert(docs...).
+		Collection(colname).
+		Database(dbname).
+		Deployment(integtest.Topology(t)).
+		ServerSelector(description.WriteSelector()).
+		WriteConcern(writeConcern).
+		Execute(context.Background())
+	require.NoError(t, err)
 }

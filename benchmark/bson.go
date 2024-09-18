@@ -12,7 +12,6 @@ import (
 	"path/filepath"
 
 	"github.com/pritunl/mongo-go-driver/bson"
-	"github.com/pritunl/mongo-go-driver/x/bsonx"
 )
 
 const (
@@ -25,12 +24,12 @@ const (
 
 // utility functions for the bson benchmarks
 
-func loadSourceDocument(pathParts ...string) (bsonx.Doc, error) {
+func loadSourceDocument(pathParts ...string) (bson.D, error) {
 	data, err := ioutil.ReadFile(filepath.Join(pathParts...))
 	if err != nil {
 		return nil, err
 	}
-	doc := bsonx.Doc{}
+	var doc bson.D
 	err = bson.UnmarshalExtJSON(data, true, &doc)
 	if err != nil {
 		return nil, err
@@ -48,7 +47,7 @@ func loadSourceRaw(pathParts ...string) (bson.Raw, error) {
 	if err != nil {
 		return nil, err
 	}
-	raw, err := doc.MarshalBSON()
+	raw, err := bson.Marshal(doc)
 	if err != nil {
 		return nil, err
 	}

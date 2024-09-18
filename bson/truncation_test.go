@@ -10,7 +10,7 @@ import (
 	"testing"
 
 	"github.com/pritunl/mongo-go-driver/bson/bsoncodec"
-	"github.com/stretchr/testify/assert"
+	"github.com/pritunl/mongo-go-driver/internal/assert"
 )
 
 type inputArgs struct {

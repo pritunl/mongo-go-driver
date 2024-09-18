@@ -14,9 +14,9 @@ import (
 	"time"
 
 	"github.com/pritunl/mongo-go-driver/event"
-	"github.com/pritunl/mongo-go-driver/internal/testutil/assert"
+	"github.com/pritunl/mongo-go-driver/internal/assert"
+	"github.com/pritunl/mongo-go-driver/internal/require"
 	"github.com/pritunl/mongo-go-driver/x/mongo/driver/operation"
-	"github.com/stretchr/testify/require"
 )
 
 func TestCMAPProse(t *testing.T) {
@@ -128,8 +128,7 @@ func TestCMAPProse(t *testing.T) {
 				_, err := pool.checkOut(context.Background())
 				assert.NotNil(t, err, "expected checkOut() error, got nil")
 
-				assert.Equal(t, 1, len(created), "expected 1 opened events, got %d", len(created))
-				assert.Equal(t, 1, len(closed), "expected 1 closed events, got %d", len(closed))
+				assertConnectionCounts(t, pool, 1, 1)
 			})
 			t.Run("pool is empty", func(t *testing.T) {
 				// If a checkOut() has to create a new connection and that connection encounters an
@@ -242,7 +241,7 @@ func TestCMAPProse(t *testing.T) {
 				conns = conns[2:]
 				assertConnectionCounts(t, pool, numConns, 0)
 
-				// Close and assert that events are published for all conections.
+				// Close and assert that events are published for all connections.
 				pool.close(context.Background())
 				assertConnectionCounts(t, pool, numConns, numConns)
 

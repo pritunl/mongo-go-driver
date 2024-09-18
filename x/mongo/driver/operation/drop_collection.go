@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/pritunl/mongo-go-driver/event"
+	"github.com/pritunl/mongo-go-driver/internal/driverutil"
 	"github.com/pritunl/mongo-go-driver/mongo/description"
 	"github.com/pritunl/mongo-go-driver/mongo/writeconcern"
 	"github.com/pritunl/mongo-go-driver/x/bsonx/bsoncore"
@@ -102,11 +103,12 @@ func (dc *DropCollection) Execute(ctx context.Context) error {
 		WriteConcern:      dc.writeConcern,
 		ServerAPI:         dc.serverAPI,
 		Timeout:           dc.timeout,
+		Name:              driverutil.DropOp,
 	}.Execute(ctx)
 
 }
 
-func (dc *DropCollection) command(dst []byte, desc description.SelectedServer) ([]byte, error) {
+func (dc *DropCollection) command(dst []byte, _ description.SelectedServer) ([]byte, error) {
 	dst = bsoncore.AppendStringElement(dst, "drop", dc.collection)
 	return dst, nil
 }

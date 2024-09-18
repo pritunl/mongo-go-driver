@@ -17,8 +17,8 @@ import (
 	"testing"
 
 	"github.com/pritunl/mongo-go-driver/bson"
-	"github.com/pritunl/mongo-go-driver/internal/testutil/assert"
-	"github.com/pritunl/mongo-go-driver/internal/testutil/helpers"
+	"github.com/pritunl/mongo-go-driver/internal/assert"
+	"github.com/pritunl/mongo-go-driver/internal/bsonutil"
 	"github.com/pritunl/mongo-go-driver/mongo"
 	"github.com/pritunl/mongo-go-driver/mongo/integration/mtest"
 )
@@ -96,7 +96,6 @@ func runCrudFile(t *testing.T, file string) {
 	assert.Nil(t, err, "UnmarshalExtJSONWithRegistry error: %v", err)
 
 	mt := mtest.New(t, mtest.NewOptions().MinServerVersion(testFile.MinServerVersion).MaxServerVersion(testFile.MaxServerVersion))
-	defer mt.Close()
 
 	// Skip test if serverless requirements are not met.
 	if err = verifyServerlessConstraint(mt, testFile.Serverless); err != nil {
@@ -112,7 +111,7 @@ func runCrudFile(t *testing.T, file string) {
 
 func runCrudTest(mt *mtest.T, test crudTest, testFile crudTestFile) {
 	if len(testFile.Data) > 0 {
-		docs := helpers.RawToInterfaces(testFile.Data...)
+		docs := bsonutil.RawToInterfaces(testFile.Data...)
 		_, err := mt.Coll.InsertMany(context.Background(), docs)
 		assert.Nil(mt, err, "InsertMany error: %v", err)
 	}

@@ -10,11 +10,11 @@ import (
 	"context"
 	"errors"
 
-	"github.com/pritunl/mongo-go-driver/internal"
-	"github.com/pritunl/mongo-go-driver/internal/testutil"
+	"github.com/pritunl/mongo-go-driver/bson"
+	"github.com/pritunl/mongo-go-driver/internal/handshake"
+	"github.com/pritunl/mongo-go-driver/internal/integtest"
 	"github.com/pritunl/mongo-go-driver/mongo"
 	"github.com/pritunl/mongo-go-driver/mongo/options"
-	"github.com/pritunl/mongo-go-driver/x/bsonx"
 )
 
 const (
@@ -25,7 +25,7 @@ const (
 )
 
 func getClientDB(ctx context.Context) (*mongo.Database, error) {
-	cs, err := testutil.GetConnString()
+	cs, err := integtest.GetConnString()
 	if err != nil {
 		return nil, err
 	}
@@ -37,7 +37,7 @@ func getClientDB(ctx context.Context) (*mongo.Database, error) {
 		return nil, err
 	}
 
-	db := client.Database(testutil.GetDBName(cs))
+	db := client.Database(integtest.GetDBName(cs))
 	return db, nil
 }
 
@@ -49,19 +49,19 @@ func SingleRunCommand(ctx context.Context, tm TimerManager, iters int) error {
 	if err != nil {
 		return err
 	}
-	defer db.Client().Disconnect(ctx)
+	defer func() { _ = db.Client().Disconnect(ctx) }()
 
-	cmd := bsonx.Doc{{internal.LegacyHelloLowercase, bsonx.Boolean(true)}}
+	cmd := bson.D{{handshake.LegacyHelloLowercase, true}}
 
 	tm.ResetTimer()
 	for i := 0; i < iters; i++ {
-		var doc bsonx.Doc
+		var doc bson.D
 		err := db.RunCommand(ctx, cmd).Decode(&doc)
 		if err != nil {
 			return err
 		}
 		// read the document and then throw it away to prevent
-		out, err := doc.MarshalBSON()
+		out, err := bson.Marshal(doc)
 		if err != nil {
 			return err
 		}
@@ -93,33 +93,33 @@ func SingleFindOneByID(ctx context.Context, tm TimerManager, iters int) error {
 		return err
 	}
 	coll := db.Collection("corpus")
+
 	for i := 0; i < iters; i++ {
-		id := int32(i)
-		res, err := coll.InsertOne(ctx, doc.Set("_id", bsonx.Int32(id)))
+		idDoc := make(bson.D, 0, len(doc)+1)
+		idDoc = append(idDoc, bson.E{"_id", i})
+		idDoc = append(idDoc, doc...)
+		res, err := coll.InsertOne(ctx, idDoc)
 		if err != nil {
 			return err
 		}
 		if res.InsertedID == nil {
-			return errors.New("insert failed")
+			return errors.New("no inserted ID returned")
 		}
 	}
 
 	tm.ResetTimer()
 
 	for i := 0; i < iters; i++ {
-		res := coll.FindOne(ctx, bsonx.Doc{{"_id", bsonx.Int32(int32(i))}})
-		if res == nil {
-			return errors.New("find one query produced nil result")
+		var res bson.D
+		err := coll.FindOne(ctx, bson.D{{"_id", i}}).Decode(&res)
+		if err != nil {
+			return err
 		}
 	}
 
 	tm.StopTimer()
 
-	if err = db.Drop(ctx); err != nil {
-		return err
-	}
-
-	return nil
+	return db.Drop(ctx)
 }
 
 func singleInsertCase(ctx context.Context, tm TimerManager, iters int, data string) error {
@@ -130,7 +130,7 @@ func singleInsertCase(ctx context.Context, tm TimerManager, iters int, data stri
 	if err != nil {
 		return err
 	}
-	defer db.Client().Disconnect(ctx)
+	defer func() { _ = db.Client().Disconnect(ctx) }()
 
 	db = db.Client().Database("perftest")
 	if err = db.Drop(ctx); err != nil {
@@ -142,7 +142,7 @@ func singleInsertCase(ctx context.Context, tm TimerManager, iters int, data stri
 		return err
 	}
 
-	err = db.RunCommand(ctx, bsonx.Doc{{"create", bsonx.String("corpus")}}).Err()
+	err = db.RunCommand(ctx, bson.D{{"create", "corpus"}}).Err()
 	if err != nil {
 		return err
 	}
@@ -155,18 +155,11 @@ func singleInsertCase(ctx context.Context, tm TimerManager, iters int, data stri
 		if _, err = coll.InsertOne(ctx, doc); err != nil {
 			return err
 		}
-
-		// TODO: should be remove after resolving GODRIVER-468
-		_ = doc.Delete("_id")
 	}
 
 	tm.StopTimer()
 
-	if err = db.Drop(ctx); err != nil {
-		return err
-	}
-
-	return nil
+	return db.Drop(ctx)
 }
 
 func SingleInsertSmallDocument(ctx context.Context, tm TimerManager, iters int) error {

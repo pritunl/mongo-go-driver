@@ -8,7 +8,7 @@ package integration
 
 import (
 	"context"
-	"os"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -16,12 +16,11 @@ import (
 	"github.com/pritunl/mongo-go-driver/bson"
 	"github.com/pritunl/mongo-go-driver/bson/primitive"
 	"github.com/pritunl/mongo-go-driver/event"
-	"github.com/pritunl/mongo-go-driver/internal/testutil/assert"
+	"github.com/pritunl/mongo-go-driver/internal/assert"
 	"github.com/pritunl/mongo-go-driver/mongo"
 	"github.com/pritunl/mongo-go-driver/mongo/integration/mtest"
 	"github.com/pritunl/mongo-go-driver/mongo/options"
 	"github.com/pritunl/mongo-go-driver/mongo/writeconcern"
-	"github.com/pritunl/mongo-go-driver/x/bsonx"
 	"github.com/pritunl/mongo-go-driver/x/bsonx/bsoncore"
 )
 
@@ -42,7 +41,6 @@ var (
 
 func TestCollection(t *testing.T) {
 	mt := mtest.New(t, mtest.NewOptions().CreateClient(false))
-	defer mt.Close()
 
 	mt.RunOpts("insert one", noClientOpts, func(mt *mtest.T) {
 		mt.Run("success", func(mt *mtest.T) {
@@ -120,7 +118,11 @@ func TestCollection(t *testing.T) {
 		})
 	})
 	mt.RunOpts("insert many", noClientOpts, func(mt *mtest.T) {
+		mt.Parallel()
+
 		mt.Run("success", func(mt *mtest.T) {
+			mt.Parallel()
+
 			want1 := int32(11)
 			want2 := int32(12)
 			docs := []interface{}{
@@ -137,11 +139,7 @@ func TestCollection(t *testing.T) {
 			assert.Equal(mt, want2, res.InsertedIDs[2], "expected inserted ID %v, got %v", want2, res.InsertedIDs[2])
 		})
 		mt.Run("batches", func(mt *mtest.T) {
-			// TODO(GODRIVER-425): remove this as part a larger project to refactor integration and other longrunning
-			// TODO tasks.
-			if os.Getenv("EVR_TASK_ID") == "" {
-				mt.Skip("skipping long running integration test outside of evergreen")
-			}
+			mt.Parallel()
 
 			const (
 				megabyte = 10 * 10 * 10 * 10 * 10 * 10
@@ -167,11 +165,7 @@ func TestCollection(t *testing.T) {
 			assert.Equal(mt, numDocs, len(res.InsertedIDs), "expected %v inserted IDs, got %v", numDocs, len(res.InsertedIDs))
 		})
 		mt.Run("large document batches", func(mt *mtest.T) {
-			// TODO(GODRIVER-425): remove this as part a larger project to refactor integration and other longrunning
-			// TODO tasks.
-			if os.Getenv("EVR_TASK_ID") == "" {
-				mt.Skip("skipping long running integration test outside of evergreen")
-			}
+			mt.Parallel()
 
 			docs := []interface{}{create16MBDocument(mt), create16MBDocument(mt)}
 			_, err := mt.Coll.InsertMany(context.Background(), docs)
@@ -182,6 +176,8 @@ func TestCollection(t *testing.T) {
 			assert.Equal(mt, "insert", evt.CommandName, "expected 'insert' event, got '%v'", evt.CommandName)
 		})
 		mt.RunOpts("write error", noClientOpts, func(mt *mtest.T) {
+			mt.Parallel()
+
 			docs := []interface{}{
 				bson.D{{"_id", primitive.NewObjectID()}},
 				bson.D{{"_id", primitive.NewObjectID()}},
@@ -212,7 +208,9 @@ func TestCollection(t *testing.T) {
 			}
 		})
 		mt.Run("return only inserted ids", func(mt *mtest.T) {
-			id := int32(11)
+			mt.Parallel()
+
+			id := int32(15)
 			docs := []interface{}{
 				bson.D{{"_id", id}},
 				bson.D{{"_id", id}},
@@ -249,11 +247,7 @@ func TestCollection(t *testing.T) {
 			}
 		})
 		mt.Run("writeError index", func(mt *mtest.T) {
-			// TODO(GODRIVER-425): remove this as part a larger project to refactor integration and other longrunning
-			// TODO tasks.
-			if os.Getenv("EVR_TASK_ID") == "" {
-				mt.Skip("skipping long running integration test outside of evergreen")
-			}
+			mt.Parallel()
 
 			// force multiple batches
 			numDocs := 700000
@@ -342,7 +336,7 @@ func TestCollection(t *testing.T) {
 			initCollection(mt, mt.Coll)
 			indexView := mt.Coll.Indexes()
 			_, err := indexView.CreateOne(context.Background(), mongo.IndexModel{
-				Keys: bsonx.Doc{{"x", bsonx.Int32(1)}},
+				Keys: bson.D{{"x", 1}},
 			})
 			assert.Nil(mt, err, "CreateOne error: %v", err)
 
@@ -411,7 +405,7 @@ func TestCollection(t *testing.T) {
 			initCollection(mt, mt.Coll)
 			indexView := mt.Coll.Indexes()
 			_, err := indexView.CreateOne(context.Background(), mongo.IndexModel{
-				Keys: bsonx.Doc{{"x", bsonx.Int32(1)}},
+				Keys: bson.D{{"x", 1}},
 			})
 			assert.Nil(mt, err, "index CreateOne error: %v", err)
 
@@ -497,8 +491,6 @@ func TestCollection(t *testing.T) {
 			doc := bson.D{{"$set", bson.D{{"x", 2}}}}
 			docBytes, err := bson.Marshal(doc)
 			assert.Nil(mt, err, "Marshal error: %v", err)
-			xUpdate := bsonx.Doc{{"x", bsonx.Int32(2)}}
-			xDoc := bsonx.Doc{{"$set", bsonx.Document(xUpdate)}}
 
 			testCases := []struct {
 				name   string
@@ -507,7 +499,6 @@ func TestCollection(t *testing.T) {
 				{"bsoncore Document", bsoncore.Document(docBytes)},
 				{"bson Raw", bson.Raw(docBytes)},
 				{"bson D", doc},
-				{"bsonx Document", xDoc},
 				{"byte slice", docBytes},
 			}
 			for _, tc := range testCases {
@@ -712,8 +703,8 @@ func TestCollection(t *testing.T) {
 			assert.NotNil(mt, res.UpsertedID, "expected upserted ID, got nil")
 		})
 		mt.Run("write error", func(mt *mtest.T) {
-			filter := bsonx.Doc{{"_id", bsonx.String("foo")}}
-			replacement := bsonx.Doc{{"_id", bsonx.Double(3.14159)}}
+			filter := bson.D{{"_id", "foo"}}
+			replacement := bson.D{{"_id", 3.14159}}
 			_, err := mt.Coll.InsertOne(context.Background(), filter)
 			assert.Nil(mt, err, "InsertOne error: %v", err)
 
@@ -846,7 +837,7 @@ func TestCollection(t *testing.T) {
 					initCollection(mt, mt.Coll)
 					indexView := mt.Coll.Indexes()
 					_, err := indexView.CreateOne(context.Background(), mongo.IndexModel{
-						Keys: bsonx.Doc{{"x", bsonx.Int32(1)}},
+						Keys: bson.D{{"x", 1}},
 					})
 					assert.Nil(mt, err, "CreateOne error: %v", err)
 
@@ -1118,7 +1109,7 @@ func TestCollection(t *testing.T) {
 		})
 		mt.Run("found", func(mt *mtest.T) {
 			initCollection(mt, mt.Coll)
-			res, err := mt.Coll.FindOne(context.Background(), bson.D{{"x", 1}}).DecodeBytes()
+			res, err := mt.Coll.FindOne(context.Background(), bson.D{{"x", 1}}).Raw()
 			assert.Nil(mt, err, "FindOne error: %v", err)
 
 			x, err := res.LookupErr("x")
@@ -1160,7 +1151,7 @@ func TestCollection(t *testing.T) {
 				SetShowRecordID(false).
 				SetSkip(0).
 				SetSort(bson.D{{"x", int32(1)}})
-			res, err := mt.Coll.FindOne(context.Background(), bson.D{}, opts).DecodeBytes()
+			res, err := mt.Coll.FindOne(context.Background(), bson.D{}, opts).Raw()
 			assert.Nil(mt, err, "FindOne error: %v", err)
 
 			x, err := res.LookupErr("x")
@@ -1216,11 +1207,11 @@ func TestCollection(t *testing.T) {
 					initCollection(mt, mt.Coll)
 					indexView := mt.Coll.Indexes()
 					_, err := indexView.CreateOne(context.Background(), mongo.IndexModel{
-						Keys: bsonx.Doc{{"x", bsonx.Int32(1)}},
+						Keys: bson.D{{"x", 1}},
 					})
 					assert.Nil(mt, err, "CreateOne error: %v", err)
 
-					res, err := mt.Coll.FindOne(context.Background(), bson.D{{"x", 1}}, tc.opts).DecodeBytes()
+					res, err := mt.Coll.FindOne(context.Background(), bson.D{{"x", 1}}, tc.opts).Raw()
 
 					if tc.errParam != "" {
 						expErr := mongo.ErrMapForOrderedArgument{tc.errParam}
@@ -1241,7 +1232,7 @@ func TestCollection(t *testing.T) {
 	mt.RunOpts("find one and delete", noClientOpts, func(mt *mtest.T) {
 		mt.Run("found", func(mt *mtest.T) {
 			initCollection(mt, mt.Coll)
-			res, err := mt.Coll.FindOneAndDelete(context.Background(), bson.D{{"x", 3}}).DecodeBytes()
+			res, err := mt.Coll.FindOneAndDelete(context.Background(), bson.D{{"x", 3}}).Raw()
 			assert.Nil(mt, err, "FindOneAndDelete error: %v", err)
 
 			elem, err := res.LookupErr("x")
@@ -1276,11 +1267,11 @@ func TestCollection(t *testing.T) {
 					initCollection(mt, mt.Coll)
 					indexView := mt.Coll.Indexes()
 					_, err := indexView.CreateOne(context.Background(), mongo.IndexModel{
-						Keys: bsonx.Doc{{"x", bsonx.Int32(1)}},
+						Keys: bson.D{{"x", 1}},
 					})
 					assert.Nil(mt, err, "CreateOne error: %v", err)
 
-					res, err := mt.Coll.FindOneAndDelete(context.Background(), bson.D{{"x", 1}}, tc.opts).DecodeBytes()
+					res, err := mt.Coll.FindOneAndDelete(context.Background(), bson.D{{"x", 1}}, tc.opts).Raw()
 
 					if tc.errParam != "" {
 						expErr := mongo.ErrMapForOrderedArgument{tc.errParam}
@@ -1312,7 +1303,7 @@ func TestCollection(t *testing.T) {
 			filter := bson.D{{"x", 3}}
 			replacement := bson.D{{"y", 3}}
 
-			res, err := mt.Coll.FindOneAndReplace(context.Background(), filter, replacement).DecodeBytes()
+			res, err := mt.Coll.FindOneAndReplace(context.Background(), filter, replacement).Raw()
 			assert.Nil(mt, err, "FindOneAndReplace error: %v", err)
 			elem, err := res.LookupErr("x")
 			assert.Nil(mt, err, "x not found in result %v", res)
@@ -1352,11 +1343,11 @@ func TestCollection(t *testing.T) {
 					initCollection(mt, mt.Coll)
 					indexView := mt.Coll.Indexes()
 					_, err := indexView.CreateOne(context.Background(), mongo.IndexModel{
-						Keys: bsonx.Doc{{"x", bsonx.Int32(1)}},
+						Keys: bson.D{{"x", 1}},
 					})
 					assert.Nil(mt, err, "CreateOne error: %v", err)
 
-					res, err := mt.Coll.FindOneAndReplace(context.Background(), bson.D{{"x", 1}}, bson.D{{"y", 3}}, tc.opts).DecodeBytes()
+					res, err := mt.Coll.FindOneAndReplace(context.Background(), bson.D{{"x", 1}}, bson.D{{"y", 3}}, tc.opts).Raw()
 
 					if tc.errParam != "" {
 						expErr := mongo.ErrMapForOrderedArgument{tc.errParam}
@@ -1390,7 +1381,7 @@ func TestCollection(t *testing.T) {
 			filter := bson.D{{"x", 3}}
 			update := bson.D{{"$set", bson.D{{"x", 6}}}}
 
-			res, err := mt.Coll.FindOneAndUpdate(context.Background(), filter, update).DecodeBytes()
+			res, err := mt.Coll.FindOneAndUpdate(context.Background(), filter, update).Raw()
 			assert.Nil(mt, err, "FindOneAndUpdate error: %v", err)
 			elem, err := res.LookupErr("x")
 			assert.Nil(mt, err, "x not found in result %v", res)
@@ -1434,11 +1425,11 @@ func TestCollection(t *testing.T) {
 					initCollection(mt, mt.Coll)
 					indexView := mt.Coll.Indexes()
 					_, err := indexView.CreateOne(context.Background(), mongo.IndexModel{
-						Keys: bsonx.Doc{{"x", bsonx.Int32(1)}},
+						Keys: bson.D{{"x", 1}},
 					})
 					assert.Nil(mt, err, "CreateOne error: %v", err)
 
-					res, err := mt.Coll.FindOneAndUpdate(context.Background(), bson.D{{"x", 1}}, bson.D{{"$set", bson.D{{"x", 6}}}}, tc.opts).DecodeBytes()
+					res, err := mt.Coll.FindOneAndUpdate(context.Background(), bson.D{{"x", 1}}, bson.D{{"$set", bson.D{{"x", 6}}}}, tc.opts).Raw()
 
 					if tc.errParam != "" {
 						expErr := mongo.ErrMapForOrderedArgument{tc.errParam}
@@ -1707,7 +1698,7 @@ func TestCollection(t *testing.T) {
 				mongo.NewInsertOneModel().SetDocument(bson.D{{"x", 1}}),
 			}
 			_, err := mt.Coll.BulkWrite(context.Background(), models)
-			if err != mongo.ErrUnacknowledgedWrite {
+			if !errors.Is(err, mongo.ErrUnacknowledgedWrite) {
 				// Use a direct comparison rather than assert.Equal because assert.Equal will compare the error strings,
 				// so the assertion would succeed even if the error had not been wrapped.
 				mt.Fatalf("expected BulkWrite error %v, got %v", mongo.ErrUnacknowledgedWrite, err)
@@ -1889,7 +1880,7 @@ func testAggregateWithOptions(mt *mtest.T, createIndex bool, opts *options.Aggre
 	if createIndex {
 		indexView := mt.Coll.Indexes()
 		_, err := indexView.CreateOne(context.Background(), mongo.IndexModel{
-			Keys: bsonx.Doc{{"x", bsonx.Int32(1)}},
+			Keys: bson.D{{"x", 1}},
 		})
 		assert.Nil(mt, err, "CreateOne error: %v", err)
 	}

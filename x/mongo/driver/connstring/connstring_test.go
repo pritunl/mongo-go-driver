@@ -11,9 +11,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/pritunl/mongo-go-driver/internal/assert"
+	"github.com/pritunl/mongo-go-driver/internal/require"
 	"github.com/pritunl/mongo-go-driver/x/mongo/driver/connstring"
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 )
 
 func TestAppName(t *testing.T) {

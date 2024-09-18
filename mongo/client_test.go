@@ -16,13 +16,14 @@ import (
 
 	"github.com/pritunl/mongo-go-driver/bson"
 	"github.com/pritunl/mongo-go-driver/event"
-	"github.com/pritunl/mongo-go-driver/internal/testutil"
-	"github.com/pritunl/mongo-go-driver/internal/testutil/assert"
+	"github.com/pritunl/mongo-go-driver/internal/assert"
+	"github.com/pritunl/mongo-go-driver/internal/integtest"
 	"github.com/pritunl/mongo-go-driver/mongo/options"
 	"github.com/pritunl/mongo-go-driver/mongo/readconcern"
 	"github.com/pritunl/mongo-go-driver/mongo/readpref"
 	"github.com/pritunl/mongo-go-driver/mongo/writeconcern"
 	"github.com/pritunl/mongo-go-driver/tag"
+	"github.com/pritunl/mongo-go-driver/x/mongo/driver/mongocrypt"
 	"github.com/pritunl/mongo-go-driver/x/mongo/driver/session"
 	"github.com/pritunl/mongo-go-driver/x/mongo/driver/topology"
 )
@@ -32,7 +33,7 @@ var bgCtx = context.Background()
 func setupClient(opts ...*options.ClientOptions) *Client {
 	if len(opts) == 0 {
 		clientOpts := options.Client().ApplyURI("mongodb://localhost:27017")
-		testutil.AddTestServerAPIVersion(clientOpts)
+		integtest.AddTestServerAPIVersion(clientOpts)
 		opts = append(opts, clientOpts)
 	}
 	client, _ := NewClient(opts...)
@@ -75,7 +76,7 @@ func TestClient(t *testing.T) {
 		client.sessionPool = &session.Pool{}
 
 		_, err := client.Watch(bgCtx, nil)
-		watchErr := errors.New("can only transform slices and arrays into aggregation pipelines, but got invalid")
+		watchErr := errors.New("can only marshal slices and arrays into aggregation pipelines, but got invalid")
 		assert.Equal(t, watchErr, err, "expected error %v, got %v", watchErr, err)
 
 		_, err = client.ListDatabases(bgCtx, nil)
@@ -317,7 +318,7 @@ func TestClient(t *testing.T) {
 		})
 	})
 	t.Run("endSessions", func(t *testing.T) {
-		cs := testutil.ConnString(t)
+		cs := integtest.ConnString(t)
 		originalBatchSize := endSessionsBatchSize
 		endSessionsBatchSize = 2
 		defer func() {
@@ -335,6 +336,9 @@ func TestClient(t *testing.T) {
 		for _, tc := range testCases {
 			if testing.Short() {
 				t.Skip("skipping integration test in short mode")
+			}
+			if os.Getenv("DOCKER_RUNNING") != "" {
+				t.Skip("skipping test in docker environment")
 			}
 
 			t.Run(tc.name, func(t *testing.T) {
@@ -355,7 +359,7 @@ func TestClient(t *testing.T) {
 				}
 				clientOpts := options.Client().ApplyURI(cs.Original).SetReadPreference(readpref.Primary()).
 					SetWriteConcern(writeconcern.New(writeconcern.WMajority())).SetMonitor(cmdMonitor)
-				testutil.AddTestServerAPIVersion(clientOpts)
+				integtest.AddTestServerAPIVersion(clientOpts)
 				client, err := Connect(bgCtx, clientOpts)
 				assert.Nil(t, err, "Connect error: %v", err)
 				defer func() {
@@ -442,6 +446,9 @@ func TestClient(t *testing.T) {
 		cryptSharedLibPath := os.Getenv("CRYPT_SHARED_LIB_PATH")
 		if cryptSharedLibPath == "" {
 			t.Skip("CRYPT_SHARED_LIB_PATH not set, skipping")
+		}
+		if len(mongocrypt.Version()) == 0 {
+			t.Skip("Not built with cse flag")
 		}
 
 		testCases := []struct {

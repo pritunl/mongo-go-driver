@@ -12,7 +12,7 @@ import (
 	"strings"
 
 	"github.com/pritunl/mongo-go-driver/bson"
-	"github.com/pritunl/mongo-go-driver/internal/testutil"
+	"github.com/pritunl/mongo-go-driver/internal/integtest"
 	"github.com/pritunl/mongo-go-driver/mongo"
 	"github.com/pritunl/mongo-go-driver/mongo/integration/mtest"
 	"github.com/pritunl/mongo-go-driver/mongo/options"
@@ -25,7 +25,7 @@ var (
 	}
 )
 
-// terminateOpenSessions executes a killAllSessions command to ensure that sesssions left open on the server by a test
+// terminateOpenSessions executes a killAllSessions command to ensure that sessions left open on the server by a test
 // do not cause future tests to hang.
 func terminateOpenSessions(ctx context.Context) error {
 	if mtest.CompareServerVersions(mtest.ServerVersion(), "3.6") < 0 {
@@ -70,7 +70,7 @@ func performDistinctWorkaround(ctx context.Context) error {
 			_, err := newColl.Distinct(ctx, "x", bson.D{})
 			if err != nil {
 				ns := fmt.Sprintf("%s.%s", coll.Database().Name(), coll.Name())
-				return fmt.Errorf("error running distinct for collection %q: %v", ns, err)
+				return fmt.Errorf("error running distinct for collection %q: %w", ns, err)
 			}
 		}
 
@@ -84,13 +84,13 @@ func runCommandOnHost(ctx context.Context, host string, commandFn func(context.C
 	clientOpts := options.Client().
 		ApplyURI(mtest.ClusterURI()).
 		SetHosts([]string{host})
-	testutil.AddTestServerAPIVersion(clientOpts)
+	integtest.AddTestServerAPIVersion(clientOpts)
 
 	client, err := mongo.Connect(ctx, clientOpts)
 	if err != nil {
-		return fmt.Errorf("error creating client to host %q: %v", host, err)
+		return fmt.Errorf("error creating client to host %q: %w", host, err)
 	}
-	defer client.Disconnect(ctx)
+	defer func() { _ = client.Disconnect(ctx) }()
 
 	return commandFn(ctx, client)
 }
@@ -98,7 +98,7 @@ func runCommandOnHost(ctx context.Context, host string, commandFn func(context.C
 func runAgainstAllMongoses(ctx context.Context, commandFn func(context.Context, *mongo.Client) error) error {
 	for _, host := range mtest.ClusterConnString().Hosts {
 		if err := runCommandOnHost(ctx, host, commandFn); err != nil {
-			return fmt.Errorf("error executing callback against host %q: %v", host, err)
+			return fmt.Errorf("error executing callback against host %q: %w", host, err)
 		}
 	}
 	return nil

@@ -10,37 +10,82 @@ import (
 	"context"
 	"fmt"
 	"io/ioutil"
+	"os"
 	"path"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/pritunl/mongo-go-driver/bson"
-	"github.com/pritunl/mongo-go-driver/internal/testutil/assert"
-	"github.com/pritunl/mongo-go-driver/internal/testutil/helpers"
+	"github.com/pritunl/mongo-go-driver/internal/assert"
+	"github.com/pritunl/mongo-go-driver/internal/spectest"
 	"github.com/pritunl/mongo-go-driver/mongo"
 	"github.com/pritunl/mongo-go-driver/mongo/integration/mtest"
 )
 
 var (
-	skippedTestDescriptions = map[string]struct{}{
+	skippedTests = map[string]string{
 		// GODRIVER-1773: This test runs a "find" with limit=4 and batchSize=3. It expects batchSize values of three for
 		// the "find" and one for the "getMore", but we send three for both.
-		"A successful find event with a getmore and the server kills the cursor (<= 4.4)": {},
-	}
-)
+		"A successful find event with a getmore and the server kills the cursor (<= 4.4)": "See GODRIVER-1773",
 
-const (
-	lowHeartbeatFrequency int32 = 50
+		// GODRIVER-2577: The following spec tests require canceling ops immediately, but the current logic clears pools
+		// and cancels in-progress ops after two the heartbeat failures.
+		"Connection pool clear uses interruptInUseConnections=true after monitor timeout":                      "Godriver clears after multiple timeout",
+		"Error returned from connection pool clear with interruptInUseConnections=true is retryable":           "Godriver clears after multiple timeout",
+		"Error returned from connection pool clear with interruptInUseConnections=true is retryable for write": "Godriver clears after multiple timeout",
+
+		// TODO(GODRIVER-2843): Fix and unskip these test cases.
+		"Find operation with snapshot":                                      "Test fails frequently. See GODRIVER-2843",
+		"Write commands with snapshot session do not affect snapshot reads": "Test fails frequently. See GODRIVER-2843",
+
+		// TODO(GODRIVER-3043): Avoid Appending Write/Read Concern in Atlas Search
+		// Index Helper Commands.
+		"dropSearchIndex ignores read and write concern":       "Sync GODRIVER-3074, but skip testing bug GODRIVER-3043",
+		"listSearchIndexes ignores read and write concern":     "Sync GODRIVER-3074, but skip testing bug GODRIVER-3043",
+		"updateSearchIndex ignores the read and write concern": "Sync GODRIVER-3074, but skip testing bug GODRIVER-3043",
+
+		// TODO(GODRIVER-3137): Implement Gossip cluster time"
+		"unpin after TransientTransactionError error on commit": "Implement GODRIVER-3137",
+
+		// TODO(GODRIVER-3034): Drivers should unpin connections when ending a session
+		"unpin on successful abort":                                   "Implement GODRIVER-3034",
+		"unpin after non-transient error on abort":                    "Implement GODRIVER-3034",
+		"unpin after TransientTransactionError error on abort":        "Implement GODRIVER-3034",
+		"unpin when a new transaction is started":                     "Implement GODRIVER-3034",
+		"unpin when a non-transaction write operation uses a session": "Implement GODRIVER-3034",
+		"unpin when a non-transaction read operation uses a session":  "Implement GODRIVER-3034",
+
+		// DRIVERS-2722: Setting "maxTimeMS" on a command that creates a cursor
+		// also limits the lifetime of the cursor. That may be surprising to
+		// users, so omit "maxTimeMS" from operations that return user-managed
+		// cursors.
+		"timeoutMS can be overridden for a find":                                               "maxTimeMS is disabled on find and aggregate. See DRIVERS-2722.",
+		"timeoutMS can be configured for an operation - find on collection":                    "maxTimeMS is disabled on find and aggregate. See DRIVERS-2722.",
+		"timeoutMS can be configured for an operation - aggregate on collection":               "maxTimeMS is disabled on find and aggregate. See DRIVERS-2722.",
+		"timeoutMS can be configured for an operation - aggregate on database":                 "maxTimeMS is disabled on find and aggregate. See DRIVERS-2722.",
+		"operation is retried multiple times for non-zero timeoutMS - find on collection":      "maxTimeMS is disabled on find and aggregate. See DRIVERS-2722.",
+		"operation is retried multiple times for non-zero timeoutMS - aggregate on collection": "maxTimeMS is disabled on find and aggregate. See DRIVERS-2722.",
+		"operation is retried multiple times for non-zero timeoutMS - aggregate on database":   "maxTimeMS is disabled on find and aggregate. See DRIVERS-2722.",
+	}
+
+	skippedServerlessProxyTests = map[string]string{
+		"errors during the initial connection hello are ignored": "Serverless Proxy does not support failpoints on hello (see GODRIVER-3157)",
+	}
+
+	logMessageValidatorTimeout = 10 * time.Millisecond
+	lowHeartbeatFrequency      = 50 * time.Millisecond
 )
 
 // TestCase holds and runs a unified spec test case
 type TestCase struct {
-	Description       string             `bson:"description"`
-	RunOnRequirements []mtest.RunOnBlock `bson:"runOnRequirements"`
-	SkipReason        *string            `bson:"skipReason"`
-	Operations        []*operation       `bson:"operations"`
-	ExpectedEvents    []*expectedEvents  `bson:"expectEvents"`
-	Outcome           []*collectionData  `bson:"outcome"`
+	Description       string               `bson:"description"`
+	RunOnRequirements []mtest.RunOnBlock   `bson:"runOnRequirements"`
+	SkipReason        *string              `bson:"skipReason"`
+	Operations        []*operation         `bson:"operations"`
+	ExpectedEvents    []*expectedEvents    `bson:"expectEvents"`
+	ExpectLogMessages []*clientLogMessages `bson:"expectLogMessages"`
+	Outcome           []*collectionData    `bson:"outcome"`
 
 	initialData     []*collectionData
 	createEntities  []map[string]*entityOptions
@@ -85,7 +130,7 @@ type TestFile struct {
 // runTestDirectory runs the files in the given directory, which must be in the unified spec format, with
 // expectValidFail determining whether the tests should expect to pass or fail
 func runTestDirectory(t *testing.T, directoryPath string, expectValidFail bool) {
-	for _, filename := range helpers.FindJSONFilesInDir(t, directoryPath) {
+	for _, filename := range spectest.FindJSONFilesInDir(t, directoryPath) {
 		t.Run(filename, func(t *testing.T) {
 			runTestFile(t, path.Join(directoryPath, filename), expectValidFail)
 		})
@@ -97,13 +142,12 @@ func runTestFile(t *testing.T, filepath string, expectValidFail bool, opts ...*O
 	content, err := ioutil.ReadFile(filepath)
 	assert.Nil(t, err, "ReadFile error for file %q: %v", filepath, err)
 
-	fileReqs, testCases := ParseTestFile(t, content, opts...)
+	fileReqs, testCases := ParseTestFile(t, content, expectValidFail, opts...)
 
 	mtOpts := mtest.NewOptions().
 		RunOn(fileReqs...).
 		CreateClient(false)
 	mt := mtest.New(t, mtOpts)
-	defer mt.Close()
 
 	for _, testCase := range testCases {
 		mtOpts := mtest.NewOptions().
@@ -133,11 +177,11 @@ func runTestFile(t *testing.T, filepath string, expectValidFail bool, opts ...*O
 	}
 }
 
-// ParseTestFile create an array of TestCases from the testJSON json blob
-func ParseTestFile(t *testing.T, testJSON []byte, opts ...*Options) ([]mtest.RunOnBlock, []*TestCase) {
+func parseTestFile(testJSON []byte, opts ...*Options) ([]mtest.RunOnBlock, []*TestCase, error) {
 	var testFile TestFile
-	err := bson.UnmarshalExtJSON(testJSON, false, &testFile)
-	assert.Nil(t, err, "UnmarshalExtJSON error: %v", err)
+	if err := bson.UnmarshalExtJSON(testJSON, false, &testFile); err != nil {
+		return nil, nil, err
+	}
 
 	op := MergeOptions(opts...)
 	for _, testCase := range testFile.TestCases {
@@ -148,7 +192,21 @@ func ParseTestFile(t *testing.T, testJSON []byte, opts ...*Options) ([]mtest.Run
 		testCase.loopDone = make(chan struct{})
 		testCase.killAllSessions = *op.RunKillAllSessions
 	}
-	return testFile.RunOnRequirements, testFile.TestCases
+
+	return testFile.RunOnRequirements, testFile.TestCases, nil
+}
+
+// ParseTestFile create an array of TestCases from the testJSON json blob
+func ParseTestFile(t *testing.T, testJSON []byte, expectValidFail bool, opts ...*Options) ([]mtest.RunOnBlock, []*TestCase) {
+	t.Helper()
+
+	runOnRequirements, testCases, err := parseTestFile(testJSON, opts...)
+
+	if !expectValidFail {
+		assert.NoError(t, err, "error parsing test file")
+	}
+
+	return runOnRequirements, testCases
 }
 
 // GetEntities returns a pointer to the EntityMap for the TestCase. This should not be called until after
@@ -195,15 +253,21 @@ func (tc *TestCase) Run(ls LoggerSkipper) error {
 	if tc.SkipReason != nil {
 		ls.Skipf("skipping for reason: %q", *tc.SkipReason)
 	}
-	if _, ok := skippedTestDescriptions[tc.Description]; ok {
-		ls.Skip("skipping due to known failure")
+	if skipReason, ok := skippedTests[tc.Description]; ok {
+		ls.Skipf("skipping due to known failure: %q", skipReason)
 	}
+	// If we're running against a Serverless Proxy instance, also check the
+	// tests that should be skipped only for Serverless Proxy.
+	if skipReason, ok := skippedServerlessProxyTests[tc.Description]; ok && os.Getenv("IS_SERVERLESS_PROXY") == "true" {
+		ls.Skipf("skipping due to known failure with Serverless Proxy: %q", skipReason)
+	}
+
 	// Validate that we support the schema declared by the test file before attempting to use its contents.
 	if err := checkSchemaVersion(tc.schemaVersion); err != nil {
 		return fmt.Errorf("schema version %q not supported: %v", tc.schemaVersion, err)
 	}
 
-	testCtx := newTestContext(context.Background(), tc.entities)
+	testCtx := newTestContext(context.Background(), tc.entities, tc.ExpectLogMessages, tc.setsFailPoint())
 
 	defer func() {
 		// If anything fails while doing test cleanup, we only log the error because the actual test may have already
@@ -241,16 +305,10 @@ func (tc *TestCase) Run(ls LoggerSkipper) error {
 	// a fail point, set a low heartbeatFrequencyMS value into the URI options map if one is not already present.
 	// This speeds up recovery time for the client if the fail point forces the server to return a state change
 	// error.
-	shouldSetHeartbeatFrequency := tc.setsFailPoint()
 	for idx, entity := range tc.createEntities {
 		for entityType, entityOptions := range entity {
-			if shouldSetHeartbeatFrequency && entityType == "client" {
-				if entityOptions.URIOptions == nil {
-					entityOptions.URIOptions = make(bson.M)
-				}
-				if _, ok := entityOptions.URIOptions["heartbeatFrequencyMS"]; !ok {
-					entityOptions.URIOptions["heartbeatFrequencyMS"] = lowHeartbeatFrequency
-				}
+			if entityType == "client" && hasOperationalFailpoint(testCtx) {
+				entityOptions.setHeartbeatFrequencyMS(lowHeartbeatFrequency)
 			}
 
 			if err := tc.entities.addEntity(testCtx, entityType, entityOptions); err != nil {
@@ -280,6 +338,11 @@ func (tc *TestCase) Run(ls LoggerSkipper) error {
 		}
 	}
 
+	// Create a validator for log messages and start the workers that will
+	// observe log messages as they occur operationally.
+	logMessageValidator := newLogMessageValidator(tc)
+	go startLogValidators(testCtx, logMessageValidator)
+
 	for _, client := range tc.entities.clients() {
 		client.stopListeningForEvents()
 	}
@@ -301,6 +364,22 @@ func (tc *TestCase) Run(ls LoggerSkipper) error {
 				collData.namespace(), idx, err)
 		}
 	}
+
+	{
+		// Create a context with a deadline to use for log message
+		// validation. This will prevent any blocking from test cases
+		// with N messages where only N - K (0 < K < N) messages are
+		// observed.
+		ctx, cancel := context.WithTimeout(testCtx, logMessageValidatorTimeout)
+		defer cancel()
+
+		// For each client, verify that all expected log messages were
+		// received.
+		if err := stopLogValidators(ctx, logMessageValidator); err != nil {
+			return fmt.Errorf("error verifying log messages: %w", err)
+		}
+	}
+
 	return nil
 }
 
@@ -332,8 +411,5 @@ func disableFailPointWithClient(ctx context.Context, fpName string, client *mong
 		{"configureFailPoint", fpName},
 		{"mode", "off"},
 	}
-	if err := client.Database("admin").RunCommand(ctx, cmd).Err(); err != nil {
-		return err
-	}
-	return nil
+	return client.Database("admin").RunCommand(ctx, cmd).Err()
 }

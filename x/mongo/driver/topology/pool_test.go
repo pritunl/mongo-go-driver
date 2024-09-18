@@ -14,9 +14,13 @@ import (
 	"testing"
 	"time"
 
+	"github.com/pritunl/mongo-go-driver/event"
+	"github.com/pritunl/mongo-go-driver/internal/assert"
+	"github.com/pritunl/mongo-go-driver/internal/eventtest"
+	"github.com/pritunl/mongo-go-driver/internal/require"
 	"github.com/pritunl/mongo-go-driver/mongo/address"
+	"github.com/pritunl/mongo-go-driver/x/mongo/driver"
 	"github.com/pritunl/mongo-go-driver/x/mongo/driver/operation"
-	"github.com/stretchr/testify/assert"
 )
 
 func TestPool(t *testing.T) {
@@ -513,7 +517,9 @@ func TestPool(t *testing.T) {
 			time.Sleep(50 * time.Millisecond)
 			c2, err := p.checkOut(context.Background())
 			noerr(t, err)
-			assert.NotEqualf(t, c1, c2, "expected a new connection on 2nd check out after idle timeout expires")
+			// Assert that the connection pointers are not equal. Don't use "assert.NotEqual" because it asserts
+			// non-equality of fields, possibly accessing some fields non-atomically and causing a race condition.
+			assert.True(t, c1 != c2, "expected a new connection on 2nd check out after idle timeout expires")
 			assert.Equalf(t, 2, d.lenopened(), "should have opened 2 connections")
 			assert.Equalf(t, 1, p.totalConnectionCount(), "pool should have 1 total connection")
 
@@ -749,7 +755,7 @@ func TestPool(t *testing.T) {
 				err.(WaitQueueTimeoutError).Wrapped,
 				"expected wrapped error to be a context.DeadlineExceeded")
 
-			// Start a goroutine that closes one of the checked-out conections and checks it in.
+			// Start a goroutine that closes one of the checked-out connections and checks it in.
 			// Expect that the checked-in connection is closed and allows blocked checkOut() to
 			// complete. Assert that the time between checking in the closed connection and when the
 			// checkOut() completes is within 100ms.
@@ -1154,4 +1160,88 @@ func assertConnectionsOpened(t *testing.T, dialer *dialer, count int) {
 		}
 		time.Sleep(100 * time.Millisecond)
 	}
+}
+
+func TestPool_PoolMonitor(t *testing.T) {
+	t.Parallel()
+
+	t.Run("records durations", func(t *testing.T) {
+		t.Parallel()
+
+		cleanup := make(chan struct{})
+		defer close(cleanup)
+
+		// Create a listener that responds to exactly 1 connection. All
+		// subsequent connection requests should fail.
+		addr := bootstrapConnections(t, 1, func(nc net.Conn) {
+			<-cleanup
+			_ = nc.Close()
+		})
+
+		tpm := eventtest.NewTestPoolMonitor()
+		p := newPool(
+			poolConfig{
+				Address:     address.Address(addr.String()),
+				PoolMonitor: tpm.PoolMonitor,
+			},
+			// Add a 10ms delay in the handshake so the test is reliable on
+			// operating systems that can't measure very short durations (e.g.
+			// Windows).
+			WithHandshaker(func(Handshaker) Handshaker {
+				return &testHandshaker{
+					getHandshakeInformation: func(context.Context, address.Address, driver.Connection) (driver.HandshakeInformation, error) {
+						time.Sleep(10 * time.Millisecond)
+						return driver.HandshakeInformation{}, nil
+					},
+				}
+			}))
+
+		err := p.ready()
+		require.NoError(t, err, "ready error")
+
+		// Check out a connection to trigger "ConnectionReady" and
+		// "ConnectionCheckedOut" events.
+		conn, err := p.checkOut(context.Background())
+		require.NoError(t, err, "checkOut error")
+
+		// Close the connection so the next checkOut tries to create a new
+		// connection.
+		err = conn.close()
+		require.NoError(t, err, "close error")
+
+		err = p.checkIn(conn)
+		require.NoError(t, err, "checkIn error")
+
+		// Try to check out another connection to trigger a
+		// "ConnectionCheckOutFailed" event.
+		_, err = p.checkOut(context.Background())
+		require.Error(t, err, "expected a checkOut error")
+
+		p.close(context.Background())
+
+		events := tpm.Events(func(evt *event.PoolEvent) bool {
+			switch evt.Type {
+			case "ConnectionReady", "ConnectionCheckedOut", "ConnectionCheckOutFailed":
+				return true
+			}
+			return false
+		})
+
+		require.Lenf(t, events, 3, "expected there to be 3 pool events")
+
+		assert.Equal(t, events[0].Type, "ConnectionReady")
+		assert.Positive(t,
+			events[0].Duration,
+			"expected ConnectionReady Duration to be set")
+
+		assert.Equal(t, events[1].Type, "ConnectionCheckedOut")
+		assert.Positive(t,
+			events[1].Duration,
+			"expected ConnectionCheckedOut Duration to be set")
+
+		assert.Equal(t, events[2].Type, "ConnectionCheckOutFailed")
+		assert.Positive(t,
+			events[2].Duration,
+			"expected ConnectionCheckOutFailed Duration to be set")
+	})
 }

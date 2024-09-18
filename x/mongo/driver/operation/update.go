@@ -15,6 +15,8 @@ import (
 	"github.com/pritunl/mongo-go-driver/bson"
 	"github.com/pritunl/mongo-go-driver/bson/bsontype"
 	"github.com/pritunl/mongo-go-driver/event"
+	"github.com/pritunl/mongo-go-driver/internal/driverutil"
+	"github.com/pritunl/mongo-go-driver/internal/logger"
 	"github.com/pritunl/mongo-go-driver/mongo/description"
 	"github.com/pritunl/mongo-go-driver/mongo/writeconcern"
 	"github.com/pritunl/mongo-go-driver/x/bsonx/bsoncore"
@@ -44,6 +46,7 @@ type Update struct {
 	serverAPI                *driver.ServerAPIOptions
 	let                      bsoncore.Document
 	timeout                  *time.Duration
+	logger                   *logger.Logger
 }
 
 // Upsert contains the information for an upsert in an Update operation.
@@ -162,6 +165,8 @@ func (u *Update) Execute(ctx context.Context) error {
 		Crypt:             u.crypt,
 		ServerAPI:         u.serverAPI,
 		Timeout:           u.timeout,
+		Logger:            u.logger,
+		Name:              driverutil.UpdateOp,
 	}.Execute(ctx)
 
 }
@@ -397,5 +402,15 @@ func (u *Update) Timeout(timeout *time.Duration) *Update {
 	}
 
 	u.timeout = timeout
+	return u
+}
+
+// Logger sets the logger for this operation.
+func (u *Update) Logger(logger *logger.Logger) *Update {
+	if u == nil {
+		u = new(Update)
+	}
+
+	u.logger = logger
 	return u
 }

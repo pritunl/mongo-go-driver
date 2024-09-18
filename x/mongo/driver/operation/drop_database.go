@@ -11,6 +11,7 @@ import (
 	"errors"
 
 	"github.com/pritunl/mongo-go-driver/event"
+	"github.com/pritunl/mongo-go-driver/internal/driverutil"
 	"github.com/pritunl/mongo-go-driver/mongo/description"
 	"github.com/pritunl/mongo-go-driver/mongo/writeconcern"
 	"github.com/pritunl/mongo-go-driver/x/bsonx/bsoncore"
@@ -53,11 +54,12 @@ func (dd *DropDatabase) Execute(ctx context.Context) error {
 		Selector:       dd.selector,
 		WriteConcern:   dd.writeConcern,
 		ServerAPI:      dd.serverAPI,
+		Name:           driverutil.DropDatabaseOp,
 	}.Execute(ctx)
 
 }
 
-func (dd *DropDatabase) command(dst []byte, desc description.SelectedServer) ([]byte, error) {
+func (dd *DropDatabase) command(dst []byte, _ description.SelectedServer) ([]byte, error) {
 
 	dst = bsoncore.AppendInt32Element(dst, "dropDatabase", 1)
 	return dst, nil

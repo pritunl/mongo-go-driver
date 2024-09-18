@@ -16,8 +16,8 @@ import (
 	"github.com/pritunl/mongo-go-driver/bson"
 	"github.com/pritunl/mongo-go-driver/bson/bsontype"
 	"github.com/pritunl/mongo-go-driver/bson/primitive"
-	"github.com/pritunl/mongo-go-driver/internal"
-	"github.com/pritunl/mongo-go-driver/internal/testutil/assert"
+	"github.com/pritunl/mongo-go-driver/internal/assert"
+	"github.com/pritunl/mongo-go-driver/internal/handshake"
 	"github.com/pritunl/mongo-go-driver/mongo"
 	"github.com/pritunl/mongo-go-driver/mongo/integration/mtest"
 	"github.com/pritunl/mongo-go-driver/mongo/options"
@@ -38,11 +38,10 @@ var (
 
 func TestDatabase(t *testing.T) {
 	mt := mtest.New(t, mtest.NewOptions().CreateClient(false))
-	defer mt.Close()
 
 	mt.RunOpts("run command", noClientOpts, func(mt *mtest.T) {
 		mt.Run("decode raw", func(mt *mtest.T) {
-			res, err := mt.DB.RunCommand(context.Background(), bson.D{{internal.LegacyHello, 1}}).DecodeBytes()
+			res, err := mt.DB.RunCommand(context.Background(), bson.D{{handshake.LegacyHello, 1}}).Raw()
 			assert.Nil(mt, err, "RunCommand error: %v", err)
 
 			ok, err := res.LookupErr("ok")
@@ -50,7 +49,7 @@ func TestDatabase(t *testing.T) {
 			assert.Equal(mt, bson.TypeDouble, ok.Type, "expected ok type %v, got %v", bson.TypeDouble, ok.Type)
 			assert.Equal(mt, 1.0, ok.Double(), "expected ok value 1.0, got %v", ok.Double())
 
-			hello, err := res.LookupErr(internal.LegacyHelloLowercase)
+			hello, err := res.LookupErr(handshake.LegacyHelloLowercase)
 			assert.Nil(mt, err, "legacy hello response field not found in result")
 			assert.Equal(mt, bson.TypeBoolean, hello.Type, "expected hello type %v, got %v", bson.TypeBoolean, hello.Type)
 			assert.True(mt, hello.Boolean(), "expected hello value true, got false")
@@ -76,14 +75,14 @@ func TestDatabase(t *testing.T) {
 
 			runCmdOpts := options.RunCmd().
 				SetReadPreference(readpref.SecondaryPreferred())
-			err := mt.DB.RunCommand(context.Background(), bson.D{{internal.LegacyHello, 1}}, runCmdOpts).Err()
+			err := mt.DB.RunCommand(context.Background(), bson.D{{handshake.LegacyHello, 1}}, runCmdOpts).Err()
 			assert.Nil(mt, err, "RunCommand error: %v", err)
 
 			expected := bson.Raw(bsoncore.NewDocumentBuilder().
 				AppendString("mode", "secondaryPreferred").
 				Build())
 			evt := mt.GetStartedEvent()
-			assert.Equal(mt, internal.LegacyHello, evt.CommandName, "expected legacy hello command to be sent, got %q", evt.CommandName)
+			assert.Equal(mt, handshake.LegacyHello, evt.CommandName, "expected legacy hello command to be sent, got %q", evt.CommandName)
 			actual, ok := evt.Command.Lookup("$readPreference").DocumentOK()
 			assert.True(mt, ok, "expected command %v to contain a $readPreference document", evt.Command)
 			assert.Equal(mt, expected, actual, "expected $readPreference document %v, got %v", expected, actual)
@@ -106,7 +105,7 @@ func TestDatabase(t *testing.T) {
 				{"insert", "test"},
 				{"documents", bson.A{bson.D{{"a", 1}}}},
 			}
-			res, gotErr := mt.DB.RunCommand(context.Background(), cmd).DecodeBytes()
+			res, gotErr := mt.DB.RunCommand(context.Background(), cmd).Raw()
 
 			n, ok := res.Lookup("n").Int32OK()
 			assert.True(mt, ok, "expected n in response")
@@ -357,7 +356,7 @@ func TestDatabase(t *testing.T) {
 			{"cursor", bson.D{}},
 		}
 		pingCmd := bson.D{{"ping", 1}}
-		pingErr := errors.New("cursor should be an embedded document but is of BSON type invalid")
+		pingErr := errors.New("database response does not contain a cursor; try using RunCommand instead")
 
 		testCases := []struct {
 			name        string

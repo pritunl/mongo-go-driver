@@ -11,8 +11,8 @@ import (
 	"testing"
 
 	"github.com/pritunl/mongo-go-driver/bson"
-	"github.com/pritunl/mongo-go-driver/internal/testutil/assert"
-	"github.com/pritunl/mongo-go-driver/internal/testutil/monitor"
+	"github.com/pritunl/mongo-go-driver/internal/assert"
+	"github.com/pritunl/mongo-go-driver/internal/eventtest"
 	"github.com/pritunl/mongo-go-driver/mongo"
 	"github.com/pritunl/mongo-go-driver/mongo/integration/mtest"
 	"github.com/pritunl/mongo-go-driver/mongo/options"
@@ -26,11 +26,10 @@ const (
 
 func TestConnectionsSurvivePrimaryStepDown(t *testing.T) {
 	mt := mtest.New(t, mtest.NewOptions().Topologies(mtest.ReplicaSet).CreateClient(false))
-	defer mt.Close()
 
 	getMoreOpts := mtest.NewOptions().MinServerVersion("4.2")
 	mt.RunOpts("getMore iteration", getMoreOpts, func(mt *mtest.T) {
-		tpm := monitor.NewTestPoolMonitor()
+		tpm := eventtest.NewTestPoolMonitor()
 		mt.ResetClient(options.Client().
 			SetRetryWrites(false).
 			SetPoolMonitor(tpm.PoolMonitor))
@@ -74,7 +73,7 @@ func TestConnectionsSurvivePrimaryStepDown(t *testing.T) {
 				opts.MaxServerVersion(tc.maxVersion)
 			}
 			mt.RunOpts(tc.name, opts, func(mt *mtest.T) {
-				tpm := monitor.NewTestPoolMonitor()
+				tpm := eventtest.NewTestPoolMonitor()
 				mt.ResetClient(options.Client().
 					SetRetryWrites(false).
 					SetPoolMonitor(tpm.PoolMonitor).

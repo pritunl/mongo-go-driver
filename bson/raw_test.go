@@ -9,14 +9,16 @@ package bson
 import (
 	"bytes"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"io"
+	"strings"
 	"testing"
 
 	"github.com/google/go-cmp/cmp"
 	"github.com/pritunl/mongo-go-driver/bson/bsontype"
+	"github.com/pritunl/mongo-go-driver/internal/require"
 	"github.com/pritunl/mongo-go-driver/x/bsonx/bsoncore"
-	"github.com/stretchr/testify/require"
 )
 
 func ExampleRaw_Validate() {
@@ -51,7 +53,7 @@ func TestRaw(t *testing.T) {
 			r := make(Raw, 5)
 			binary.LittleEndian.PutUint32(r[0:4], 200)
 			got := r.Validate()
-			if got != want {
+			if !errors.Is(got, want) {
 				t.Errorf("Did not get expected error. got %v; want %v", got, want)
 			}
 		})
@@ -61,7 +63,7 @@ func TestRaw(t *testing.T) {
 			binary.LittleEndian.PutUint32(r[0:4], 8)
 			r[4], r[5], r[6], r[7] = '\x02', 'f', 'o', 'o'
 			got := r.Validate()
-			if got != want {
+			if !errors.Is(got, want) {
 				t.Errorf("Did not get expected error. got %v; want %v", got, want)
 			}
 		})
@@ -71,7 +73,7 @@ func TestRaw(t *testing.T) {
 			binary.LittleEndian.PutUint32(r[0:4], 9)
 			r[4], r[5], r[6], r[7], r[8] = '\x0A', 'f', 'o', 'o', '\x00'
 			got := r.Validate()
-			if got != want {
+			if !errors.Is(got, want) {
 				t.Errorf("Did not get expected error. got %v; want %v", got, want)
 			}
 		})
@@ -116,7 +118,7 @@ func TestRaw(t *testing.T) {
 		for _, tc := range testCases {
 			t.Run(tc.name, func(t *testing.T) {
 				err := tc.r.Validate()
-				if err != tc.err {
+				if !errors.Is(err, tc.err) {
 					t.Errorf("Returned error does not match. got %v; want %v", err, tc.err)
 				}
 			})
@@ -126,7 +128,7 @@ func TestRaw(t *testing.T) {
 		t.Run("empty-key", func(t *testing.T) {
 			rdr := Raw{'\x05', '\x00', '\x00', '\x00', '\x00'}
 			_, err := rdr.LookupErr()
-			if err != bsoncore.ErrEmptyKey {
+			if !errors.Is(err, bsoncore.ErrEmptyKey) {
 				t.Errorf("Empty key lookup did not return expected result. got %v; want %v", err, bsoncore.ErrEmptyKey)
 			}
 		})
@@ -209,7 +211,7 @@ func TestRaw(t *testing.T) {
 		for _, tc := range testCases {
 			t.Run(tc.name, func(t *testing.T) {
 				got, err := tc.r.LookupErr(tc.key...)
-				if err != tc.err {
+				if !errors.Is(err, tc.err) {
 					t.Errorf("Returned error does not match. got %v; want %v", err, tc.err)
 				}
 				if !cmp.Equal(got, tc.want) {
@@ -222,7 +224,7 @@ func TestRaw(t *testing.T) {
 		t.Run("Out of bounds", func(t *testing.T) {
 			rdr := Raw{0xe, 0x0, 0x0, 0x0, 0xa, 0x78, 0x0, 0xa, 0x79, 0x0, 0xa, 0x7a, 0x0, 0x0}
 			_, err := rdr.IndexErr(3)
-			if err != bsoncore.ErrOutOfBounds {
+			if !errors.Is(err, bsoncore.ErrOutOfBounds) {
 				t.Errorf("Out of bounds should be returned when accessing element beyond end of document. got %v; want %v", err, bsoncore.ErrOutOfBounds)
 			}
 		})
@@ -263,7 +265,8 @@ func TestRaw(t *testing.T) {
 			})
 		}
 	})
-	t.Run("NewFromIOReader", func(t *testing.T) {
+	t.Run("ReadDocument", func(t *testing.T) {
+		t.Parallel()
 		testCases := []struct {
 			name       string
 			ioReader   io.Reader
@@ -337,11 +340,91 @@ func TestRaw(t *testing.T) {
 		}
 
 		for _, tc := range testCases {
+			tc := tc // Capture range variable.
 			t.Run(tc.name, func(t *testing.T) {
-				reader, err := NewFromIOReader(tc.ioReader)
+				t.Parallel()
+
+				reader, err := ReadDocument(tc.ioReader)
 				require.Equal(t, err, tc.err)
 				require.True(t, bytes.Equal(tc.bsonReader, reader))
 			})
 		}
 	})
+}
+
+func BenchmarkRawString(b *testing.B) {
+	// Create 1KiB and 128B strings to exercise the string-heavy call paths in
+	// the "Raw.String" method.
+	var buf strings.Builder
+	for i := 0; i < 128; i++ {
+		buf.WriteString("abcdefgh")
+	}
+	str1k := buf.String()
+	str128 := str1k[:128]
+
+	cases := []struct {
+		description string
+		value       interface{}
+	}{
+		{
+			description: "string",
+			value:       D{{Key: "key", Value: str128}},
+		},
+		{
+			description: "integer",
+			value:       D{{Key: "key", Value: int64(1234567890)}},
+		},
+		{
+			description: "float",
+			value:       D{{Key: "key", Value: float64(1234567890.123456789)}},
+		},
+		{
+			description: "nested document",
+			value: D{{
+				Key: "key",
+				Value: D{{
+					Key: "key",
+					Value: D{{
+						Key:   "key",
+						Value: str128,
+					}},
+				}},
+			}},
+		},
+		{
+			description: "array of strings",
+			value: D{{
+				Key:   "key",
+				Value: []string{str128, str128, str128, str128},
+			}},
+		},
+		{
+			description: "mixed struct",
+			value: struct {
+				Key1 struct {
+					Nested string
+				}
+				Key2 string
+				Key3 int64
+				Key4 float64
+			}{
+				Key1: struct{ Nested string }{Nested: str1k},
+				Key2: str1k,
+				Key3: 1234567890,
+				Key4: 1234567890.123456789,
+			},
+		},
+	}
+
+	for _, tc := range cases {
+		b.Run(tc.description, func(b *testing.B) {
+			bs, err := Marshal(tc.value)
+			require.NoError(b, err)
+
+			b.ResetTimer()
+			for i := 0; i < b.N; i++ {
+				_ = Raw(bs).String()
+			}
+		})
+	}
 }

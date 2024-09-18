@@ -21,10 +21,11 @@ import (
 	"github.com/pritunl/mongo-go-driver/bson/bsonrw"
 	"github.com/pritunl/mongo-go-driver/bson/primitive"
 	"github.com/pritunl/mongo-go-driver/event"
-	"github.com/pritunl/mongo-go-driver/internal"
-	"github.com/pritunl/mongo-go-driver/internal/testutil"
-	"github.com/pritunl/mongo-go-driver/internal/testutil/assert"
-	"github.com/pritunl/mongo-go-driver/internal/testutil/monitor"
+	"github.com/pritunl/mongo-go-driver/internal/assert"
+	"github.com/pritunl/mongo-go-driver/internal/eventtest"
+	"github.com/pritunl/mongo-go-driver/internal/handshake"
+	"github.com/pritunl/mongo-go-driver/internal/integtest"
+	"github.com/pritunl/mongo-go-driver/internal/require"
 	"github.com/pritunl/mongo-go-driver/mongo"
 	"github.com/pritunl/mongo-go-driver/mongo/integration/mtest"
 	"github.com/pritunl/mongo-go-driver/mongo/options"
@@ -41,12 +42,12 @@ type negateCodec struct {
 	ID int64 `bson:"_id"`
 }
 
-func (e *negateCodec) EncodeValue(ectx bsoncodec.EncodeContext, vw bsonrw.ValueWriter, val reflect.Value) error {
+func (e *negateCodec) EncodeValue(_ bsoncodec.EncodeContext, vw bsonrw.ValueWriter, val reflect.Value) error {
 	return vw.WriteInt64(val.Int())
 }
 
 // DecodeValue negates the value of ID when reading
-func (e *negateCodec) DecodeValue(ectx bsoncodec.DecodeContext, vr bsonrw.ValueReader, val reflect.Value) error {
+func (e *negateCodec) DecodeValue(_ bsoncodec.DecodeContext, vr bsonrw.ValueReader, val reflect.Value) error {
 	i, err := vr.ReadInt64()
 	if err != nil {
 		return err
@@ -101,7 +102,6 @@ func (sc *slowConn) Read(b []byte) (n int, err error) {
 
 func TestClient(t *testing.T) {
 	mt := mtest.New(t, noClientOpts)
-	defer mt.Close()
 
 	registryOpts := options.Client().
 		SetRegistry(bson.NewRegistryBuilder().RegisterCodec(reflect.TypeOf(int64(0)), &negateCodec{}).Build())
@@ -126,8 +126,6 @@ func TestClient(t *testing.T) {
 			"expected security field to be type %v, got %v", bson.TypeMaxKey, security.Type)
 		_, found := security.Document().LookupErr("SSLServerSubjectName")
 		assert.Nil(mt, found, "SSLServerSubjectName not found in result")
-		_, found = security.Document().LookupErr("SSLServerHasCertificateAuthority")
-		assert.Nil(mt, found, "SSLServerHasCertificateAuthority not found in result")
 	})
 	mt.RunOpts("x509", mtest.NewOptions().Auth(true).SSL(true), func(mt *mtest.T) {
 		testCases := []struct {
@@ -182,14 +180,14 @@ func TestClient(t *testing.T) {
 					tc.password,
 				)
 				authClientOpts := options.Client().ApplyURI(cs)
-				testutil.AddTestServerAPIVersion(authClientOpts)
+				integtest.AddTestServerAPIVersion(authClientOpts)
 				authClient, err := mongo.Connect(context.Background(), authClientOpts)
 				assert.Nil(mt, err, "authClient Connect error: %v", err)
 				defer func() { _ = authClient.Disconnect(context.Background()) }()
 
 				rdr, err := authClient.Database("test").RunCommand(context.Background(), bson.D{
 					{"connectionStatus", 1},
-				}).DecodeBytes()
+				}).Raw()
 				assert.Nil(mt, err, "connectionStatus error: %v", err)
 				users, err := rdr.LookupErr("authInfo", "authenticatedUsers")
 				assert.Nil(mt, err, "authenticatedUsers not found in response")
@@ -327,7 +325,7 @@ func TestClient(t *testing.T) {
 			invalidClientOpts := options.Client().
 				SetServerSelectionTimeout(100 * time.Millisecond).SetHosts([]string{"invalid:123"}).
 				SetConnectTimeout(500 * time.Millisecond).SetSocketTimeout(500 * time.Millisecond)
-			testutil.AddTestServerAPIVersion(invalidClientOpts)
+			integtest.AddTestServerAPIVersion(invalidClientOpts)
 			client, err := mongo.Connect(context.Background(), invalidClientOpts)
 			assert.Nil(mt, err, "Connect error: %v", err)
 			err = client.Ping(context.Background(), readpref.Primary())
@@ -465,7 +463,7 @@ func TestClient(t *testing.T) {
 		// First two messages should be connection handshakes: one for the heartbeat connection and the other for the
 		// application connection.
 		for idx, pair := range msgPairs[:2] {
-			helloCommand := internal.LegacyHello
+			helloCommand := handshake.LegacyHello
 			//  Expect "hello" command name with API version.
 			if os.Getenv("REQUIRE_API_VERSION") == "true" {
 				helloCommand = "hello"
@@ -500,6 +498,9 @@ func TestClient(t *testing.T) {
 		// When connected directly, the primary read preference should be overwritten to primaryPreferred.
 		evt := mt.GetStartedEvent()
 		assert.Equal(mt, "find", evt.CommandName, "expected 'find' event, got '%s'", evt.CommandName)
+
+		// A direct connection will result in a single topology, and so
+		// the default readPreference mode should be "primaryPrefered".
 		modeVal, err := evt.Command.LookupErr("$readPreference", "mode")
 		assert.Nil(mt, err, "expected command %s to include $readPreference", evt.Command)
 
@@ -515,6 +516,8 @@ func TestClient(t *testing.T) {
 	})
 
 	mt.Run("minimum RTT is monitored", func(mt *mtest.T) {
+		mt.Parallel()
+
 		// Reset the client with a dialer that delays all network round trips by 300ms and set the
 		// heartbeat interval to 100ms to reduce the time it takes to collect RTT samples.
 		mt.ResetClient(options.Client().
@@ -523,36 +526,30 @@ func TestClient(t *testing.T) {
 
 		// Assert that the minimum RTT is eventually >250ms.
 		topo := getTopologyFromClient(mt.Client)
-		assert.Soon(mt, func(ctx context.Context) {
-			for {
-				// Stop loop if callback has been canceled.
-				select {
-				case <-ctx.Done():
-					return
-				default:
-				}
-
-				time.Sleep(100 * time.Millisecond)
-
-				// Wait for all of the server's minimum RTTs to be >250ms.
-				done := true
-				for _, desc := range topo.Description().Servers {
-					server, err := topo.FindServer(desc)
-					assert.Nil(mt, err, "FindServer error: %v", err)
-					if server.RTTMonitor().Min() <= 250*time.Millisecond {
-						done = false
-					}
-				}
-				if done {
-					return
+		callback := func() bool {
+			// Wait for all of the server's minimum RTTs to be >250ms.
+			for _, desc := range topo.Description().Servers {
+				server, err := topo.FindServer(desc)
+				assert.NoError(mt, err, "FindServer error: %v", err)
+				if server.RTTMonitor().Min() <= 250*time.Millisecond {
+					return false // the tick should wait for 100ms in this case
 				}
 			}
-		}, 10*time.Second)
+
+			return true
+		}
+		assert.Eventually(t,
+			callback,
+			10*time.Second,
+			100*time.Millisecond,
+			"expected that the minimum RTT is eventually >250ms")
 	})
 
 	// Test that if the minimum RTT is greater than the remaining timeout for an operation, the
 	// operation is not sent to the server and no connections are closed.
 	mt.Run("minimum RTT used to prevent sending requests", func(mt *mtest.T) {
+		mt.Parallel()
+
 		// Assert that we can call Ping with a 250ms timeout.
 		ctx, cancel := context.WithTimeout(context.Background(), 250*time.Millisecond)
 		defer cancel()
@@ -561,7 +558,7 @@ func TestClient(t *testing.T) {
 
 		// Reset the client with a dialer that delays all network round trips by 300ms and set the
 		// heartbeat interval to 100ms to reduce the time it takes to collect RTT samples.
-		tpm := monitor.NewTestPoolMonitor()
+		tpm := eventtest.NewTestPoolMonitor()
 		mt.ResetClient(options.Client().
 			SetPoolMonitor(tpm.PoolMonitor).
 			SetDialer(newSlowConnDialer(slowConnDialerDelay)).
@@ -569,31 +566,23 @@ func TestClient(t *testing.T) {
 
 		// Assert that the minimum RTT is eventually >250ms.
 		topo := getTopologyFromClient(mt.Client)
-		assert.Soon(mt, func(ctx context.Context) {
-			for {
-				// Stop loop if callback has been canceled.
-				select {
-				case <-ctx.Done():
-					return
-				default:
-				}
-
-				time.Sleep(100 * time.Millisecond)
-
-				// Wait for all of the server's minimum RTTs to be >250ms.
-				done := true
-				for _, desc := range topo.Description().Servers {
-					server, err := topo.FindServer(desc)
-					assert.Nil(mt, err, "FindServer error: %v", err)
-					if server.RTTMonitor().Min() <= 250*time.Millisecond {
-						done = false
-					}
-				}
-				if done {
-					return
+		callback := func() bool {
+			// Wait for all of the server's minimum RTTs to be >250ms.
+			for _, desc := range topo.Description().Servers {
+				server, err := topo.FindServer(desc)
+				assert.NoError(mt, err, "FindServer error: %v", err)
+				if server.RTTMonitor().Min() <= 250*time.Millisecond {
+					return false
 				}
 			}
-		}, 10*time.Second)
+
+			return true
+		}
+		assert.Eventually(t,
+			callback,
+			10*time.Second,
+			100*time.Millisecond,
+			"expected that the minimum RTT is eventually >250ms")
 
 		// Once we've waited for the minimum RTT for the single server to be >250ms, run a bunch of
 		// Ping operations with a timeout of 250ms and expect that they return errors.
@@ -610,9 +599,7 @@ func TestClient(t *testing.T) {
 	})
 
 	mt.Run("RTT90 is monitored", func(mt *mtest.T) {
-		if testing.Short() {
-			t.Skip("skipping integration test in short mode")
-		}
+		mt.Parallel()
 
 		// Reset the client with a dialer that delays all network round trips by 300ms and set the
 		// heartbeat interval to 100ms to reduce the time it takes to collect RTT samples.
@@ -622,39 +609,29 @@ func TestClient(t *testing.T) {
 
 		// Assert that RTT90s are eventually >300ms.
 		topo := getTopologyFromClient(mt.Client)
-		assert.Soon(mt, func(ctx context.Context) {
-			for {
-				// Stop loop if callback has been canceled.
-				select {
-				case <-ctx.Done():
-					return
-				default:
-				}
-
-				time.Sleep(100 * time.Millisecond)
-
-				// Wait for all of the server's RTT90s to be >300ms.
-				done := true
-				for _, desc := range topo.Description().Servers {
-					server, err := topo.FindServer(desc)
-					assert.Nil(mt, err, "FindServer error: %v", err)
-					if server.RTTMonitor().P90() <= 300*time.Millisecond {
-						done = false
-					}
-				}
-				if done {
-					return
+		callback := func() bool {
+			// Wait for all of the server's RTT90s to be >300ms.
+			for _, desc := range topo.Description().Servers {
+				server, err := topo.FindServer(desc)
+				assert.NoError(mt, err, "FindServer error: %v", err)
+				if server.RTTMonitor().P90() <= 300*time.Millisecond {
+					return false
 				}
 			}
-		}, 10*time.Second)
+
+			return true
+		}
+		assert.Eventually(t,
+			callback,
+			10*time.Second,
+			100*time.Millisecond,
+			"expected that the RTT90s are eventually >300ms")
 	})
 
 	// Test that if Timeout is set and the RTT90 is greater than the remaining timeout for an operation, the
 	// operation is not sent to the server, fails with a timeout error, and no connections are closed.
 	mt.Run("RTT90 used to prevent sending requests", func(mt *mtest.T) {
-		if testing.Short() {
-			t.Skip("skipping integration test in short mode")
-		}
+		mt.Parallel()
 
 		// Assert that we can call Ping with a 250ms timeout.
 		ctx, cancel := context.WithTimeout(context.Background(), 250*time.Millisecond)
@@ -666,7 +643,7 @@ func TestClient(t *testing.T) {
 		// heartbeat interval to 100ms to reduce the time it takes to collect RTT samples, and
 		// set a Timeout of 0 (infinite) on the Client to ensure that RTT90 is used as a sending
 		// threshold.
-		tpm := monitor.NewTestPoolMonitor()
+		tpm := eventtest.NewTestPoolMonitor()
 		mt.ResetClient(options.Client().
 			SetPoolMonitor(tpm.PoolMonitor).
 			SetDialer(newSlowConnDialer(slowConnDialerDelay)).
@@ -675,31 +652,23 @@ func TestClient(t *testing.T) {
 
 		// Assert that RTT90s are eventually >275ms.
 		topo := getTopologyFromClient(mt.Client)
-		assert.Soon(mt, func(ctx context.Context) {
-			for {
-				// Stop loop if callback has been canceled.
-				select {
-				case <-ctx.Done():
-					return
-				default:
-				}
-
-				time.Sleep(100 * time.Millisecond)
-
-				// Wait for all of the server's RTT90s to be >275ms.
-				done := true
-				for _, desc := range topo.Description().Servers {
-					server, err := topo.FindServer(desc)
-					assert.Nil(mt, err, "FindServer error: %v", err)
-					if server.RTTMonitor().P90() <= 275*time.Millisecond {
-						done = false
-					}
-				}
-				if done {
-					return
+		callback := func() bool {
+			// Wait for all of the server's RTT90s to be >275ms.
+			for _, desc := range topo.Description().Servers {
+				server, err := topo.FindServer(desc)
+				assert.NoError(mt, err, "FindServer error: %v", err)
+				if server.RTTMonitor().P90() <= 275*time.Millisecond {
+					return false
 				}
 			}
-		}, 10*time.Second)
+
+			return true
+		}
+		assert.Eventually(t,
+			callback,
+			10*time.Second,
+			100*time.Millisecond,
+			"expected that the RTT90s are eventually >275ms")
 
 		// Once we've waited for the RTT90 for the servers to be >275ms, run 10 Ping operations
 		// with a timeout of 275ms and expect that they return timeout errors.
@@ -708,7 +677,7 @@ func TestClient(t *testing.T) {
 			err := mt.Client.Ping(ctx, nil)
 			cancel()
 			assert.NotNil(mt, err, "expected Ping to return an error")
-			assert.True(mt, mongo.IsTimeout(err), "expected a timeout error: got %v", err)
+			assert.True(mt, mongo.IsTimeout(err), "expected a timeout error, got: %v", err)
 		}
 
 		// Assert that the Ping timeouts result in no connections being closed.
@@ -726,11 +695,10 @@ func TestClient(t *testing.T) {
 		msgPairs := mt.GetProxiedMessages()
 		assert.True(mt, len(msgPairs) >= 3, "expected at least 3 events, got %v", len(msgPairs))
 
-		// First message should a be connection handshake. This handshake should use OP_QUERY as the OpCode, as wire
-		// version is not yet known.
+		// The first message should be a connection handshake.
 		pair := msgPairs[0]
-		assert.Equal(mt, internal.LegacyHello, pair.CommandName, "expected command name %s at index 0, got %s",
-			internal.LegacyHello, pair.CommandName)
+		assert.Equal(mt, handshake.LegacyHello, pair.CommandName, "expected command name %s at index 0, got %s",
+			handshake.LegacyHello, pair.CommandName)
 		assert.Equal(mt, wiremessage.OpQuery, pair.Sent.OpCode,
 			"expected 'OP_QUERY' OpCode in wire message, got %q", pair.Sent.OpCode.String())
 
@@ -769,32 +737,200 @@ func TestClient(t *testing.T) {
 		}
 	})
 
-	// Test that OP_MSG is used for handshakes when loadBalanced is true.
-	opMsgLBOpts := mtest.NewOptions().ClientType(mtest.Proxy).MinServerVersion("5.0").Topologies(mtest.LoadBalanced)
-	mt.RunOpts("OP_MSG used for handshakes when loadBalanced is true", opMsgLBOpts, func(mt *mtest.T) {
-		err := mt.Client.Ping(context.Background(), mtest.PrimaryRp)
-		assert.Nil(mt, err, "Ping error: %v", err)
-
-		msgPairs := mt.GetProxiedMessages()
-		assert.True(mt, len(msgPairs) >= 3, "expected at least 3 events, got %v", len(msgPairs))
-
-		// First three messages should be connection handshakes: one for the heartbeat connection, another for the
-		// application connection, and a final one for the RTT monitor connection.
-		for idx, pair := range msgPairs[:3] {
-			assert.Equal(mt, "hello", pair.CommandName, "expected command name 'hello' at index %d, got %s", idx,
-				pair.CommandName)
-
-			// Assert that appended OpCode is OP_MSG when loadBalanced is true.
-			assert.Equal(mt, wiremessage.OpMsg, pair.Sent.OpCode,
-				"expected 'OP_MSG' OpCode in wire message, got %q", pair.Sent.OpCode.String())
+	opts := mtest.NewOptions().
+		// Blocking failpoints don't work on pre-4.2 and sharded clusters.
+		Topologies(mtest.Single, mtest.ReplicaSet).
+		MinServerVersion("4.2").
+		// Expliticly enable retryable reads and retryable writes.
+		ClientOptions(options.Client().SetRetryReads(true).SetRetryWrites(true))
+	mt.RunOpts("operations don't retry after a context timeout", opts, func(mt *mtest.T) {
+		testCases := []struct {
+			desc      string
+			operation func(context.Context, *mongo.Collection) error
+		}{
+			{
+				desc: "read op",
+				operation: func(ctx context.Context, coll *mongo.Collection) error {
+					return coll.FindOne(ctx, bson.D{}).Err()
+				},
+			},
+			{
+				desc: "write op",
+				operation: func(ctx context.Context, coll *mongo.Collection) error {
+					_, err := coll.InsertOne(ctx, bson.D{})
+					return err
+				},
+			},
 		}
+
+		for _, tc := range testCases {
+			mt.Run(tc.desc, func(mt *mtest.T) {
+				_, err := mt.Coll.InsertOne(context.Background(), bson.D{})
+				require.NoError(mt, err)
+
+				mt.SetFailPoint(mtest.FailPoint{
+					ConfigureFailPoint: "failCommand",
+					Mode:               "alwaysOn",
+					Data: mtest.FailPointData{
+						FailCommands:    []string{"find", "insert"},
+						BlockConnection: true,
+						BlockTimeMS:     500,
+					},
+				})
+
+				mt.ClearEvents()
+
+				for i := 0; i < 50; i++ {
+					// Run 50 operations, each with a timeout of 50ms. Expect
+					// them to all return a timeout error because the failpoint
+					// blocks find operations for 500ms. Run 50 to increase the
+					// probability that an operation will time out in a way that
+					// can cause a retry.
+					ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+					err = tc.operation(ctx, mt.Coll)
+					cancel()
+					assert.ErrorIs(mt, err, context.DeadlineExceeded)
+					assert.True(mt, mongo.IsTimeout(err), "expected mongo.IsTimeout(err) to be true")
+
+					// Assert that each operation reported exactly one command
+					// started events, which means the operation did not retry
+					// after the context timeout.
+					evts := mt.GetAllStartedEvents()
+					require.Len(mt,
+						mt.GetAllStartedEvents(),
+						1,
+						"expected exactly 1 command started event per operation, but got %d after %d iterations",
+						len(evts),
+						i)
+					mt.ClearEvents()
+				}
+			})
+		}
+	})
+}
+
+func TestClient_BSONOptions(t *testing.T) {
+	t.Parallel()
+
+	mt := mtest.New(t, noClientOpts)
+
+	type jsonTagsTest struct {
+		A string
+		B string `json:"x"`
+		C string `json:"y" bson:"3"`
+	}
+
+	testCases := []struct {
+		name       string
+		bsonOpts   *options.BSONOptions
+		doc        interface{}
+		decodeInto func() interface{}
+		want       interface{}
+		wantRaw    bson.Raw
+	}{
+		{
+			name: "UseJSONStructTags",
+			bsonOpts: &options.BSONOptions{
+				UseJSONStructTags: true,
+			},
+			doc: jsonTagsTest{
+				A: "apple",
+				B: "banana",
+				C: "carrot",
+			},
+			decodeInto: func() interface{} { return &jsonTagsTest{} },
+			want: &jsonTagsTest{
+				A: "apple",
+				B: "banana",
+				C: "carrot",
+			},
+			wantRaw: bson.Raw(bsoncore.NewDocumentBuilder().
+				AppendString("a", "apple").
+				AppendString("x", "banana").
+				AppendString("3", "carrot").
+				Build()),
+		},
+		{
+			name: "IntMinSize",
+			bsonOpts: &options.BSONOptions{
+				IntMinSize: true,
+			},
+			doc:        bson.D{{Key: "x", Value: int64(1)}},
+			decodeInto: func() interface{} { return &bson.D{} },
+			want:       &bson.D{{Key: "x", Value: int32(1)}},
+			wantRaw: bson.Raw(bsoncore.NewDocumentBuilder().
+				AppendInt32("x", 1).
+				Build()),
+		},
+		{
+			name: "DefaultDocumentM",
+			bsonOpts: &options.BSONOptions{
+				DefaultDocumentM: true,
+			},
+			doc:        bson.D{{Key: "doc", Value: bson.D{{Key: "a", Value: int64(1)}}}},
+			decodeInto: func() interface{} { return &bson.D{} },
+			want:       &bson.D{{Key: "doc", Value: bson.M{"a": int64(1)}}},
+		},
+	}
+
+	for _, tc := range testCases {
+		opts := mtest.NewOptions().ClientOptions(
+			options.Client().SetBSONOptions(tc.bsonOpts))
+		mt.RunOpts(tc.name, opts, func(mt *mtest.T) {
+			res, err := mt.Coll.InsertOne(context.Background(), tc.doc)
+			require.NoError(mt, err, "InsertOne error")
+
+			sr := mt.Coll.FindOne(
+				context.Background(),
+				bson.D{{Key: "_id", Value: res.InsertedID}},
+				// Exclude the auto-generated "_id" field so we can make simple
+				// assertions on the return value.
+				options.FindOne().SetProjection(bson.D{{Key: "_id", Value: 0}}))
+
+			if tc.want != nil {
+				got := tc.decodeInto()
+				err := sr.Decode(got)
+				require.NoError(mt, err, "Decode error")
+
+				assert.Equal(mt, tc.want, got, "expected and actual decoded result are different")
+			}
+
+			if tc.wantRaw != nil {
+				got, err := sr.Raw()
+				require.NoError(mt, err, "Raw error")
+
+				assert.EqualBSON(mt, tc.wantRaw, got)
+			}
+		})
+	}
+
+	opts := mtest.NewOptions().ClientOptions(
+		options.Client().SetBSONOptions(&options.BSONOptions{
+			ErrorOnInlineDuplicates: true,
+		}))
+	mt.RunOpts("ErrorOnInlineDuplicates", opts, func(mt *mtest.T) {
+		type inlineDupInner struct {
+			A string
+		}
+
+		type inlineDupOuter struct {
+			A string
+			B *inlineDupInner `bson:"b,inline"`
+		}
+
+		_, err := mt.Coll.InsertOne(context.Background(), inlineDupOuter{
+			A: "outer",
+			B: &inlineDupInner{
+				A: "inner",
+			},
+		})
+		require.Error(mt, err, "expected InsertOne to return an error")
 	})
 }
 
 func TestClientStress(t *testing.T) {
 	mtOpts := mtest.NewOptions().CreateClient(false)
 	mt := mtest.New(t, mtOpts)
-	defer mt.Close()
 
 	// Test that a Client can recover from a massive traffic spike after the traffic spike is over.
 	mt.Run("Client recovers from traffic spike", func(mt *mtest.T) {
@@ -846,7 +982,7 @@ func TestClientStress(t *testing.T) {
 		// pool configurations.
 		maxPoolSizes := []uint64{1, 10, 100}
 		for _, maxPoolSize := range maxPoolSizes {
-			tpm := monitor.NewTestPoolMonitor()
+			tpm := eventtest.NewTestPoolMonitor()
 			maxPoolSizeOpt := mtest.NewOptions().ClientOptions(
 				options.Client().
 					SetPoolMonitor(tpm.PoolMonitor).

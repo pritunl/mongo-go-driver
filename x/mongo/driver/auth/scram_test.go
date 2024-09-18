@@ -10,7 +10,7 @@ import (
 	"context"
 	"testing"
 
-	"github.com/pritunl/mongo-go-driver/internal/testutil/assert"
+	"github.com/pritunl/mongo-go-driver/internal/assert"
 	"github.com/pritunl/mongo-go-driver/mongo/description"
 	"github.com/pritunl/mongo-go-driver/x/bsonx/bsoncore"
 	"github.com/pritunl/mongo-go-driver/x/mongo/driver/drivertest"
@@ -65,7 +65,7 @@ func TestSCRAM(t *testing.T) {
 
 				desc := description.Server{
 					WireVersion: &description.VersionRange{
-						Max: 4,
+						Max: 21,
 					},
 				}
 				conn := &drivertest.ChannelConn{
@@ -79,7 +79,7 @@ func TestSCRAM(t *testing.T) {
 
 				// Verify that the first command sent is saslStart.
 				assert.True(t, len(conn.Written) > 1, "wire messages were written to the connection")
-				startCmd, err := drivertest.GetCommandFromQueryWireMessage(<-conn.Written)
+				startCmd, err := drivertest.GetCommandFromMsgWireMessage(<-conn.Written)
 				assert.Nil(t, err, "error parsing wire message: %v", err)
 				cmdName := startCmd.Index(0).Key()
 				assert.Equal(t, cmdName, "saslStart", "cmd name mismatch; expected 'saslStart', got %v", cmdName)

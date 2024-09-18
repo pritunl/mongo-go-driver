@@ -10,14 +10,17 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"math"
 	"testing"
 	"time"
 
 	"github.com/google/go-cmp/cmp"
 	"github.com/pritunl/mongo-go-driver/bson/bsontype"
 	"github.com/pritunl/mongo-go-driver/bson/primitive"
-	"github.com/pritunl/mongo-go-driver/internal"
-	"github.com/pritunl/mongo-go-driver/internal/testutil/assert"
+	"github.com/pritunl/mongo-go-driver/internal/assert"
+	"github.com/pritunl/mongo-go-driver/internal/csot"
+	"github.com/pritunl/mongo-go-driver/internal/handshake"
+	"github.com/pritunl/mongo-go-driver/internal/require"
 	"github.com/pritunl/mongo-go-driver/internal/uuid"
 	"github.com/pritunl/mongo-go-driver/mongo/address"
 	"github.com/pritunl/mongo-go-driver/mongo/description"
@@ -55,10 +58,12 @@ func compareErrors(err1, err2 error) bool {
 }
 
 func TestOperation(t *testing.T) {
+	int64ToPtr := func(i64 int64) *int64 { return &i64 }
+
 	t.Run("selectServer", func(t *testing.T) {
 		t.Run("returns validation error", func(t *testing.T) {
 			op := &Operation{}
-			_, err := op.selectServer(context.Background())
+			_, err := op.selectServer(context.Background(), 1, nil)
 			if err == nil {
 				t.Error("Expected a validation error from selectServer, but got <nil>")
 			}
@@ -72,11 +77,15 @@ func TestOperation(t *testing.T) {
 				Database:   "testing",
 				Selector:   want,
 			}
-			_, err := op.selectServer(context.Background())
+			_, err := op.selectServer(context.Background(), 1, nil)
 			noerr(t, err)
-			got := d.params.selector
-			if !cmp.Equal(got, want) {
-				t.Errorf("Did not get expected server selector. got %v; want %v", got, want)
+
+			// Assert the selector is an operation selector wrapper.
+			oss, ok := d.params.selector.(*opServerSelector)
+			require.True(t, ok)
+
+			if !cmp.Equal(oss.selector, want) {
+				t.Errorf("Did not get expected server selector. got %v; want %v", oss.selector, want)
 			}
 		})
 		t.Run("uses a default server selector", func(t *testing.T) {
@@ -86,7 +95,7 @@ func TestOperation(t *testing.T) {
 				Deployment: d,
 				Database:   "testing",
 			}
-			_, err := op.selectServer(context.Background())
+			_, err := op.selectServer(context.Background(), 1, nil)
 			noerr(t, err)
 			if d.params.selector == nil {
 				t.Error("The selectServer method should use a default selector when not specified on Operation, but it passed <nil>.")
@@ -103,7 +112,7 @@ func TestOperation(t *testing.T) {
 		}{
 			{"CommandFn", &Operation{}, InvalidOperationError{MissingField: "CommandFn"}},
 			{"Deployment", &Operation{CommandFn: cmdFn}, InvalidOperationError{MissingField: "Deployment"}},
-			{"Database", &Operation{CommandFn: cmdFn, Deployment: d}, InvalidOperationError{MissingField: "Database"}},
+			{"Database", &Operation{CommandFn: cmdFn, Deployment: d}, errDatabaseNameEmpty},
 			{"<nil>", &Operation{CommandFn: cmdFn, Deployment: d, Database: "test"}, nil},
 		}
 
@@ -143,9 +152,24 @@ func TestOperation(t *testing.T) {
 		wcAck := writeconcern.New(writeconcern.WMajority())
 		wcUnack := writeconcern.New(writeconcern.W(0))
 
-		descRetryable := description.Server{WireVersion: &description.VersionRange{Min: 0, Max: 7}, SessionTimeoutMinutes: 1}
-		descNotRetryableWireVersion := description.Server{WireVersion: &description.VersionRange{Min: 0, Max: 5}, SessionTimeoutMinutes: 1}
-		descNotRetryableStandalone := description.Server{WireVersion: &description.VersionRange{Min: 0, Max: 7}, SessionTimeoutMinutes: 1, Kind: description.Standalone}
+		descRetryable := description.Server{
+			WireVersion:              &description.VersionRange{Min: 6, Max: 21},
+			SessionTimeoutMinutes:    1,
+			SessionTimeoutMinutesPtr: int64ToPtr(1),
+		}
+
+		descNotRetryableWireVersion := description.Server{
+			WireVersion:              &description.VersionRange{Min: 6, Max: 21},
+			SessionTimeoutMinutes:    1,
+			SessionTimeoutMinutesPtr: int64ToPtr(1),
+		}
+
+		descNotRetryableStandalone := description.Server{
+			WireVersion:              &description.VersionRange{Min: 6, Max: 21},
+			SessionTimeoutMinutes:    1,
+			SessionTimeoutMinutesPtr: int64ToPtr(1),
+			Kind:                     description.Standalone,
+		}
 
 		testCases := []struct {
 			name string
@@ -179,40 +203,6 @@ func TestOperation(t *testing.T) {
 				got := tc.op.retryable(tc.desc)
 				if got != (tc.want != Type(0)) {
 					t.Errorf("Did not receive expected Type. got %v; want %v", got, tc.want)
-				}
-			})
-		}
-	})
-	t.Run("roundTrip", func(t *testing.T) {
-		testCases := []struct {
-			name    string
-			conn    *mockConnection
-			paramWM []byte // parameter wire message
-			wantWM  []byte // wire message that should be returned
-			wantErr error  // error that should be returned
-		}{
-			{
-				"returns write error",
-				&mockConnection{rWriteErr: errors.New("write error")},
-				nil, nil,
-				Error{Message: "write error", Labels: []string{TransientTransactionError, NetworkError}},
-			},
-			{
-				"returns read error",
-				&mockConnection{rReadErr: errors.New("read error")},
-				nil, nil,
-				Error{Message: "read error", Labels: []string{TransientTransactionError, NetworkError}},
-			},
-		}
-
-		for _, tc := range testCases {
-			t.Run(tc.name, func(t *testing.T) {
-				gotWM, _, gotErr := Operation{}.roundTrip(context.Background(), tc.conn, tc.paramWM)
-				if !bytes.Equal(gotWM, tc.wantWM) {
-					t.Errorf("Returned wire messages are not equal. got %v; want %v", gotWM, tc.wantWM)
-				}
-				if !cmp.Equal(gotErr, tc.wantErr, cmp.Comparer(compareErrors)) {
-					t.Errorf("Returned error is not equal to expected error. got %v; want %v", gotErr, tc.wantErr)
 				}
 			})
 		}
@@ -275,7 +265,7 @@ func TestOperation(t *testing.T) {
 			noerr(t, err)
 
 			got := Operation{Client: sess, Clock: clusterClock}.addClusterTime(nil, description.SelectedServer{
-				Server: description.Server{WireVersion: &description.VersionRange{Min: 0, Max: 7}},
+				Server: description.Server{WireVersion: &description.VersionRange{Min: 6, Max: 21}},
 			})
 			if !bytes.Equal(got, want) {
 				t.Errorf("ClusterTimes do not match. got %v; want %v", got, want)
@@ -288,7 +278,7 @@ func TestOperation(t *testing.T) {
 		negMaxTime := -2 * time.Second
 		shortRTT := 50 * time.Millisecond
 		longRTT := 10 * time.Second
-		timeoutCtx, cancel := internal.MakeTimeoutContext(context.Background(), timeout)
+		timeoutCtx, cancel := csot.MakeTimeoutContext(context.Background(), timeout)
 		defer cancel()
 
 		testCases := []struct {
@@ -338,7 +328,7 @@ func TestOperation(t *testing.T) {
 			t.Run(tc.name, func(t *testing.T) {
 				t.Parallel()
 
-				got, err := tc.op.calculateMaxTimeMS(tc.ctx, tc.rtt90, "")
+				got, err := tc.op.calculateMaxTimeMS(tc.ctx, mockRTTMonitor{p90: tc.rtt90})
 
 				// Assert that the calculated maxTimeMS is less than or equal to the expected value. A few
 				// milliseconds will have elapsed toward the context deadline, and (remainingTimeout
@@ -447,7 +437,6 @@ func TestOperation(t *testing.T) {
 		)
 
 		rpPrimaryPreferred := bsoncore.BuildDocumentFromElements(nil, bsoncore.AppendStringElement(nil, "mode", "primaryPreferred"))
-		rpPrimary := bsoncore.BuildDocumentFromElements(nil, bsoncore.AppendStringElement(nil, "mode", "primary"))
 		rpSecondaryPreferred := bsoncore.BuildDocumentFromElements(nil, bsoncore.AppendStringElement(nil, "mode", "secondaryPreferred"))
 		rpSecondary := bsoncore.BuildDocumentFromElements(nil, bsoncore.AppendStringElement(nil, "mode", "secondary"))
 		rpNearest := bsoncore.BuildDocumentFromElements(nil, bsoncore.AppendStringElement(nil, "mode", "nearest"))
@@ -464,7 +453,7 @@ func TestOperation(t *testing.T) {
 			{"nil/single/secondary", nil, description.RSSecondary, description.Single, false, rpPrimaryPreferred},
 			{"primary/mongos", readpref.Primary(), description.Mongos, description.Sharded, false, nil},
 			{"primary/single", readpref.Primary(), description.RSPrimary, description.Single, false, rpPrimaryPreferred},
-			{"primary/primary", readpref.Primary(), description.RSPrimary, description.ReplicaSet, false, rpPrimary},
+			{"primary/primary", readpref.Primary(), description.RSPrimary, description.ReplicaSet, false, nil},
 			{"primaryPreferred", readpref.PrimaryPreferred(), description.RSSecondary, description.ReplicaSet, false, rpPrimaryPreferred},
 			{"secondaryPreferred/mongos/opquery", readpref.SecondaryPreferred(), description.Mongos, description.Sharded, true, nil},
 			{"secondaryPreferred", readpref.SecondaryPreferred(), description.RSSecondary, description.ReplicaSet, false, rpSecondaryPreferred},
@@ -563,58 +552,6 @@ func TestOperation(t *testing.T) {
 			}
 		})
 	})
-	t.Run("$query to mongos only", func(t *testing.T) {
-		testCases := []struct {
-			name   string
-			server description.ServerKind
-			topo   description.TopologyKind
-			rp     *readpref.ReadPref
-			want   bool
-		}{
-			{"mongos/primaryPreferred", description.Mongos, description.Sharded, readpref.PrimaryPreferred(), true},
-			{"mongos/primary", description.Mongos, description.Sharded, readpref.Primary(), false},
-			{"primary/primaryPreferred", description.RSPrimary, description.ReplicaSet, readpref.PrimaryPreferred(), false},
-			{"primary/primary", description.RSPrimary, description.ReplicaSet, readpref.Primary(), false},
-			{"secondary/primaryPreferred", description.RSSecondary, description.ReplicaSet, readpref.PrimaryPreferred(), false},
-			{"secondary/primary", description.RSSecondary, description.ReplicaSet, readpref.Primary(), false},
-			{"none/none", description.ServerKind(0), description.TopologyKind(0), nil, false},
-		}
-
-		for _, tc := range testCases {
-			t.Run(tc.name, func(t *testing.T) {
-				conn := new(mockConnection)
-
-				op := Operation{
-					Database:   "foobar",
-					Deployment: SingleConnectionDeployment{C: conn},
-					CommandFn: func(dst []byte, desc description.SelectedServer) ([]byte, error) {
-						dst = bsoncore.AppendInt32Element(dst, "ping", 1)
-						return dst, nil
-					},
-					ReadPreference: tc.rp,
-				}
-				var wm []byte
-				desc := description.SelectedServer{
-					Kind: tc.topo,
-					Server: description.Server{
-						Kind: tc.server,
-					},
-				}
-				wm, _, err := op.createQueryWireMessage(0, wm, desc)
-				noerr(t, err)
-
-				// We know where the $query would be within the OP_QUERY, so we'll just index into there.
-				// 16 (msg header) + 4 (flags) + 12 (foobar.$cmd) + 4 (number to skip) + 4 (number to return) + 4 (length) + 1 (document type)
-				if len(wm) < 45 {
-					t.Fatalf("wire message is too short. Need at least 40 bytes, but only have %d", len(wm))
-				}
-				got := bytes.HasPrefix(wm[45:], []byte{'$', 'q', 'u', 'e', 'r', 'y', 0x00})
-				if got != tc.want {
-					t.Errorf("Wiremessage did not have the proper setting for $query. got %t; want %t", got, tc.want)
-				}
-			})
-		}
-	})
 	t.Run("ExecuteExhaust", func(t *testing.T) {
 		t.Run("errors if connection is not streaming", func(t *testing.T) {
 			conn := &mockConnection{
@@ -646,7 +583,7 @@ func TestOperation(t *testing.T) {
 		}
 		op := Operation{
 			CommandFn: func(dst []byte, desc description.SelectedServer) ([]byte, error) {
-				return bsoncore.AppendInt32Element(dst, internal.LegacyHello, 1), nil
+				return bsoncore.AppendInt32Element(dst, handshake.LegacyHello, 1), nil
 			},
 			Database:   "admin",
 			Deployment: SingleConnectionDeployment{conn},
@@ -717,10 +654,40 @@ func TestOperation(t *testing.T) {
 		// the TransientTransactionError label.
 		assert.Equal(t, err, context.Canceled, "expected context.Canceled error, got %v", err)
 	})
+	t.Run("ErrDeadlineWouldBeExceeded wraps context.DeadlineExceeded", func(t *testing.T) {
+		// Create a deployment that returns a server that reports a 90th
+		// percentile RTT of 1 minute.
+		d := new(mockDeployment)
+		d.returns.server = mockServer{
+			conn:       new(mockConnection),
+			rttMonitor: mockRTTMonitor{p90: 1 * time.Minute},
+		}
+
+		// Create an operation with a Timeout specified to enable CSOT behavior.
+		var dur time.Duration
+		op := Operation{
+			Database:   "foobar",
+			Deployment: d,
+			CommandFn: func(dst []byte, desc description.SelectedServer) ([]byte, error) {
+				return dst, nil
+			},
+			Timeout: &dur,
+		}
+
+		// Call the operation with a context with a deadline less than the 90th
+		// percentile RTT configured above.
+		ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
+		defer cancel()
+		err := op.Execute(ctx)
+
+		assert.ErrorIs(t, err, ErrDeadlineWouldBeExceeded)
+		assert.ErrorIs(t, err, context.DeadlineExceeded)
+	})
 }
 
 func createExhaustServerResponse(response bsoncore.Document, moreToCome bool) []byte {
-	idx, wm := wiremessage.AppendHeaderStart(nil, 0, wiremessage.CurrentRequestID()+1, wiremessage.OpMsg)
+	const psuedoRequestID = 1
+	idx, wm := wiremessage.AppendHeaderStart(nil, 0, psuedoRequestID, wiremessage.OpMsg)
 	var flags wiremessage.MsgFlag
 	if moreToCome {
 		flags = wiremessage.MoreToCome
@@ -758,7 +725,7 @@ type mockDeployment struct {
 	}
 }
 
-func (m *mockDeployment) SelectServer(ctx context.Context, desc description.ServerSelector) (Server, error) {
+func (m *mockDeployment) SelectServer(_ context.Context, desc description.ServerSelector) (Server, error) {
 	m.params.selector = desc
 	return m.returns.server, m.returns.err
 }
@@ -771,10 +738,34 @@ func (m *mockServerSelector) SelectServer(description.Topology, []description.Se
 	panic("not implemented")
 }
 
+func (m *mockServerSelector) String() string {
+	panic("not implemented")
+}
+
+type mockServer struct {
+	conn       Connection
+	err        error
+	rttMonitor RTTMonitor
+}
+
+func (ms mockServer) Connection(context.Context) (Connection, error) { return ms.conn, ms.err }
+func (ms mockServer) RTTMonitor() RTTMonitor                         { return ms.rttMonitor }
+
+type mockRTTMonitor struct {
+	ewma  time.Duration
+	min   time.Duration
+	p90   time.Duration
+	stats string
+}
+
+func (mrm mockRTTMonitor) EWMA() time.Duration { return mrm.ewma }
+func (mrm mockRTTMonitor) Min() time.Duration  { return mrm.min }
+func (mrm mockRTTMonitor) P90() time.Duration  { return mrm.p90 }
+func (mrm mockRTTMonitor) Stats() string       { return mrm.stats }
+
 type mockConnection struct {
 	// parameters
 	pWriteWM []byte
-	pReadDst []byte
 
 	// returns
 	rWriteErr     error
@@ -783,7 +774,7 @@ type mockConnection struct {
 	rDesc         description.Server
 	rCloseErr     error
 	rID           string
-	rServerConnID *int32
+	rServerConnID *int64
 	rAddr         address.Address
 	rCanStream    bool
 	rStreaming    bool
@@ -792,20 +783,22 @@ type mockConnection struct {
 func (m *mockConnection) Description() description.Server { return m.rDesc }
 func (m *mockConnection) Close() error                    { return m.rCloseErr }
 func (m *mockConnection) ID() string                      { return m.rID }
-func (m *mockConnection) ServerConnectionID() *int32      { return m.rServerConnID }
+func (m *mockConnection) ServerConnectionID() *int64      { return m.rServerConnID }
 func (m *mockConnection) Address() address.Address        { return m.rAddr }
 func (m *mockConnection) SupportsStreaming() bool         { return m.rCanStream }
 func (m *mockConnection) CurrentlyStreaming() bool        { return m.rStreaming }
 func (m *mockConnection) SetStreaming(streaming bool)     { m.rStreaming = streaming }
 func (m *mockConnection) Stale() bool                     { return false }
 
+// TODO:(GODRIVER-2824) replace return type with int64.
+func (m *mockConnection) DriverConnectionID() uint64 { return 0 }
+
 func (m *mockConnection) WriteWireMessage(_ context.Context, wm []byte) error {
 	m.pWriteWM = wm
 	return m.rWriteErr
 }
 
-func (m *mockConnection) ReadWireMessage(_ context.Context, dst []byte) ([]byte, error) {
-	m.pReadDst = dst
+func (m *mockConnection) ReadWireMessage(_ context.Context) ([]byte, error) {
 	return m.rReadWM, m.rReadErr
 }
 
@@ -837,7 +830,7 @@ func (ms *mockRetryServer) Connection(ctx context.Context) (Connection, error) {
 }
 
 func (ms *mockRetryServer) RTTMonitor() RTTMonitor {
-	return &internal.ZeroRTTMonitor{}
+	return &csot.ZeroRTTMonitor{}
 }
 
 func TestRetry(t *testing.T) {
@@ -871,4 +864,195 @@ func TestRetry(t *testing.T) {
 			time.Now().After(deadline),
 			"expected operation to complete only after the context deadline is exceeded")
 	})
+}
+
+func TestConvertI64PtrToI32Ptr(t *testing.T) {
+	t.Parallel()
+
+	newI64 := func(i64 int64) *int64 { return &i64 }
+	newI32 := func(i32 int32) *int32 { return &i32 }
+
+	tests := []struct {
+		name string
+		i64  *int64
+		want *int32
+	}{
+		{
+			name: "empty",
+			want: nil,
+		},
+		{
+			name: "in bounds",
+			i64:  newI64(1),
+			want: newI32(1),
+		},
+		{
+			name: "out of bounds negative",
+			i64:  newI64(math.MinInt32 - 1),
+		},
+		{
+			name: "out of bounds positive",
+			i64:  newI64(math.MaxInt32 + 1),
+		},
+		{
+			name: "exact min int32",
+			i64:  newI64(math.MinInt32),
+			want: newI32(math.MinInt32),
+		},
+		{
+			name: "exact max int32",
+			i64:  newI64(math.MaxInt32),
+			want: newI32(math.MaxInt32),
+		},
+	}
+
+	for _, test := range tests {
+		test := test
+
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+
+			got := convertInt64PtrToInt32Ptr(test.i64)
+			assert.Equal(t, test.want, got)
+		})
+	}
+}
+
+func TestDecodeOpReply(t *testing.T) {
+	t.Parallel()
+
+	// GODRIVER-2869: Prevent infinite loop caused by malformatted wiremessage with length of 0.
+	t.Run("malformatted wiremessage with length of 0", func(t *testing.T) {
+		t.Parallel()
+
+		var wm []byte
+		wm = wiremessage.AppendReplyFlags(wm, 0)
+		wm = wiremessage.AppendReplyCursorID(wm, int64(0))
+		wm = wiremessage.AppendReplyStartingFrom(wm, 0)
+		wm = wiremessage.AppendReplyNumberReturned(wm, 0)
+		idx, wm := bsoncore.ReserveLength(wm)
+		wm = bsoncore.UpdateLength(wm, idx, 0)
+		reply := Operation{}.decodeOpReply(wm)
+		assert.Equal(t, []bsoncore.Document(nil), reply.documents)
+	})
+}
+
+func TestFilterDeprioritizedServers(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name          string
+		deprioritized []description.Server
+		candidates    []description.Server
+		want          []description.Server
+	}{
+		{
+			name:       "empty",
+			candidates: []description.Server{},
+			want:       []description.Server{},
+		},
+		{
+			name:       "nil candidates",
+			candidates: nil,
+			want:       []description.Server{},
+		},
+		{
+			name: "nil deprioritized server list",
+			candidates: []description.Server{
+				{
+					Addr: address.Address("mongodb://localhost:27017"),
+				},
+			},
+			want: []description.Server{
+				{
+					Addr: address.Address("mongodb://localhost:27017"),
+				},
+			},
+		},
+		{
+			name: "deprioritize single server candidate list",
+			candidates: []description.Server{
+				{
+					Addr: address.Address("mongodb://localhost:27017"),
+				},
+			},
+			deprioritized: []description.Server{
+				{
+					Addr: address.Address("mongodb://localhost:27017"),
+				},
+			},
+			want: []description.Server{
+				// Since all available servers were deprioritized, then the selector
+				// should return all candidates.
+				{
+					Addr: address.Address("mongodb://localhost:27017"),
+				},
+			},
+		},
+		{
+			name: "depriotirize one server in multi server candidate list",
+			candidates: []description.Server{
+				{
+					Addr: address.Address("mongodb://localhost:27017"),
+				},
+				{
+					Addr: address.Address("mongodb://localhost:27018"),
+				},
+				{
+					Addr: address.Address("mongodb://localhost:27019"),
+				},
+			},
+			deprioritized: []description.Server{
+				{
+					Addr: address.Address("mongodb://localhost:27017"),
+				},
+			},
+			want: []description.Server{
+				{
+					Addr: address.Address("mongodb://localhost:27018"),
+				},
+				{
+					Addr: address.Address("mongodb://localhost:27019"),
+				},
+			},
+		},
+		{
+			name: "depriotirize multiple servers in multi server candidate list",
+			deprioritized: []description.Server{
+				{
+					Addr: address.Address("mongodb://localhost:27017"),
+				},
+				{
+					Addr: address.Address("mongodb://localhost:27018"),
+				},
+			},
+			candidates: []description.Server{
+				{
+					Addr: address.Address("mongodb://localhost:27017"),
+				},
+				{
+					Addr: address.Address("mongodb://localhost:27018"),
+				},
+				{
+					Addr: address.Address("mongodb://localhost:27019"),
+				},
+			},
+			want: []description.Server{
+				{
+					Addr: address.Address("mongodb://localhost:27019"),
+				},
+			},
+		},
+	}
+
+	for _, tc := range tests {
+		tc := tc // Capture the range variable.
+
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			got := filterDeprioritizedServers(tc.candidates, tc.deprioritized)
+			assert.ElementsMatch(t, got, tc.want)
+		})
+	}
 }

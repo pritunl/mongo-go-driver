@@ -11,6 +11,7 @@ import (
 	"errors"
 
 	"github.com/pritunl/mongo-go-driver/event"
+	"github.com/pritunl/mongo-go-driver/internal/driverutil"
 	"github.com/pritunl/mongo-go-driver/mongo/description"
 	"github.com/pritunl/mongo-go-driver/mongo/writeconcern"
 	"github.com/pritunl/mongo-go-driver/x/bsonx/bsoncore"
@@ -64,11 +65,12 @@ func (at *AbortTransaction) Execute(ctx context.Context) error {
 		Selector:          at.selector,
 		WriteConcern:      at.writeConcern,
 		ServerAPI:         at.serverAPI,
+		Name:              driverutil.AbortTransactionOp,
 	}.Execute(ctx)
 
 }
 
-func (at *AbortTransaction) command(dst []byte, desc description.SelectedServer) ([]byte, error) {
+func (at *AbortTransaction) command(dst []byte, _ description.SelectedServer) ([]byte, error) {
 
 	dst = bsoncore.AppendInt32Element(dst, "abortTransaction", 1)
 	if at.recoveryToken != nil {

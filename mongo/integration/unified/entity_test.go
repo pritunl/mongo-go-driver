@@ -11,7 +11,7 @@ import (
 	"testing"
 
 	"github.com/pritunl/mongo-go-driver/bson"
-	"github.com/pritunl/mongo-go-driver/internal/testutil/assert"
+	"github.com/pritunl/mongo-go-driver/internal/assert"
 )
 
 func TestEntityMap(t *testing.T) {
@@ -73,7 +73,7 @@ func TestEntityMap(t *testing.T) {
 		notFoundErr := newEntityNotFoundError("event list", "bar")
 		assert.Equal(t, err, notFoundErr, "expected error %v, got %v", notFoundErr, err)
 	})
-	t.Run("interations entity", func(t *testing.T) {
+	t.Run("iterations entity", func(t *testing.T) {
 		name := "iters"
 		notFoundName := "bar"
 		notFoundErr := newEntityNotFoundError("iterations", "bar")

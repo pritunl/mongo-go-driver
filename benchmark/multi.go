@@ -10,7 +10,7 @@ import (
 	"context"
 	"errors"
 
-	"github.com/pritunl/mongo-go-driver/x/bsonx"
+	"github.com/pritunl/mongo-go-driver/bson"
 )
 
 func MultiFindMany(ctx context.Context, tm TimerManager, iters int) error {
@@ -21,7 +21,7 @@ func MultiFindMany(ctx context.Context, tm TimerManager, iters int) error {
 	if err != nil {
 		return err
 	}
-	defer db.Client().Disconnect(ctx)
+	defer func() { _ = db.Client().Disconnect(ctx) }()
 
 	db = db.Client().Database("perftest")
 	if err = db.Drop(ctx); err != nil {
@@ -46,7 +46,7 @@ func MultiFindMany(ctx context.Context, tm TimerManager, iters int) error {
 
 	tm.ResetTimer()
 
-	cursor, err := coll.Find(ctx, bsonx.Doc{})
+	cursor, err := coll.Find(ctx, bson.D{})
 	if err != nil {
 		return err
 	}
@@ -76,11 +76,7 @@ func MultiFindMany(ctx context.Context, tm TimerManager, iters int) error {
 		return err
 	}
 
-	if err = db.Drop(ctx); err != nil {
-		return err
-	}
-
-	return nil
+	return db.Drop(ctx)
 }
 
 func multiInsertCase(ctx context.Context, tm TimerManager, iters int, data string) error {
@@ -91,7 +87,7 @@ func multiInsertCase(ctx context.Context, tm TimerManager, iters int, data strin
 	if err != nil {
 		return err
 	}
-	defer db.Client().Disconnect(ctx)
+	defer func() { _ = db.Client().Disconnect(ctx) }()
 
 	db = db.Client().Database("perftest")
 	if err = db.Drop(ctx); err != nil {
@@ -103,7 +99,7 @@ func multiInsertCase(ctx context.Context, tm TimerManager, iters int, data strin
 		return err
 	}
 
-	err = db.RunCommand(ctx, bsonx.Doc{{"create", bsonx.String("corpus")}}).Err()
+	err = db.RunCommand(ctx, bson.D{{"create", "corpus"}}).Err()
 	if err != nil {
 		return err
 	}
@@ -126,11 +122,7 @@ func multiInsertCase(ctx context.Context, tm TimerManager, iters int, data strin
 		return errors.New("bulk operation did not complete")
 	}
 
-	if err = db.Drop(ctx); err != nil {
-		return err
-	}
-
-	return nil
+	return db.Drop(ctx)
 }
 
 func MultiInsertSmallDocument(ctx context.Context, tm TimerManager, iters int) error {

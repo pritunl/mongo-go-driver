@@ -9,7 +9,6 @@ package topology_test
 import (
 	"log"
 
-	"github.com/kr/pretty"
 	"github.com/pritunl/mongo-go-driver/x/mongo/driver/topology"
 )
 
@@ -29,6 +28,6 @@ func Example_clusterMonitoring() {
 	}
 
 	for desc := range sub.Updates {
-		log.Printf("%# v", pretty.Formatter(desc))
+		log.Printf("%#v", desc)
 	}
 }

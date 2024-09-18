@@ -12,8 +12,8 @@ import (
 	"testing"
 
 	"github.com/pritunl/mongo-go-driver/bson"
-	"github.com/pritunl/mongo-go-driver/internal"
-	"github.com/pritunl/mongo-go-driver/internal/testutil/assert"
+	"github.com/pritunl/mongo-go-driver/internal/assert"
+	"github.com/pritunl/mongo-go-driver/internal/handshake"
 	"github.com/pritunl/mongo-go-driver/mongo/address"
 	"github.com/pritunl/mongo-go-driver/x/bsonx/bsoncore"
 	"github.com/pritunl/mongo-go-driver/x/mongo/driver/drivertest"
@@ -23,7 +23,7 @@ var (
 	// The base elements for a hello response.
 	handshakeHelloElements = [][]byte{
 		bsoncore.AppendInt32Element(nil, "ok", 1),
-		bsoncore.AppendBooleanElement(nil, internal.LegacyHelloLowercase, true),
+		bsoncore.AppendBooleanElement(nil, handshake.LegacyHelloLowercase, true),
 		bsoncore.AppendInt32Element(nil, "maxBsonObjectSize", 16777216),
 		bsoncore.AppendInt32Element(nil, "maxMessageSizeBytes", 48000000),
 		bsoncore.AppendInt32Element(nil, "minWireVersion", 0),
@@ -95,7 +95,7 @@ func TestSpeculativeSCRAM(t *testing.T) {
 					len(tc.payloads), (conn.Written))
 				helloCmd, err := drivertest.GetCommandFromQueryWireMessage(<-conn.Written)
 				assert.Nil(t, err, "error parsing hello command: %v", err)
-				assertCommandName(t, helloCmd, internal.LegacyHello)
+				assertCommandName(t, helloCmd, handshake.LegacyHello)
 
 				// Assert that the correct document was sent for speculative authentication.
 				authDocVal, err := helloCmd.LookupErr("speculativeAuthenticate")
@@ -179,7 +179,7 @@ func TestSpeculativeSCRAM(t *testing.T) {
 					numResponses, len(conn.Written))
 				hello, err := drivertest.GetCommandFromQueryWireMessage(<-conn.Written)
 				assert.Nil(t, err, "error parsing hello command: %v", err)
-				assertCommandName(t, hello, internal.LegacyHello)
+				assertCommandName(t, hello, handshake.LegacyHello)
 				_, err = hello.LookupErr("speculativeAuthenticate")
 				assert.Nil(t, err, "expected command %s to contain 'speculativeAuthenticate'", bson.Raw(hello))
 

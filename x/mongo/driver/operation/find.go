@@ -13,6 +13,8 @@ import (
 
 	"github.com/pritunl/mongo-go-driver/bson/bsontype"
 	"github.com/pritunl/mongo-go-driver/event"
+	"github.com/pritunl/mongo-go-driver/internal/driverutil"
+	"github.com/pritunl/mongo-go-driver/internal/logger"
 	"github.com/pritunl/mongo-go-driver/mongo/description"
 	"github.com/pritunl/mongo-go-driver/mongo/readconcern"
 	"github.com/pritunl/mongo-go-driver/mongo/readpref"
@@ -60,6 +62,8 @@ type Find struct {
 	result              driver.CursorResponse
 	serverAPI           *driver.ServerAPIOptions
 	timeout             *time.Duration
+	omitCSOTMaxTimeMS   bool
+	logger              *logger.Logger
 }
 
 // NewFind constructs and returns a new Find.
@@ -105,6 +109,9 @@ func (f *Find) Execute(ctx context.Context) error {
 		Legacy:            driver.LegacyFind,
 		ServerAPI:         f.serverAPI,
 		Timeout:           f.timeout,
+		Logger:            f.logger,
+		Name:              driverutil.FindOp,
+		OmitCSOTMaxTimeMS: f.omitCSOTMaxTimeMS,
 	}.Execute(ctx)
 
 }
@@ -544,5 +551,27 @@ func (f *Find) Timeout(timeout *time.Duration) *Find {
 	}
 
 	f.timeout = timeout
+	return f
+}
+
+// OmitCSOTMaxTimeMS omits the automatically-calculated "maxTimeMS" from the
+// command when CSOT is enabled. It does not effect "maxTimeMS" set by
+// [Find.MaxTime].
+func (f *Find) OmitCSOTMaxTimeMS(omit bool) *Find {
+	if f == nil {
+		f = new(Find)
+	}
+
+	f.omitCSOTMaxTimeMS = omit
+	return f
+}
+
+// Logger sets the logger for this operation.
+func (f *Find) Logger(logger *logger.Logger) *Find {
+	if f == nil {
+		f = new(Find)
+	}
+
+	f.logger = logger
 	return f
 }

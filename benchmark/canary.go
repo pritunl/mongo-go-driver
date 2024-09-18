@@ -10,20 +10,18 @@ import (
 	"context"
 )
 
-func CanaryIncCase(ctx context.Context, tm TimerManager, iters int) error {
-	var canaryCount int
-	for i := 0; i < iters; i++ {
-		canaryCount++
-	}
+// CanaryIncCase is a no-op.
+//
+// Deprecated: CanaryIncCase has no observable effect, so recent versions of the Go compiler may
+// bypass calls to it in the compiled binary. It should not be used in benchmarks.
+func CanaryIncCase(context.Context, TimerManager, int) error {
 	return nil
 }
 
-var globalCanaryCount int
-
-func GlobalCanaryIncCase(ctx context.Context, tm TimerManager, iters int) error {
-	for i := 0; i < iters; i++ {
-		globalCanaryCount++
-	}
-
+// GlobalCanaryIncCase is a no-op.
+//
+// Deprecated: GlobalCanaryIncCase has no observable effect, so recent versions of the Go compiler
+// may bypass calls to it in the compiled binary. It should not be used in benchmarks.
+func GlobalCanaryIncCase(context.Context, TimerManager, int) error {
 	return nil
 }

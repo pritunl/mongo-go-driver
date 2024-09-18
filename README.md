@@ -10,23 +10,16 @@
 
 The MongoDB supported driver for Go.
 
--------------------------
-- [Requirements](#requirements)
-- [Installation](#installation)
-- [Usage](#usage)
-- [Feedback](#feedback)
-- [Testing / Development](#testing--development)
-- [Continuous Integration](#continuous-integration)
-- [License](#license)
+______________________________________________________________________
 
--------------------------
 ## Requirements
 
-- Go 1.13 or higher. We aim to support the latest versions of Go.
-  - Go 1.18 or higher is required to run the driver test suite.
+- Go 1.18 or higher. We aim to support the latest versions of Go.
+- Go 1.20 or higher is required to run the driver test suite.
 - MongoDB 3.6 and higher.
 
--------------------------
+______________________________________________________________________
+
 ## Installation
 
 The recommended way to get started using the MongoDB Go driver is by using Go modules to install the dependency in
@@ -43,7 +36,8 @@ When using a version of Go that does not support modules, the driver can be inst
 dep ensure -add "github.com/pritunl/mongo-go-driver/mongo"
 ```
 
--------------------------
+______________________________________________________________________
+
 ## Usage
 
 To get started with the driver, import the `mongo` package and create a `mongo.Client` with the `Connect` function:
@@ -156,96 +150,69 @@ if err == mongo.ErrNoDocuments {
 
 Additional examples and documentation can be found under the examples directory and [on the MongoDB Documentation website](https://www.mongodb.com/docs/drivers/go/current/).
 
--------------------------
+### Network Compression
+
+Network compression will reduce bandwidth requirements between MongoDB and the application.
+
+The Go Driver supports the following compression algorithms:
+
+1. [Snappy](https://google.github.io/snappy/) (`snappy`): available in MongoDB 3.4 and later.
+1. [Zlib](https://zlib.net/) (`zlib`): available in MongoDB 3.6 and later.
+1. [Zstandard](https://github.com/facebook/zstd/) (`zstd`): available in MongoDB 4.2 and later.
+
+#### Specify Compression Algorithms
+
+Compression can be enabled using the `compressors` parameter on the connection string or by using [`ClientOptions.SetCompressors`](https://pkg.go.dev/github.com/pritunl/mongo-go-driver/mongo/options#ClientOptions.SetCompressors):
+
+```go
+opts := options.Client().ApplyURI("mongodb://localhost:27017/?compressors=snappy,zlib,zstd")
+client, _ := mongo.Connect(context.TODO(), opts)
+```
+
+```go
+opts := options.Client().SetCompressors([]string{"snappy", "zlib", "zstd"})
+client, _ := mongo.Connect(context.TODO(), opts)
+```
+
+If compressors are set, the Go Driver negotiates with the server to select the first common compressor. For server configuration and defaults, refer to [`networkMessageCompressors`](https://www.mongodb.com/docs/manual/reference/program/mongod/#std-option-mongod.--networkMessageCompressors).
+
+Messages compress when both parties enable network compression; otherwise, messages remain uncompressed
+
+______________________________________________________________________
+
 ## Feedback
 
 For help with the driver, please post in the [MongoDB Community Forums](https://developer.mongodb.com/community/forums/tag/golang/).
 
 New features and bugs can be reported on jira: https://jira.mongodb.org/browse/GODRIVER
 
--------------------------
-## Testing / Development
+______________________________________________________________________
 
-The driver tests can be run against several database configurations. The most simple configuration is a standalone mongod with no auth, no ssl, and no compression. To run these basic driver tests, make sure a standalone MongoDB server instance is running at localhost:27017. To run the tests, you can run `make` (on Windows, run `nmake`). This will run coverage, run go-lint, run go-vet, and build the examples.
-
-### Testing Different Topologies
-
-To test a **replica set** or **sharded cluster**, set `MONGODB_URI="<connection-string>"` for the `make` command.
-For example, for a local replica set named `rs1` comprised of three nodes on ports 27017, 27018, and 27019:
-
-```
-MONGODB_URI="mongodb://localhost:27017,localhost:27018,localhost:27019/?replicaSet=rs1" make
-```
-
-### Testing Auth and TLS
-
-To test authentication and TLS, first set up a MongoDB cluster with auth and TLS configured. Testing authentication requires a user with the `root` role on the `admin` database. Here is an example command that would run a mongod with TLS correctly configured for tests. Either set or replace PATH_TO_SERVER_KEY_FILE and PATH_TO_CA_FILE with paths to their respective files:
-
-```
-mongod \
---auth \
---tlsMode requireTLS \
---tlsCertificateKeyFile $PATH_TO_SERVER_KEY_FILE \
---tlsCAFile $PATH_TO_CA_FILE \
---tlsAllowInvalidCertificates
-```
-
-To run the tests with `make`, set:
-- `MONGO_GO_DRIVER_CA_FILE` to the location of the CA file used by the database
-- `MONGO_GO_DRIVER_KEY_FILE` to the location of the client key file
-- `MONGO_GO_DRIVER_PKCS8_ENCRYPTED_KEY_FILE` to the location of the pkcs8 client key file encrypted with the password string: `password`
-- `MONGO_GO_DRIVER_PKCS8_UNENCRYPTED_KEY_FILE` to the location of the unencrypted pkcs8 key file
-- `MONGODB_URI` to the connection string of the server
-- `AUTH=auth`
-- `SSL=ssl`
-
-For example:
-
-```
-AUTH=auth SSL=ssl \
-MONGO_GO_DRIVER_CA_FILE=$PATH_TO_CA_FILE \
-MONGO_GO_DRIVER_KEY_FILE=$PATH_TO_CLIENT_KEY_FILE \
-MONGO_GO_DRIVER_PKCS8_ENCRYPTED_KEY_FILE=$PATH_TO_ENCRYPTED_KEY_FILE \
-MONGO_GO_DRIVER_PKCS8_UNENCRYPTED_KEY_FILE=$PATH_TO_UNENCRYPTED_KEY_FILE \
-MONGODB_URI="mongodb://user:password@localhost:27017/?authSource=admin" \
-make
-```
-
-Notes:
-- The `--tlsAllowInvalidCertificates` flag is required on the server for the test suite to work correctly.
-- The test suite requires the auth database to be set with `?authSource=admin`, not `/admin`.
-
-### Testing Compression
-
-The MongoDB Go Driver supports wire protocol compression using Snappy, zLib, or zstd. To run tests with wire protocol compression, set `MONGO_GO_DRIVER_COMPRESSOR` to `snappy`, `zlib`, or `zstd`.  For example:
-
-```
-MONGO_GO_DRIVER_COMPRESSOR=snappy make
-```
-
-Ensure the [`--networkMessageCompressors` flag](https://www.mongodb.com/docs/manual/reference/program/mongod/#cmdoption-mongod-networkmessagecompressors) on mongod or mongos includes `zlib` if testing zLib compression.
-
--------------------------
 ## Contribution
 
 Check out the [project page](https://jira.mongodb.org/browse/GODRIVER) for tickets that need completing. See our [contribution guidelines](docs/CONTRIBUTING.md) for details.
 
--------------------------
+______________________________________________________________________
+
 ## Continuous Integration
 
 Commits to master are run automatically on [evergreen](https://evergreen.mongodb.com/waterfall/mongo-go-driver).
 
--------------------------
+______________________________________________________________________
+
 ## Frequently Encountered Issues
 
 See our [common issues](docs/common-issues.md) documentation for troubleshooting frequently encountered issues.
 
--------------------------
+______________________________________________________________________
+
 ## Thanks and Acknowledgement
 
-<a href="https://github.com/ashleymcnamara">@ashleymcnamara</a> - Mongo Gopher Artwork
+- The Go Gopher artwork by [@ashleymcnamara](https://github.com/ashleymcnamara)
+- The original Go Gopher was designed by [Renee French](http://reneefrench.blogspot.com/)
 
--------------------------
+______________________________________________________________________
+
 ## License
 
 The MongoDB Go Driver is licensed under the [Apache License](LICENSE).

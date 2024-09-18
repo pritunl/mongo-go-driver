@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/pritunl/mongo-go-driver/event"
+	"github.com/pritunl/mongo-go-driver/internal/driverutil"
 	"github.com/pritunl/mongo-go-driver/mongo/description"
 	"github.com/pritunl/mongo-go-driver/mongo/writeconcern"
 	"github.com/pritunl/mongo-go-driver/x/bsonx/bsoncore"
@@ -99,11 +100,12 @@ func (di *DropIndexes) Execute(ctx context.Context) error {
 		WriteConcern:      di.writeConcern,
 		ServerAPI:         di.serverAPI,
 		Timeout:           di.timeout,
+		Name:              driverutil.DropIndexesOp,
 	}.Execute(ctx)
 
 }
 
-func (di *DropIndexes) command(dst []byte, desc description.SelectedServer) ([]byte, error) {
+func (di *DropIndexes) command(dst []byte, _ description.SelectedServer) ([]byte, error) {
 	dst = bsoncore.AppendStringElement(dst, "dropIndexes", di.collection)
 	if di.index != nil {
 		dst = bsoncore.AppendStringElement(dst, "index", *di.index)

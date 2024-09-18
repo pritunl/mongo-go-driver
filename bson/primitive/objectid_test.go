@@ -14,14 +14,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/pritunl/mongo-go-driver/internal/testutil/assert"
-	"github.com/stretchr/testify/require"
+	"github.com/pritunl/mongo-go-driver/internal/assert"
+	"github.com/pritunl/mongo-go-driver/internal/require"
 )
-
-func TestNew(t *testing.T) {
-	// Ensure that objectid.NewObjectID() doesn't panic.
-	NewObjectID()
-}
 
 func TestString(t *testing.T) {
 	id := NewObjectID()
@@ -32,6 +27,20 @@ func BenchmarkHex(b *testing.B) {
 	id := NewObjectID()
 	for i := 0; i < b.N; i++ {
 		id.Hex()
+	}
+}
+
+func BenchmarkObjectIDFromHex(b *testing.B) {
+	id := NewObjectID().Hex()
+	for i := 0; i < b.N; i++ {
+		_, _ = ObjectIDFromHex(id)
+	}
+}
+
+func BenchmarkNewObjectIDFromTimestamp(b *testing.B) {
+	for i := 0; i < b.N; i++ {
+		timestamp := time.Now().Add(time.Duration(i) * time.Millisecond)
+		_ = NewObjectIDFromTimestamp(timestamp)
 	}
 }
 

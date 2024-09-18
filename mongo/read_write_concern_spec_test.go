@@ -8,6 +8,7 @@ package mongo
 
 import (
 	"bytes"
+	"errors"
 	"io/ioutil"
 	"path"
 	"reflect"
@@ -16,7 +17,7 @@ import (
 
 	"github.com/pritunl/mongo-go-driver/bson"
 	"github.com/pritunl/mongo-go-driver/bson/bsontype"
-	"github.com/pritunl/mongo-go-driver/internal/testutil/assert"
+	"github.com/pritunl/mongo-go-driver/internal/assert"
 	"github.com/pritunl/mongo-go-driver/mongo/readconcern"
 	"github.com/pritunl/mongo-go-driver/mongo/writeconcern"
 	"github.com/pritunl/mongo-go-driver/x/bsonx/bsoncore"
@@ -175,7 +176,7 @@ func runDocumentTest(t *testing.T, test documentTest) {
 		}
 
 		expected := *test.WriteConcernDocument
-		if err == writeconcern.ErrEmptyWriteConcern {
+		if errors.Is(err, writeconcern.ErrEmptyWriteConcern) {
 			elems, _ := expected.Elements()
 			if len(elems) == 0 {
 				assert.NotNil(t, test.IsServerDefault, "expected write concern %s, got empty", expected)

@@ -14,6 +14,7 @@ import (
 
 	"github.com/pritunl/mongo-go-driver/bson"
 	"github.com/pritunl/mongo-go-driver/event"
+	"github.com/pritunl/mongo-go-driver/internal/driverutil"
 	"github.com/pritunl/mongo-go-driver/mongo/description"
 	"github.com/pritunl/mongo-go-driver/mongo/readpref"
 	"github.com/pritunl/mongo-go-driver/x/bsonx/bsoncore"
@@ -163,11 +164,12 @@ func (ld *ListDatabases) Execute(ctx context.Context) error {
 		Crypt:          ld.crypt,
 		ServerAPI:      ld.serverAPI,
 		Timeout:        ld.timeout,
+		Name:           driverutil.ListDatabasesOp,
 	}.Execute(ctx)
 
 }
 
-func (ld *ListDatabases) command(dst []byte, desc description.SelectedServer) ([]byte, error) {
+func (ld *ListDatabases) command(dst []byte, _ description.SelectedServer) ([]byte, error) {
 	dst = bsoncore.AppendInt32Element(dst, "listDatabases", 1)
 	if ld.filter != nil {
 

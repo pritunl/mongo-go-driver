@@ -8,6 +8,7 @@ package mtest
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"sync"
@@ -17,8 +18,8 @@ import (
 
 	"github.com/pritunl/mongo-go-driver/bson"
 	"github.com/pritunl/mongo-go-driver/event"
-	"github.com/pritunl/mongo-go-driver/internal"
-	"github.com/pritunl/mongo-go-driver/internal/testutil/assert"
+	"github.com/pritunl/mongo-go-driver/internal/assert"
+	"github.com/pritunl/mongo-go-driver/internal/csfle"
 	"github.com/pritunl/mongo-go-driver/mongo"
 	"github.com/pritunl/mongo-go-driver/mongo/options"
 	"github.com/pritunl/mongo-go-driver/mongo/readconcern"
@@ -180,11 +181,14 @@ func New(wrapped *testing.T, opts ...*Options) *T {
 		t.createTestClient()
 	}
 
+	wrapped.Cleanup(t.cleanup)
+
 	return t
 }
 
-// Close cleans up any resources associated with a T. There should be one Close corresponding to every New.
-func (t *T) Close() {
+// cleanup cleans up any resources associated with a T. It is intended to be
+// called by [testing.T.Cleanup].
+func (t *T) cleanup() {
 	if t.Client == nil {
 		return
 	}
@@ -203,7 +207,7 @@ func (t *T) Close() {
 // Run creates a new T instance for a sub-test and runs the given callback. It also creates a new collection using the
 // given name which is available to the callback through the T.Coll variable and is dropped after the callback
 // returns.
-func (t *T) Run(name string, callback func(*T)) {
+func (t *T) Run(name string, callback func(mt *T)) {
 	t.RunOpts(name, NewOptions(), callback)
 }
 
@@ -211,7 +215,7 @@ func (t *T) Run(name string, callback func(*T)) {
 // constraints specified in the options, the new sub-test will be skipped automatically. If the test is not skipped,
 // the callback will be run with the new T instance. RunOpts creates a new collection with the given name which is
 // available to the callback through the T.Coll variable and is dropped after the callback returns.
-func (t *T) RunOpts(name string, opts *Options, callback func(*T)) {
+func (t *T) RunOpts(name string, opts *Options, callback func(mt *T)) {
 	t.T.Run(name, func(wrapped *testing.T) {
 		sub := newT(wrapped, t.baseOpts, opts)
 
@@ -466,11 +470,11 @@ func (t *T) CreateCollection(coll Collection, createOnServer bool) *mongo.Collec
 		}
 
 		// ignore ErrUnacknowledgedWrite. Client may be configured with unacknowledged write concern.
-		if err != nil && err != driver.ErrUnacknowledgedWrite {
+		if err != nil && !errors.Is(err, driver.ErrUnacknowledgedWrite) {
 			// ignore NamespaceExists errors for idempotency
 
-			cmdErr, ok := err.(mongo.CommandError)
-			if !ok || cmdErr.Code != namespaceExistsErrCode {
+			var cmdErr mongo.CommandError
+			if !errors.As(err, &cmdErr) || cmdErr.Code != namespaceExistsErrCode {
 				t.Fatalf("error creating collection or view: %v on server: %v", coll.Name, err)
 			}
 		}
@@ -490,21 +494,15 @@ func DropEncryptedCollection(t *T, coll *mongo.Collection, encryptedFields inter
 	efBSON, err := bson.Marshal(encryptedFields)
 	assert.Nil(t, err, "error in Marshal: %v", err)
 
-	// Drop the three encryption-related, associated collections: `escCollection`, `eccCollection` and `ecocCollection`.
+	// Drop the two encryption-related, associated collections: `escCollection` and `ecocCollection`.
 	// Drop ESCCollection.
-	escCollection, err := internal.GetEncryptedStateCollectionName(efBSON, coll.Name(), internal.EncryptedStateCollection)
+	escCollection, err := csfle.GetEncryptedStateCollectionName(efBSON, coll.Name(), csfle.EncryptedStateCollection)
 	assert.Nil(t, err, "error in getEncryptedStateCollectionName: %v", err)
 	err = coll.Database().Collection(escCollection).Drop(context.Background())
 	assert.Nil(t, err, "error in Drop: %v", err)
 
-	// Drop ECCCollection.
-	eccCollection, err := internal.GetEncryptedStateCollectionName(efBSON, coll.Name(), internal.EncryptedCacheCollection)
-	assert.Nil(t, err, "error in getEncryptedStateCollectionName: %v", err)
-	err = coll.Database().Collection(eccCollection).Drop(context.Background())
-	assert.Nil(t, err, "error in Drop: %v", err)
-
 	// Drop ECOCCollection.
-	ecocCollection, err := internal.GetEncryptedStateCollectionName(efBSON, coll.Name(), internal.EncryptedCompactionCollection)
+	ecocCollection, err := csfle.GetEncryptedStateCollectionName(efBSON, coll.Name(), csfle.EncryptedCompactionCollection)
 	assert.Nil(t, err, "error in getEncryptedStateCollectionName: %v", err)
 	err = coll.Database().Collection(ecocCollection).Drop(context.Background())
 	assert.Nil(t, err, "error in Drop: %v", err)
@@ -524,7 +522,7 @@ func (t *T) ClearCollections() {
 			}
 
 			err := coll.created.Drop(context.Background())
-			if err == mongo.ErrUnacknowledgedWrite || err == driver.ErrUnacknowledgedWrite {
+			if errors.Is(err, mongo.ErrUnacknowledgedWrite) || errors.Is(err, driver.ErrUnacknowledgedWrite) {
 				// It's possible that a collection could have an unacknowledged write concern, which
 				// could prevent it from being dropped for sharded clusters. We can resolve this by
 				// re-instantiating the collection with a majority write concern before dropping.
@@ -641,25 +639,25 @@ func (t *T) createTestClient() {
 	// Setup command monitor
 	var customMonitor = clientOpts.Monitor
 	clientOpts.SetMonitor(&event.CommandMonitor{
-		Started: func(_ context.Context, cse *event.CommandStartedEvent) {
+		Started: func(ctx context.Context, cse *event.CommandStartedEvent) {
 			if customMonitor != nil && customMonitor.Started != nil {
-				customMonitor.Started(context.Background(), cse)
+				customMonitor.Started(ctx, cse)
 			}
 			t.monitorLock.Lock()
 			defer t.monitorLock.Unlock()
 			t.started = append(t.started, cse)
 		},
-		Succeeded: func(_ context.Context, cse *event.CommandSucceededEvent) {
+		Succeeded: func(ctx context.Context, cse *event.CommandSucceededEvent) {
 			if customMonitor != nil && customMonitor.Succeeded != nil {
-				customMonitor.Succeeded(context.Background(), cse)
+				customMonitor.Succeeded(ctx, cse)
 			}
 			t.monitorLock.Lock()
 			defer t.monitorLock.Unlock()
 			t.succeeded = append(t.succeeded, cse)
 		},
-		Failed: func(_ context.Context, cfe *event.CommandFailedEvent) {
+		Failed: func(ctx context.Context, cfe *event.CommandFailedEvent) {
 			if customMonitor != nil && customMonitor.Failed != nil {
-				customMonitor.Failed(context.Background(), cfe)
+				customMonitor.Failed(ctx, cfe)
 			}
 			t.monitorLock.Lock()
 			defer t.monitorLock.Unlock()

@@ -15,8 +15,8 @@ import (
 
 	"github.com/pritunl/mongo-go-driver/bson"
 	"github.com/pritunl/mongo-go-driver/event"
-	"github.com/pritunl/mongo-go-driver/internal/testutil"
-	"github.com/pritunl/mongo-go-driver/internal/testutil/assert"
+	"github.com/pritunl/mongo-go-driver/internal/assert"
+	"github.com/pritunl/mongo-go-driver/internal/integtest"
 	"github.com/pritunl/mongo-go-driver/mongo"
 	"github.com/pritunl/mongo-go-driver/mongo/integration/mtest"
 	"github.com/pritunl/mongo-go-driver/mongo/options"
@@ -26,14 +26,9 @@ import (
 func TestCSOTClientSideEncryptionProse(t *testing.T) {
 	verifyClientSideEncryptionVarsSet(t)
 	mt := mtest.New(t, mtest.NewOptions().MinServerVersion("4.2").CreateClient(false))
-	defer mt.Close()
 
 	mt.RunOpts("2. maxTimeMS is not set for commands sent to mongocryptd",
 		noClientOpts, func(mt *mtest.T) {
-			if testing.Short() {
-				mt.Skip("skipping integration test in short mode")
-			}
-
 			kmsProviders := map[string]map[string]interface{}{
 				"local": {
 					"key": localMasterKey,
@@ -51,7 +46,7 @@ func TestCSOTClientSideEncryptionProse(t *testing.T) {
 			aeo := options.AutoEncryption().SetKmsProviders(kmsProviders).
 				SetExtraOptions(mongocryptdSpawnArgs)
 			cliOpts := options.Client().ApplyURI(mtest.ClusterURI()).SetAutoEncryptionOptions(aeo)
-			testutil.AddTestServerAPIVersion(cliOpts)
+			integtest.AddTestServerAPIVersion(cliOpts)
 			encClient, err := mongo.Connect(context.Background(), cliOpts)
 			assert.Nil(mt, err, "Connect error: %v", err)
 			defer func() {
@@ -74,7 +69,7 @@ func TestCSOTClientSideEncryptionProse(t *testing.T) {
 			}
 			mcryptOpts := options.Client().SetMonitor(mcryptMonitor).
 				ApplyURI("mongodb://localhost:23000/?timeoutMS=1000")
-			testutil.AddTestServerAPIVersion(mcryptOpts)
+			integtest.AddTestServerAPIVersion(mcryptOpts)
 			mcryptClient, err := mongo.Connect(context.Background(), mcryptOpts)
 			assert.Nil(mt, err, "mongocryptd Connect error: %v", err)
 			defer func() {

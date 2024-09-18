@@ -9,6 +9,7 @@ package unified
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/pritunl/mongo-go-driver/bson"
@@ -28,6 +29,7 @@ type commandMonitoringEvent struct {
 
 	CommandSucceededEvent *struct {
 		CommandName           *string  `bson:"commandName"`
+		DatabaseName          *string  `bson:"databaseName"`
 		Reply                 bson.Raw `bson:"reply"`
 		HasServerConnectionID *bool    `bson:"hasServerConnectionId"`
 		HasServiceID          *bool    `bson:"hasServiceId"`
@@ -35,6 +37,7 @@ type commandMonitoringEvent struct {
 
 	CommandFailedEvent *struct {
 		CommandName           *string `bson:"commandName"`
+		DatabaseName          *string `bson:"databaseName"`
 		HasServerConnectionID *bool   `bson:"hasServerConnectionId"`
 		HasServiceID          *bool   `bson:"hasServiceId"`
 	} `bson:"commandFailedEvent"`
@@ -58,14 +61,42 @@ type cmapEvent struct {
 	ConnectionCheckedInEvent *struct{} `bson:"connectionCheckedInEvent"`
 
 	PoolClearedEvent *struct {
-		HasServiceID *bool `bson:"hasServiceId"`
+		HasServiceID              *bool `bson:"hasServiceId"`
+		InterruptInUseConnections *bool `bson:"interruptInUseConnections"`
 	} `bson:"poolClearedEvent"`
+}
+
+type sdamEvent struct {
+	ServerDescriptionChangedEvent *struct {
+		NewDescription *struct {
+			Type *string `bson:"type"`
+		} `bson:"newDescription"`
+
+		PreviousDescription *struct {
+			Type *string `bson:"type"`
+		} `bson:"previousDescription"`
+	} `bson:"serverDescriptionChangedEvent"`
+
+	ServerHeartbeatStartedEvent *struct {
+		Awaited *bool `bson:"awaited"`
+	} `bson:"serverHeartbeatStartedEvent"`
+
+	ServerHeartbeatSucceededEvent *struct {
+		Awaited *bool `bson:"awaited"`
+	} `bson:"serverHeartbeatSucceededEvent"`
+
+	ServerHeartbeatFailedEvent *struct {
+		Awaited *bool `bson:"awaited"`
+	} `bson:"serverHeartbeatFailedEvent"`
+
+	TopologyDescriptionChangedEvent *struct{} `bson:"topologyDescriptionChangedEvent"`
 }
 
 type expectedEvents struct {
 	ClientID          string `bson:"client"`
 	CommandEvents     []commandMonitoringEvent
 	CMAPEvents        []cmapEvent
+	SDAMEvents        []sdamEvent
 	IgnoreExtraEvents *bool
 }
 
@@ -83,7 +114,7 @@ func (e *expectedEvents) UnmarshalBSON(data []byte) error {
 		Extra             map[string]interface{} `bson:",inline"`
 	}
 	if err := bson.Unmarshal(data, &temp); err != nil {
-		return fmt.Errorf("error unmarshalling to temporary expectedEvents object: %v", err)
+		return fmt.Errorf("error unmarshalling to temporary expectedEvents object: %w", err)
 	}
 	if len(temp.Extra) > 0 {
 		return fmt.Errorf("unrecognized fields for expectedEvents: %v", temp.Extra)
@@ -100,12 +131,14 @@ func (e *expectedEvents) UnmarshalBSON(data []byte) error {
 		target = &e.CommandEvents
 	case "cmap":
 		target = &e.CMAPEvents
+	case "sdam":
+		target = &e.SDAMEvents
 	default:
 		return fmt.Errorf("unrecognized 'eventType' value for expectedEvents: %q", temp.EventType)
 	}
 
 	if err := temp.Events.Unmarshal(target); err != nil {
-		return fmt.Errorf("error unmarshalling events array: %v", err)
+		return fmt.Errorf("error unmarshalling events array: %w", err)
 	}
 
 	if temp.IgnoreExtraEvents != nil {
@@ -125,6 +158,8 @@ func verifyEvents(ctx context.Context, expectedEvents *expectedEvents) error {
 		return verifyCommandEvents(ctx, client, expectedEvents)
 	case expectedEvents.CMAPEvents != nil:
 		return verifyCMAPEvents(client, expectedEvents)
+	case expectedEvents.SDAMEvents != nil:
+		return verifySDAMEvents(client, expectedEvents)
 	}
 	return nil
 }
@@ -181,7 +216,7 @@ func verifyCommandEvents(ctx context.Context, client *clientEntity, expectedEven
 				}
 			}
 			if expected.HasServerConnectionID != nil {
-				if err := verifyServerConnectionID(*expected.HasServerConnectionID, actual.ServerConnectionID); err != nil {
+				if err := verifyServerConnectionID(*expected.HasServerConnectionID, actual.ServerConnectionID64); err != nil {
 					return newEventVerificationError(idx, client, "error verifying serverConnectionID: %v", err)
 				}
 			}
@@ -197,6 +232,10 @@ func verifyCommandEvents(ctx context.Context, client *clientEntity, expectedEven
 			if expected.CommandName != nil && *expected.CommandName != actual.CommandName {
 				return newEventVerificationError(idx, client, "expected command name %q, got %q", *expected.CommandName,
 					actual.CommandName)
+			}
+			if expected.DatabaseName != nil && *expected.DatabaseName != actual.DatabaseName {
+				return newEventVerificationError(idx, client, "expected database name %q, got %q", *expected.DatabaseName,
+					actual.DatabaseName)
 			}
 			if expected.Reply != nil {
 				expectedDoc := documentToRawValue(expected.Reply)
@@ -221,7 +260,7 @@ func verifyCommandEvents(ctx context.Context, client *clientEntity, expectedEven
 				}
 			}
 			if expected.HasServerConnectionID != nil {
-				if err := verifyServerConnectionID(*expected.HasServerConnectionID, actual.ServerConnectionID); err != nil {
+				if err := verifyServerConnectionID(*expected.HasServerConnectionID, actual.ServerConnectionID64); err != nil {
 					return newEventVerificationError(idx, client, "error verifying serverConnectionID: %v", err)
 				}
 			}
@@ -238,13 +277,17 @@ func verifyCommandEvents(ctx context.Context, client *clientEntity, expectedEven
 				return newEventVerificationError(idx, client, "expected command name %q, got %q", *expected.CommandName,
 					actual.CommandName)
 			}
+			if expected.DatabaseName != nil && *expected.DatabaseName != actual.DatabaseName {
+				return newEventVerificationError(idx, client, "expected database name %q, got %q", *expected.DatabaseName,
+					actual.DatabaseName)
+			}
 			if expected.HasServiceID != nil {
 				if err := verifyServiceID(*expected.HasServiceID, actual.ServiceID); err != nil {
 					return newEventVerificationError(idx, client, "error verifying serviceID: %v", err)
 				}
 			}
 			if expected.HasServerConnectionID != nil {
-				if err := verifyServerConnectionID(*expected.HasServerConnectionID, actual.ServerConnectionID); err != nil {
+				if err := verifyServerConnectionID(*expected.HasServerConnectionID, actual.ServerConnectionID64); err != nil {
 					return newEventVerificationError(idx, client, "error verifying serverConnectionID: %v", err)
 				}
 			}
@@ -319,6 +362,10 @@ func verifyCMAPEvents(client *clientEntity, expectedEvents *expectedEvents) erro
 					return newEventVerificationError(idx, client, "error verifying serviceID: %v", err)
 				}
 			}
+			if expectInterruption := evt.PoolClearedEvent.InterruptInUseConnections; expectInterruption != nil && *expectInterruption != actual.Interruption {
+				return newEventVerificationError(idx, client, "expected interruptInUseConnections %v, got %v",
+					expectInterruption, actual.Interruption)
+			}
 		default:
 			return newEventVerificationError(idx, client, "no expected event set on cmapEvent instance")
 		}
@@ -351,7 +398,7 @@ func verifyServiceID(expectServiceID bool, serviceID *primitive.ObjectID) error 
 	return nil
 }
 
-func verifyServerConnectionID(expectedHasSCID bool, scid *int32) error {
+func verifyServerConnectionID(expectedHasSCID bool, scid *int64) error {
 	if actualHasSCID := scid != nil; expectedHasSCID != actualHasSCID {
 		if expectedHasSCID {
 			return fmt.Errorf("expected event to have server connection ID, event has none")
@@ -394,4 +441,146 @@ func stringifyEventsForClient(client *clientEntity) string {
 	}
 
 	return str.String()
+}
+
+func getNextServerDescriptionChangedEvent(
+	events []*event.ServerDescriptionChangedEvent,
+) (*event.ServerDescriptionChangedEvent, []*event.ServerDescriptionChangedEvent, error) {
+	if len(events) == 0 {
+		return nil, nil, errors.New("no server changed event published")
+	}
+
+	return events[0], events[1:], nil
+}
+
+func getNextServerHeartbeatStartedEvent(
+	events []*event.ServerHeartbeatStartedEvent,
+) (*event.ServerHeartbeatStartedEvent, []*event.ServerHeartbeatStartedEvent, error) {
+	if len(events) == 0 {
+		return nil, nil, errors.New("no heartbeat started event published")
+	}
+
+	return events[0], events[1:], nil
+}
+
+func getNextServerHeartbeatSucceededEvent(
+	events []*event.ServerHeartbeatSucceededEvent,
+) (*event.ServerHeartbeatSucceededEvent, []*event.ServerHeartbeatSucceededEvent, error) {
+	if len(events) == 0 {
+		return nil, nil, errors.New("no heartbeat succeeded event published")
+	}
+
+	return events[0], events[:1], nil
+}
+
+func getNextServerHeartbeatFailedEvent(
+	events []*event.ServerHeartbeatFailedEvent,
+) (*event.ServerHeartbeatFailedEvent, []*event.ServerHeartbeatFailedEvent, error) {
+	if len(events) == 0 {
+		return nil, nil, errors.New("no heartbeat failed event published")
+	}
+
+	return events[0], events[:1], nil
+}
+
+func getNextTopologyDescriptionChangedEvent(
+	events []*event.TopologyDescriptionChangedEvent,
+) (*event.TopologyDescriptionChangedEvent, []*event.TopologyDescriptionChangedEvent, error) {
+	if len(events) == 0 {
+		return nil, nil, errors.New("no topology description changed event published")
+	}
+
+	return events[0], events[:1], nil
+}
+
+func verifySDAMEvents(client *clientEntity, expectedEvents *expectedEvents) error {
+	var (
+		changed   = client.serverDescriptionChanged
+		started   = client.serverHeartbeatStartedEvent
+		succeeded = client.serverHeartbeatSucceeded
+		failed    = client.serverHeartbeatFailedEvent
+		tchanged  = client.topologyDescriptionChanged
+	)
+
+	vol := func() int { return len(changed) + len(started) + len(succeeded) + len(failed) + len(tchanged) }
+
+	if len(expectedEvents.SDAMEvents) == 0 && vol() != 0 {
+		return fmt.Errorf("expected no sdam events to be sent but got %s", stringifyEventsForClient(client))
+	}
+
+	for idx, evt := range expectedEvents.SDAMEvents {
+		var err error
+
+		switch {
+		case evt.ServerDescriptionChangedEvent != nil:
+			var got *event.ServerDescriptionChangedEvent
+			if got, changed, err = getNextServerDescriptionChangedEvent(changed); err != nil {
+				return newEventVerificationError(idx, client, err.Error())
+			}
+
+			prevDesc := evt.ServerDescriptionChangedEvent.NewDescription
+
+			var wantPrevDesc string
+			if prevDesc != nil && prevDesc.Type != nil {
+				wantPrevDesc = *prevDesc.Type
+			}
+
+			gotPrevDesc := got.PreviousDescription.Kind.String()
+			if gotPrevDesc != wantPrevDesc {
+				return newEventVerificationError(idx, client,
+					"expected previous server description %q, got %q", wantPrevDesc, gotPrevDesc)
+			}
+
+			newDesc := evt.ServerDescriptionChangedEvent.PreviousDescription
+
+			var wantNewDesc string
+			if newDesc != nil && newDesc.Type != nil {
+				wantNewDesc = *newDesc.Type
+			}
+
+			gotNewDesc := got.NewDescription.Kind.String()
+			if gotNewDesc != wantNewDesc {
+				return newEventVerificationError(idx, client,
+					"expected new server description %q, got %q", wantNewDesc, gotNewDesc)
+			}
+		case evt.ServerHeartbeatStartedEvent != nil:
+			var got *event.ServerHeartbeatStartedEvent
+			if got, started, err = getNextServerHeartbeatStartedEvent(started); err != nil {
+				return newEventVerificationError(idx, client, err.Error())
+			}
+
+			if want := evt.ServerHeartbeatStartedEvent.Awaited; want != nil && *want != got.Awaited {
+				return newEventVerificationError(idx, client, "want awaited %v, got %v", *want, got.Awaited)
+			}
+		case evt.ServerHeartbeatSucceededEvent != nil:
+			var got *event.ServerHeartbeatSucceededEvent
+			if got, succeeded, err = getNextServerHeartbeatSucceededEvent(succeeded); err != nil {
+				return newEventVerificationError(idx, client, err.Error())
+			}
+
+			if want := evt.ServerHeartbeatSucceededEvent.Awaited; want != nil && *want != got.Awaited {
+				return newEventVerificationError(idx, client, "want awaited %v, got %v", *want, got.Awaited)
+			}
+		case evt.ServerHeartbeatFailedEvent != nil:
+			var got *event.ServerHeartbeatFailedEvent
+			if got, failed, err = getNextServerHeartbeatFailedEvent(failed); err != nil {
+				return newEventVerificationError(idx, client, err.Error())
+			}
+
+			if want := evt.ServerHeartbeatFailedEvent.Awaited; want != nil && *want != got.Awaited {
+				return newEventVerificationError(idx, client, "want awaited %v, got %v", *want, got.Awaited)
+			}
+		case evt.TopologyDescriptionChangedEvent != nil:
+			if _, tchanged, err = getNextTopologyDescriptionChangedEvent(tchanged); err != nil {
+				return newEventVerificationError(idx, client, err.Error())
+			}
+		}
+	}
+
+	// Verify that there are no remaining events if ignoreExtraEvents is unset or false.
+	ignoreExtraEvents := expectedEvents.IgnoreExtraEvents != nil && *expectedEvents.IgnoreExtraEvents
+	if !ignoreExtraEvents && vol() > 0 {
+		return fmt.Errorf("extra sdam events published; all events for client: %s", stringifyEventsForClient(client))
+	}
+	return nil
 }

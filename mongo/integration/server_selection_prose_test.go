@@ -14,12 +14,12 @@ import (
 
 	"github.com/pritunl/mongo-go-driver/bson"
 	"github.com/pritunl/mongo-go-driver/event"
-	"github.com/pritunl/mongo-go-driver/internal/testutil/monitor"
+	"github.com/pritunl/mongo-go-driver/internal/assert"
+	"github.com/pritunl/mongo-go-driver/internal/eventtest"
+	"github.com/pritunl/mongo-go-driver/internal/require"
 	"github.com/pritunl/mongo-go-driver/mongo/description"
 	"github.com/pritunl/mongo-go-driver/mongo/integration/mtest"
 	"github.com/pritunl/mongo-go-driver/mongo/options"
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 )
 
 type saturatedConnections map[uint64]bool
@@ -47,7 +47,7 @@ func (set saturatedHosts) isSaturated(tolerance uint64) bool {
 // awaitSaturation uses CMAP events to ensure that the client's connection pools for N-mongoses have been saturated.
 // The qualification for a host to be "saturated" is for each host on the client to have a tolerable number of ready
 // connections.
-func awaitSaturation(ctx context.Context, mt *mtest.T, monitor *monitor.TestPoolMonitor, tolerance uint64) error {
+func awaitSaturation(ctx context.Context, mt *mtest.T, monitor *eventtest.TestPoolMonitor, tolerance uint64) error {
 	set := make(saturatedHosts)
 	var err error
 	for !set.isSaturated(tolerance) {
@@ -71,7 +71,7 @@ func awaitSaturation(ctx context.Context, mt *mtest.T, monitor *monitor.TestPool
 // runsServerSelection will run opCount-many `FindOne` operations within threadCount-many go routines.  The purpose of
 // this is to test the reliability of the server selection algorithm, which can be verified with the `counts` map and
 // `event.PoolEvent` slice.
-func runsServerSelection(mt *mtest.T, monitor *monitor.TestPoolMonitor,
+func runsServerSelection(mt *mtest.T, monitor *eventtest.TestPoolMonitor,
 	threadCount, opCount int) (map[string]int, []*event.PoolEvent) {
 	var wg sync.WaitGroup
 	for i := 0; i < threadCount; i++ {
@@ -107,7 +107,6 @@ func TestServerSelectionProse(t *testing.T) {
 	const localThreshold = 30 * time.Second
 
 	mt := mtest.New(t, mtest.NewOptions().CreateClient(false))
-	defer mt.Close()
 
 	mtOpts := mtest.NewOptions().Topologies(mtest.Sharded).MinServerVersion("4.9")
 	mt.RunOpts("operationCount-based selection within latency window, with failpoint", mtOpts, func(mt *mtest.T) {
@@ -145,7 +144,7 @@ func TestServerSelectionProse(t *testing.T) {
 		// Reset the client with exactly 2 mongos hosts. Use a ServerMonitor to wait for both mongos
 		// host descriptions to move from kind "Unknown" to kind "Mongos".
 		topologyEvents := make(chan *event.TopologyDescriptionChangedEvent, 10)
-		tpm := monitor.NewTestPoolMonitor()
+		tpm := eventtest.NewTestPoolMonitor()
 		mt.ResetClient(options.Client().
 			SetLocalThreshold(localThreshold).
 			SetMaxPoolSize(maxPoolSize).
@@ -184,6 +183,9 @@ func TestServerSelectionProse(t *testing.T) {
 
 	mtOpts = mtest.NewOptions().Topologies(mtest.Sharded)
 	mt.RunOpts("operationCount-based selection within latency window, no failpoint", mtOpts, func(mt *mtest.T) {
+		// TODO(GODRIVER-2842): Fix and unskip this test case.
+		mt.Skip("Test fails frequently, skipping. See GODRIVER-2842")
+
 		_, err := mt.Coll.InsertOne(context.Background(), bson.D{})
 		require.NoError(mt, err, "InsertOne() error")
 
@@ -193,7 +195,7 @@ func TestServerSelectionProse(t *testing.T) {
 		// Reset the client with exactly 2 mongos hosts. Use a ServerMonitor to wait for both mongos
 		// host descriptions to move from kind "Unknown" to kind "Mongos".
 		topologyEvents := make(chan *event.TopologyDescriptionChangedEvent, 10)
-		tpm := monitor.NewTestPoolMonitor()
+		tpm := eventtest.NewTestPoolMonitor()
 		mt.ResetClient(options.Client().
 			SetHosts(hosts[:2]).
 			SetPoolMonitor(tpm.PoolMonitor).

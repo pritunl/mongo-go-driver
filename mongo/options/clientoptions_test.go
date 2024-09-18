@@ -27,8 +27,8 @@ import (
 	"github.com/pritunl/mongo-go-driver/bson"
 	"github.com/pritunl/mongo-go-driver/bson/bsoncodec"
 	"github.com/pritunl/mongo-go-driver/event"
-	"github.com/pritunl/mongo-go-driver/internal"
-	"github.com/pritunl/mongo-go-driver/internal/testutil/assert"
+	"github.com/pritunl/mongo-go-driver/internal/assert"
+	"github.com/pritunl/mongo-go-driver/internal/httputil"
 	"github.com/pritunl/mongo-go-driver/mongo/readconcern"
 	"github.com/pritunl/mongo-go-driver/mongo/readpref"
 	"github.com/pritunl/mongo-go-driver/mongo/writeconcern"
@@ -40,9 +40,9 @@ var tClientOptions = reflect.TypeOf(&ClientOptions{})
 func TestClientOptions(t *testing.T) {
 	t.Run("ApplyURI/doesn't overwrite previous errors", func(t *testing.T) {
 		uri := "not-mongo-db-uri://"
-		want := internal.WrapErrorf(
-			errors.New(`scheme must be "mongodb" or "mongodb+srv"`), "error parsing uri",
-		)
+		want := fmt.Errorf(
+			"error parsing uri: %w",
+			errors.New(`scheme must be "mongodb" or "mongodb+srv"`))
 		co := Client().ApplyURI(uri).ApplyURI("mongodb://localhost/")
 		got := co.Validate()
 		if !cmp.Equal(got, want, cmp.Comparer(compareErrors)) {
@@ -184,16 +184,6 @@ func TestClientOptions(t *testing.T) {
 				t.Errorf("Merged client options do not match. got %v; want %v", got.err.Error(), opt1.err.Error())
 			}
 		})
-
-		t.Run("MergeClientOptions/uri", func(t *testing.T) {
-			opt1, opt2 := Client(), Client()
-			opt1.uri = "Test URI"
-
-			got := MergeClientOptions(nil, opt1, opt2)
-			if got.uri != "Test URI" {
-				t.Errorf("Merged client options do not match. got %v; want %v", got.uri, opt1.uri)
-			}
-		})
 	})
 	t.Run("ApplyURI", func(t *testing.T) {
 		baseClient := func() *ClientOptions {
@@ -208,10 +198,10 @@ func TestClientOptions(t *testing.T) {
 				"ParseError",
 				"not-mongo-db-uri://",
 				&ClientOptions{
-					err: internal.WrapErrorf(
-						errors.New(`scheme must be "mongodb" or "mongodb+srv"`), "error parsing uri",
-					),
-					HTTPClient: internal.DefaultHTTPClient,
+					err: fmt.Errorf(
+						"error parsing uri: %w",
+						errors.New(`scheme must be "mongodb" or "mongodb+srv"`)),
+					HTTPClient: httputil.DefaultHTTPClient,
 				},
 			},
 			{
@@ -220,7 +210,7 @@ func TestClientOptions(t *testing.T) {
 				&ClientOptions{
 					err:        fmt.Errorf("unknown read preference %v", ""),
 					Hosts:      []string{"localhost"},
-					HTTPClient: internal.DefaultHTTPClient,
+					HTTPClient: httputil.DefaultHTTPClient,
 				},
 			},
 			{
@@ -229,7 +219,7 @@ func TestClientOptions(t *testing.T) {
 				&ClientOptions{
 					err:        errors.New("can not specify tags, max staleness, or hedge with mode primary"),
 					Hosts:      []string{"localhost"},
-					HTTPClient: internal.DefaultHTTPClient,
+					HTTPClient: httputil.DefaultHTTPClient,
 				},
 			},
 			{
@@ -238,7 +228,7 @@ func TestClientOptions(t *testing.T) {
 				&ClientOptions{
 					err:        &os.PathError{Op: "open", Path: "testdata/doesntexist"},
 					Hosts:      []string{"localhost"},
-					HTTPClient: internal.DefaultHTTPClient,
+					HTTPClient: httputil.DefaultHTTPClient,
 				},
 			},
 			{
@@ -247,7 +237,7 @@ func TestClientOptions(t *testing.T) {
 				&ClientOptions{
 					err:        &os.PathError{Op: "open", Path: "testdata/doesntexist"},
 					Hosts:      []string{"localhost"},
-					HTTPClient: internal.DefaultHTTPClient,
+					HTTPClient: httputil.DefaultHTTPClient,
 				},
 			},
 			{
@@ -284,11 +274,10 @@ func TestClientOptions(t *testing.T) {
 				"Unescaped slash in username",
 				"mongodb:///:pwd@localhost",
 				&ClientOptions{
-					err: internal.WrapErrorf(
-						errors.New("unescaped slash in username"),
-						"error parsing uri",
-					),
-					HTTPClient: internal.DefaultHTTPClient,
+					err: fmt.Errorf(
+						"error parsing uri: %w",
+						errors.New("unescaped slash in username")),
+					HTTPClient: httputil.DefaultHTTPClient,
 				},
 			},
 			{
@@ -471,34 +460,31 @@ func TestClientOptions(t *testing.T) {
 				"TLS only tlsCertificateFile",
 				"mongodb://localhost/?tlsCertificateFile=testdata/nopass/cert.pem",
 				&ClientOptions{
-					err: internal.WrapErrorf(
-						errors.New("the tlsPrivateKeyFile URI option must be provided if the tlsCertificateFile option is specified"),
-						"error validating uri",
-					),
-					HTTPClient: internal.DefaultHTTPClient,
+					err: fmt.Errorf(
+						"error validating uri: %w",
+						errors.New("the tlsPrivateKeyFile URI option must be provided if the tlsCertificateFile option is specified")),
+					HTTPClient: httputil.DefaultHTTPClient,
 				},
 			},
 			{
 				"TLS only tlsPrivateKeyFile",
 				"mongodb://localhost/?tlsPrivateKeyFile=testdata/nopass/key.pem",
 				&ClientOptions{
-					err: internal.WrapErrorf(
-						errors.New("the tlsCertificateFile URI option must be provided if the tlsPrivateKeyFile option is specified"),
-						"error validating uri",
-					),
-					HTTPClient: internal.DefaultHTTPClient,
+					err: fmt.Errorf(
+						"error validating uri: %w",
+						errors.New("the tlsCertificateFile URI option must be provided if the tlsPrivateKeyFile option is specified")),
+					HTTPClient: httputil.DefaultHTTPClient,
 				},
 			},
 			{
 				"TLS tlsCertificateFile and tlsPrivateKeyFile and tlsCertificateKeyFile",
 				"mongodb://localhost/?tlsCertificateFile=testdata/nopass/cert.pem&tlsPrivateKeyFile=testdata/nopass/key.pem&tlsCertificateKeyFile=testdata/nopass/certificate.pem",
 				&ClientOptions{
-					err: internal.WrapErrorf(
+					err: fmt.Errorf(
+						"error validating uri: %w",
 						errors.New("the sslClientCertificateKeyFile/tlsCertificateKeyFile URI option cannot be provided "+
-							"along with tlsCertificateFile or tlsPrivateKeyFile"),
-						"error validating uri",
-					),
-					HTTPClient: internal.DefaultHTTPClient,
+							"along with tlsCertificateFile or tlsPrivateKeyFile")),
+					HTTPClient: httputil.DefaultHTTPClient,
 				},
 			},
 			{
@@ -524,7 +510,7 @@ func TestClientOptions(t *testing.T) {
 				"mongodb://localhost/?tlsCAFile=testdata/empty-ca.pem",
 				&ClientOptions{
 					Hosts:      []string{"localhost"},
-					HTTPClient: internal.DefaultHTTPClient,
+					HTTPClient: httputil.DefaultHTTPClient,
 					err:        errors.New("the specified CA file does not contain any valid certificates"),
 				},
 			},
@@ -533,7 +519,7 @@ func TestClientOptions(t *testing.T) {
 				"mongodb://localhost/?tlsCAFile=testdata/ca-key.pem",
 				&ClientOptions{
 					Hosts:      []string{"localhost"},
-					HTTPClient: internal.DefaultHTTPClient,
+					HTTPClient: httputil.DefaultHTTPClient,
 					err:        errors.New("the specified CA file does not contain any valid certificates"),
 				},
 			},
@@ -542,7 +528,7 @@ func TestClientOptions(t *testing.T) {
 				"mongodb://localhost/?tlsCAFile=testdata/malformed-ca.pem",
 				&ClientOptions{
 					Hosts:      []string{"localhost"},
-					HTTPClient: internal.DefaultHTTPClient,
+					HTTPClient: httputil.DefaultHTTPClient,
 					err:        errors.New("the specified CA file does not contain any valid certificates"),
 				},
 			},
@@ -573,6 +559,15 @@ func TestClientOptions(t *testing.T) {
 				"mongodb://localhost/?tlsCertificateKeyFile=testdata/one-pk-multiple-certs.pem",
 				baseClient().SetTLSConfig(&tls.Config{Certificates: make([]tls.Certificate, 1)}),
 			},
+			{
+				"GODRIVER-2650 X509 certificate",
+				"mongodb://localhost/?ssl=true&authMechanism=mongodb-x509&sslClientCertificateKeyFile=testdata/one-pk-multiple-certs.pem",
+				baseClient().SetAuth(Credential{
+					AuthMechanism: "mongodb-x509", AuthSource: "$external",
+					// Subject name in the first certificate is used as the username for X509 auth.
+					Username: `C=US,ST=New York,L=New York City,O=MongoDB,OU=Drivers,CN=localhost`,
+				}).SetTLSConfig(&tls.Config{Certificates: make([]tls.Certificate, 1)}),
+			},
 		}
 
 		for _, tc := range testCases {
@@ -581,10 +576,9 @@ func TestClientOptions(t *testing.T) {
 
 				// Manually add the URI and ConnString to the test expectations to avoid adding them in each test
 				// definition. The ConnString should only be recorded if there was no error while parsing.
-				tc.result.uri = tc.uri
 				cs, err := connstring.ParseAndValidate(tc.uri)
 				if err == nil {
-					tc.result.cs = &cs
+					tc.result.cs = cs
 				}
 
 				// We have to sort string slices in comparison, as Hosts resolved from SRV URIs do not have a set order.
@@ -618,7 +612,7 @@ func TestClientOptions(t *testing.T) {
 			for _, tc := range testCases {
 				t.Run(tc.name, func(t *testing.T) {
 					err := tc.opts.SetDirect(true).Validate()
-					assert.NotNil(t, err, "expected errror, got nil")
+					assert.NotNil(t, err, "expected error, got nil")
 					assert.Equal(t, expectedErr.Error(), err.Error(), "expected error %v, got %v", expectedErr, err)
 				})
 			}
@@ -630,7 +624,7 @@ func TestClientOptions(t *testing.T) {
 			opts.cs.Scheme = connstring.SchemeMongoDBSRV
 
 			err := opts.SetDirect(true).Validate()
-			assert.NotNil(t, err, "expected errror, got nil")
+			assert.NotNil(t, err, "expected error, got nil")
 			assert.Equal(t, expectedErr.Error(), err.Error(), "expected error %v, got %v", expectedErr, err)
 		})
 	})
@@ -640,10 +634,10 @@ func TestClientOptions(t *testing.T) {
 			opts *ClientOptions
 			err  error
 		}{
-			{"multiple hosts in URI", Client().ApplyURI("mongodb://foo,bar"), internal.ErrLoadBalancedWithMultipleHosts},
-			{"multiple hosts in options", Client().SetHosts([]string{"foo", "bar"}), internal.ErrLoadBalancedWithMultipleHosts},
-			{"replica set name", Client().SetReplicaSet("foo"), internal.ErrLoadBalancedWithReplicaSet},
-			{"directConnection=true", Client().SetDirect(true), internal.ErrLoadBalancedWithDirectConnection},
+			{"multiple hosts in URI", Client().ApplyURI("mongodb://foo,bar"), connstring.ErrLoadBalancedWithMultipleHosts},
+			{"multiple hosts in options", Client().SetHosts([]string{"foo", "bar"}), connstring.ErrLoadBalancedWithMultipleHosts},
+			{"replica set name", Client().SetReplicaSet("foo"), connstring.ErrLoadBalancedWithReplicaSet},
+			{"directConnection=true", Client().SetDirect(true), connstring.ErrLoadBalancedWithDirectConnection},
 		}
 		for _, tc := range testCases {
 			t.Run(tc.name, func(t *testing.T) {
@@ -701,8 +695,8 @@ func TestClientOptions(t *testing.T) {
 			opts *ClientOptions
 			err  error
 		}{
-			{"replica set name", Client().SetReplicaSet("foo"), internal.ErrSRVMaxHostsWithReplicaSet},
-			{"loadBalanced=true", Client().SetLoadBalanced(true), internal.ErrSRVMaxHostsWithLoadBalanced},
+			{"replica set name", Client().SetReplicaSet("foo"), connstring.ErrSRVMaxHostsWithReplicaSet},
+			{"loadBalanced=true", Client().SetLoadBalanced(true), connstring.ErrSRVMaxHostsWithLoadBalanced},
 			{"loadBalanced=false", Client().SetLoadBalanced(false), nil},
 		}
 		for _, tc := range testCases {
@@ -755,6 +749,52 @@ func TestClientOptions(t *testing.T) {
 			})
 		}
 	})
+	t.Run("server monitoring mode validation", func(t *testing.T) {
+		t.Parallel()
+
+		testCases := []struct {
+			name string
+			opts *ClientOptions
+			err  error
+		}{
+			{
+				name: "undefined",
+				opts: Client(),
+				err:  nil,
+			},
+			{
+				name: "auto",
+				opts: Client().SetServerMonitoringMode(ServerMonitoringModeAuto),
+				err:  nil,
+			},
+			{
+				name: "poll",
+				opts: Client().SetServerMonitoringMode(ServerMonitoringModePoll),
+				err:  nil,
+			},
+			{
+				name: "stream",
+				opts: Client().SetServerMonitoringMode(ServerMonitoringModeStream),
+				err:  nil,
+			},
+			{
+				name: "invalid",
+				opts: Client().SetServerMonitoringMode("invalid"),
+				err:  errors.New("invalid server monitoring mode: \"invalid\""),
+			},
+		}
+
+		for _, tc := range testCases {
+			tc := tc // Capture the range variable
+
+			t.Run(tc.name, func(t *testing.T) {
+				t.Parallel()
+
+				err := tc.opts.Validate()
+				assert.Equal(t, tc.err, err, "expected error %v, got %v", tc.err, err)
+			})
+		}
+	})
 }
 
 func createCertPool(t *testing.T, paths ...string) *x509.CertPool {
@@ -787,7 +827,7 @@ type testDialer struct {
 	Num int
 }
 
-func (testDialer) DialContext(ctx context.Context, network, address string) (net.Conn, error) {
+func (testDialer) DialContext(context.Context, string, string) (net.Conn, error) {
 	return nil, nil
 }
 
@@ -838,9 +878,8 @@ func compareErrors(err1, err2 error) bool {
 		return false
 	}
 
-	ospe1, ok1 := err1.(*os.PathError)
-	ospe2, ok2 := err2.(*os.PathError)
-	if ok1 && ok2 {
+	var ospe1, ospe2 *os.PathError
+	if errors.As(err1, &ospe1) && errors.As(err2, &ospe2) {
 		return ospe1.Op == ospe2.Op && ospe1.Path == ospe2.Path
 	}
 

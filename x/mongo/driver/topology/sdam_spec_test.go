@@ -19,8 +19,8 @@ import (
 	"github.com/pritunl/mongo-go-driver/bson"
 	"github.com/pritunl/mongo-go-driver/bson/primitive"
 	"github.com/pritunl/mongo-go-driver/event"
-	"github.com/pritunl/mongo-go-driver/internal/testutil/assert"
-	"github.com/pritunl/mongo-go-driver/internal/testutil/helpers"
+	"github.com/pritunl/mongo-go-driver/internal/assert"
+	"github.com/pritunl/mongo-go-driver/internal/spectest"
 	"github.com/pritunl/mongo-go-driver/mongo/address"
 	"github.com/pritunl/mongo-go-driver/mongo/description"
 	"github.com/pritunl/mongo-go-driver/mongo/options"
@@ -153,7 +153,7 @@ type outcome struct {
 	Servers                      map[string]server
 	TopologyType                 string
 	SetName                      string
-	LogicalSessionTimeoutMinutes uint32
+	LogicalSessionTimeoutMinutes *int64
 	MaxSetVersion                uint32
 	MaxElectionID                primitive.ObjectID `bson:"maxElectionId"`
 	Compatible                   *bool
@@ -211,11 +211,11 @@ var lock sync.Mutex
 func (r *response) UnmarshalBSON(buf []byte) error {
 	doc := bson.Raw(buf)
 	if err := doc.Index(0).Value().Unmarshal(&r.Host); err != nil {
-		return fmt.Errorf("error unmarshalling Host: %v", err)
+		return fmt.Errorf("error unmarshalling Host: %w", err)
 	}
 
 	if err := doc.Index(1).Value().Unmarshal(&r.Hello); err != nil {
-		return fmt.Errorf("error unmarshalling Hello: %v", err)
+		return fmt.Errorf("error unmarshalling Hello: %w", err)
 	}
 
 	return nil
@@ -295,7 +295,7 @@ func applyErrors(t *testing.T, topo *Topology, errors []applicationError) {
 		var currError error
 		switch appErr.Type {
 		case "command":
-			currError = driver.ExtractErrorFromServerResponse(appErr.Response)
+			currError = driver.ExtractErrorFromServerResponse(context.Background(), appErr.Response)
 		case "network":
 			currError = driver.Error{
 				Labels:  []string{driver.NetworkError},
@@ -316,7 +316,7 @@ func applyErrors(t *testing.T, topo *Topology, errors []applicationError) {
 		versionRange := description.NewVersionRange(0, *appErr.MaxWireVersion)
 		desc.WireVersion = &versionRange
 
-		generation := server.pool.generation.getGeneration(nil)
+		generation, _ := server.pool.generation.getGeneration(nil)
 		if appErr.Generation != nil {
 			generation = *appErr.Generation
 		}
@@ -486,11 +486,11 @@ func runTest(t *testing.T, directory string, filename string) {
 			publishedEvents = nil
 			if phase.Outcome.Compatible == nil || *phase.Outcome.Compatible {
 				assert.True(t, topo.fsm.compatible.Load().(bool), "Expected servers to be compatible")
-				assert.Nil(t, topo.fsm.compatibilityErr, "expected fsm.compatiblity to be nil, got %v",
+				assert.Nil(t, topo.fsm.compatibilityErr, "expected fsm.compatibility to be nil, got %v",
 					topo.fsm.compatibilityErr)
 			} else {
 				assert.False(t, topo.fsm.compatible.Load().(bool), "Expected servers to not be compatible")
-				assert.NotNil(t, topo.fsm.compatibilityErr, "expected fsm.compatiblity error to be non-nil")
+				assert.NotNil(t, topo.fsm.compatibilityErr, "expected fsm.compatibility error to be non-nil")
 				continue
 			}
 			desc := topo.Description()
@@ -501,8 +501,12 @@ func runTest(t *testing.T, directory string, filename string) {
 				"expected SetName to be %v, got %v", phase.Outcome.SetName, topo.fsm.SetName)
 			assert.Equal(t, len(phase.Outcome.Servers), len(desc.Servers),
 				"expected %v servers, got %v", len(phase.Outcome.Servers), len(desc.Servers))
-			assert.Equal(t, phase.Outcome.LogicalSessionTimeoutMinutes, desc.SessionTimeoutMinutes,
-				"expected SessionTimeoutMinutes to be %v, got %v", phase.Outcome.LogicalSessionTimeoutMinutes, desc.SessionTimeoutMinutes)
+
+			assert.Equal(t,
+				phase.Outcome.LogicalSessionTimeoutMinutes,
+				desc.SessionTimeoutMinutesPtr,
+				"expected and actual logical session timeout minutes are different")
+
 			assert.Equal(t, phase.Outcome.MaxSetVersion, topo.fsm.maxSetVersion,
 				"expected maxSetVersion to be %v, got %v", phase.Outcome.MaxSetVersion, topo.fsm.maxSetVersion)
 			assert.Equal(t, phase.Outcome.MaxElectionID, topo.fsm.maxElectionID,
@@ -544,7 +548,7 @@ func runTest(t *testing.T, directory string, filename string) {
 					topo.serversLock.Lock()
 					actualServer := topo.servers[address.Address(addr)]
 					topo.serversLock.Unlock()
-					actualGeneration := actualServer.pool.generation.getGeneration(nil)
+					actualGeneration, _ := actualServer.pool.generation.getGeneration(nil)
 					assert.Equal(t, server.Pool.Generation, actualGeneration,
 						"expected server pool generation to be %v, got %v", server.Pool.Generation, actualGeneration)
 				}
@@ -556,7 +560,7 @@ func runTest(t *testing.T, directory string, filename string) {
 // Test case for all SDAM spec tests.
 func TestSDAMSpec(t *testing.T) {
 	for _, subdir := range []string{"single", "rs", "sharded", "load-balanced", "errors", "monitoring"} {
-		for _, file := range helpers.FindJSONFilesInDir(t, path.Join(testsDir, subdir)) {
+		for _, file := range spectest.FindJSONFilesInDir(t, path.Join(testsDir, subdir)) {
 			runTest(t, subdir, file)
 		}
 	}

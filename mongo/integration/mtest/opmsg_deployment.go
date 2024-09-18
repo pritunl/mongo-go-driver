@@ -8,10 +8,10 @@ package mtest
 
 import (
 	"context"
+	"errors"
 
-	"github.com/pkg/errors"
 	"github.com/pritunl/mongo-go-driver/bson"
-	"github.com/pritunl/mongo-go-driver/internal"
+	"github.com/pritunl/mongo-go-driver/internal/csot"
 	"github.com/pritunl/mongo-go-driver/mongo/address"
 	"github.com/pritunl/mongo-go-driver/mongo/description"
 	"github.com/pritunl/mongo-go-driver/x/bsonx/bsoncore"
@@ -21,23 +21,28 @@ import (
 )
 
 const (
-	serverAddress                = address.Address("localhost:27017")
-	maxDocumentSize       uint32 = 16777216
-	maxMessageSize        uint32 = 48000000
-	maxBatchCount         uint32 = 100000
-	sessionTimeoutMinutes uint32 = 30
+	serverAddress          = address.Address("127.0.0.1:27017")
+	maxDocumentSize uint32 = 16777216
+	maxMessageSize  uint32 = 48000000
+	maxBatchCount   uint32 = 100000
 )
 
 var (
+	sessionTimeoutMinutes      uint32 = 30
+	sessionTimeoutMinutesInt64        = int64(sessionTimeoutMinutes)
+
 	// MockDescription is the server description used for the mock deployment. Each mocked connection returns this
 	// value from its Description method.
 	MockDescription = description.Server{
-		CanonicalAddr:         serverAddress,
-		MaxDocumentSize:       maxDocumentSize,
-		MaxMessageSize:        maxMessageSize,
-		MaxBatchCount:         maxBatchCount,
-		SessionTimeoutMinutes: sessionTimeoutMinutes,
-		Kind:                  description.RSPrimary,
+		CanonicalAddr:   serverAddress,
+		MaxDocumentSize: maxDocumentSize,
+		MaxMessageSize:  maxMessageSize,
+		MaxBatchCount:   maxBatchCount,
+		// TODO(GODRIVER-2885): This can be removed once legacy
+		// SessionTimeoutMinutes is removed.
+		SessionTimeoutMinutes:    sessionTimeoutMinutes,
+		SessionTimeoutMinutesPtr: &sessionTimeoutMinutesInt64,
+		Kind:                     description.RSPrimary,
 		WireVersion: &description.VersionRange{
 			Max: topology.SupportedWireVersions.Max,
 		},
@@ -51,13 +56,14 @@ type connection struct {
 
 var _ driver.Connection = &connection{}
 
-// WriteWireMessage is a no-op operation.
-func (c *connection) WriteWireMessage(_ context.Context, wm []byte) error {
+// WriteWireMessage is a no-op.
+func (c *connection) WriteWireMessage(context.Context, []byte) error {
 	return nil
 }
 
 // ReadWireMessage returns the next response in the connection's list of responses.
-func (c *connection) ReadWireMessage(_ context.Context, dst []byte) ([]byte, error) {
+func (c *connection) ReadWireMessage(_ context.Context) ([]byte, error) {
+	var dst []byte
 	if len(c.responses) == 0 {
 		return dst, errors.New("no responses remaining")
 	}
@@ -89,9 +95,15 @@ func (*connection) ID() string {
 	return "<mock_connection>"
 }
 
+// DriverConnectionID returns a fixed identifier for the driver pool connection.
+// TODO(GODRIVER-2824): replace return type with int64.
+func (*connection) DriverConnectionID() uint64 {
+	return 0
+}
+
 // ServerConnectionID returns a fixed identifier for the server connection.
-func (*connection) ServerConnectionID() *int32 {
-	serverConnectionID := int32(42)
+func (*connection) ServerConnectionID() *int64 {
+	serverConnectionID := int64(42)
 	return &serverConnectionID
 }
 
@@ -136,7 +148,7 @@ func (md *mockDeployment) Connection(context.Context) (driver.Connection, error)
 
 // RTTMonitor implements the driver.Server interface.
 func (md *mockDeployment) RTTMonitor() driver.RTTMonitor {
-	return &internal.ZeroRTTMonitor{}
+	return &csot.ZeroRTTMonitor{}
 }
 
 // Connect is a no-op method which implements the driver.Connector interface.
@@ -155,7 +167,12 @@ func (md *mockDeployment) Disconnect(context.Context) error {
 func (md *mockDeployment) Subscribe() (*driver.Subscription, error) {
 	if md.updates == nil {
 		md.updates = make(chan description.Topology, 1)
+
 		md.updates <- description.Topology{
+			SessionTimeoutMinutesPtr: &sessionTimeoutMinutesInt64,
+
+			// TODO(GODRIVER-2885): This can be removed once legacy
+			// SessionTimeoutMinutes is removed.
 			SessionTimeoutMinutes: sessionTimeoutMinutes,
 		}
 	}
