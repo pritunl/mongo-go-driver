@@ -118,6 +118,9 @@ func (id *ObjectID) UnmarshalText(b []byte) error {
 
 // MarshalJSON returns the ObjectID as a string
 func (id ObjectID) MarshalJSON() ([]byte, error) {
+	if id.IsZero() {
+		return json.Marshal(nil)
+	}
 	return json.Marshal(id.Hex())
 }
 
@@ -144,6 +147,12 @@ func (id *ObjectID) UnmarshalJSON(b []byte) error {
 		if err != nil {
 			return err
 		}
+
+		if res == nil {
+			*id = NilObjectID
+			return err
+		}
+
 		str, ok := res.(string)
 		if !ok {
 			m, ok := res.(map[string]interface{})
