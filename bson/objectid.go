@@ -128,6 +128,9 @@ func (id *ObjectID) UnmarshalText(b []byte) error {
 
 // MarshalJSON returns the ObjectID as a string
 func (id ObjectID) MarshalJSON() ([]byte, error) {
+	if id.IsZero() {
+		return []byte("null"), nil
+	}
 	var buf [26]byte
 	buf[0] = '"'
 	hex.Encode(buf[1:25], id[:])
