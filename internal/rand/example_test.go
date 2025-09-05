@@ -12,7 +12,7 @@ import (
 	"strings"
 	"text/tabwriter"
 
-	"github.com/pritunl/mongo-go-driver/internal/rand"
+	"github.com/pritunl/mongo-go-driver/v2/internal/rand"
 )
 
 // These tests serve as an example but also make sure we don't change

@@ -6,23 +6,24 @@ We are building this software together and strongly encourage contributions from
 
 ## Requirements
 
-Go 1.20 or higher is required to run the driver test suite.
+Go 1.23 or higher is required to run the driver test suite.  We use [task](https://taskfile.dev/) as our task runner.
 
 ## Bug Fixes and New Features
 
-Before starting to write code, look for existing [tickets](https://jira.mongodb.org/browse/GODRIVER) or [create one](https://jira.mongodb.org/secure/CreateIssue!default.jspa) for your bug, issue, or feature request. This helps the community avoid working on something that might not be of interest or which has already been addressed.
+Before starting to write code, look for existing [tickets](https://jira.mongodb.org/browse/GODRIVER) or [create one](https://jira.mongodb.org/secure/CreateIssue!default.jspa) for your bug, issue, or feature request. This helps the community avoid working on something that might not be of interest or which has already been addressed. Before working on features or larger bug fixes, consider discussing your ideas in the corresponding JIRA issue to ensure that they align with the project's goals and to get feedback from the maintainers. This also ensures that your work can be reviewed and merged more smoothly.
 
 ## Pull Requests & Patches
 
-The Go Driver team uses GitHub to manage and review all code changes. Patches should generally be made against the master (default) branch and include relevant tests, if
-applicable.
+The Go Driver team uses GitHub to manage and review all code changes. Pull requests containing new features should generally be made against the master (default) branch and include relevant tests. For bug fixes, please target the latest stable branch, e.g. `release/2.2` for the 2.2.x series). The bug fix will be merged up to newer branches automatically after your pull request has been merged. If you are unsure which branch to target, please ask in the corresponding JIRA issue, and if you've created a pull request against the wrong branch, we can help you change it.
 
-Code should compile and tests should pass under all Go versions which the driver currently supports. Currently the Go Driver supports a minimum version of Go 1.18 and requires Go 1.20 for development. Please run the following Make targets to validate your changes:
+When creating a pull request, please ensure that your code adheres to the following guidelines:
 
-- `make fmt`
-- `make lint` (requires [golangci-lint](https://github.com/golangci/golangci-lint) and [lll](https://github.com/walle/lll) to be installed and available in the `PATH`)
-- `make test`
-- `make test-race`
+Code should compile and tests should pass under all Go versions which the driver currently supports. Currently, the Go Driver supports a minimum version of Go 1.19 and requires Go 1.23 for development. Please run the following `Taskfile` targets to validate your changes:
+
+- `task fmt`
+- `task lint`
+- `task test`
+- `task test-race`
 
 **Running the tests requires that you have a `mongod` server running on localhost, listening on the default port (27017). At minimum, please test against the latest release version of the MongoDB server.**
 
@@ -47,7 +48,141 @@ After that, the checks will run on any changed files when committing.  To manual
 pre-commit run --all-files
 ```
 
+### Merge up GitHub Action
+
+PR [#1962](https://github.com/pritunl/mongo-go-driver/pull/1962) added the "Merge up" GitHub Actions workflow to automatically roll changes from old branches into new ones. This section outlines how this process works.
+
+#### Regression
+
+If a regression is identified in an older branch, the fix should be applied directly to the latest
+release branch. Once the pull request with the fix is merged into latest, the "Merge up" GitHub Action will
+automatically create a pull request to merge these changes into the master branch. This ensures that all bug fixes are
+incorporated into the latest codebase and actively supported versions.
+
+For example, suppose we have four minor release branches: release/2.0, release/2.1, release/2.2, and release/2.3. If a
+regression is found in the release/2.1 branch, you would create a pull request to fix the issue in the latest supported
+branch, release/2.3. Once this pull request is merged, the "Merge up" GitHub Action will automatically create a pull
+request to merge the changes from release/2.3 into the master branch. Then you can proceed to release release/2.3.latest+1.
+
+```mermaid
+gitGraph
+   commit tag: "Initial main setup"
+
+   branch release/2.0
+   checkout release/2.0
+   commit tag: "Initial release/2.0"
+
+   checkout main
+   branch release/2.1
+   checkout release/2.1
+   commit tag: "Bug introduced"
+
+   checkout main
+   branch release/2.2
+   checkout release/2.2
+   commit tag: "Initial release/2.2"
+
+   checkout main
+   branch release/2.3
+   checkout release/2.3
+   commit tag: "Initial release/2.3"
+
+   checkout release/2.1
+   commit tag: "Bug found in release/2.1"
+
+   checkout release/2.3
+   commit tag: "Bug fix applied in release/2.3 (Manual PR)"
+
+   checkout main
+   merge release/2.3 tag: "Merge fix from release/2.3 into master (GitHub Actions)"
+   commit
+```
+
+If necessary, it is also possible to apply the fix to the older branch where the bug was originally found. In our example,
+once the pull request is merged into release/2.1, the "Merge up" GitHub Action will initiate a series of pull requests
+to roll the fix forward: first into release/2.2, then into release/2.3, and finally into master. This process makes sure
+that the change cascades through every intermediate supported version.
+
+```mermaid
+gitGraph
+   commit tag: "Initial main setup"
+
+   branch release/2.0
+   checkout release/2.0
+   commit tag: "Initial release/2.0"
+
+   checkout main
+   branch release/2.1
+   checkout release/2.1
+   commit tag: "Bug introduced"
+
+   checkout main
+   branch release/2.2
+   checkout release/2.2
+   commit tag: "Initial release/2.2"
+
+   checkout main
+   branch release/2.3
+   checkout release/2.3
+   commit tag: "Initial release/2.3"
+
+   checkout release/2.1
+   commit tag: "Bug fix in release/2.1 (Manual PR)"
+
+   checkout release/2.2
+   merge release/2.1 tag: "Merge fix from release/2.1 (GitHub Actions)"
+   commit
+
+   checkout release/2.3
+   merge release/2.2 tag: "Merge updates from release/2.2 (GitHub Actions)"
+   commit
+
+   checkout main
+   merge release/2.3 tag: "Merge updates from release/2.3 (GitHub Actions)"
+   commit
+```
+
+#### Pull Request Management
+
+When the "Merge up" GitHub Action is enabled, multiple merge-up pull requests (such as PR1, PR2, and PR3) can be
+automatically created at the same time for different bug fixes or features that all target, for example, the
+release/2.x branch. At first, PR1, PR2, and PR3 exist side by side—each handling separate changes. When PR1 and PR2 are
+closed, the Action automatically combines their changes into PR3. This final PR3 then contains all updates,
+allowing you to merge everything into release/2.x+1 in a single, streamlined step.
+
+```mermaid
+flowchart LR
+   A[PR1: Merge up from release/2.x] --> B[Close PR1]
+   C[PR2: Merge up from release/2.x] --> D[Close PR2]
+
+   B --> E[PR3: Consolidated Final Pull Request]
+   D --> E
+    E --> F[release/2.x+1]
+    B[Close PR1]
+   D[Close PR2]
+   E[PR3: Includes changes from both PR1 and PR2]
+```
+
+#### Evergreen Config Merge Strategy
+
+Changes to the testing workflow should persist through all releases in a major version.
+
 ### Cherry-picking between branches
+
+#### Using the GitHub App
+
+Within a PR, you can make the comment:
+
+```
+drivers-pr-bot please backport to {target_branch}
+```
+
+The preferred workflow is to make the comment and then merge the PR.
+
+If you merge the PR and the "backport-pr" task runs before you make the comment, you can
+make the comment and then re-run the "backport-pr" task for that commit.
+
+#### Manually
 
 You must first install the `gh` cli (`brew install gh`), then set your GitHub username:
 
@@ -58,18 +193,23 @@ git config --global github.user <github_handle>
 If a Pull Request needs to be cherry-picked to a new branch, get the sha of the commit in the base branch, and then run
 
 ```bash
-bash etc/cherry-picker.sh <sha>
+task cherry-picker -- <sha>
 ```
 
-The cherry-picker script is configured to use `v1` as the base branch and `master` as the target branch.
+By default it will use `master` as the target branch.  The branch can be specified as the second argument, e.g.
+
+```bash
+task cherry-picker -- <sha> branch
+```
+
 It will create a new checkout in a temp dir, create a new branch, perform the cherry-pick, and then
 prompt before creating a PR to the target branch.
 
 ## Testing / Development
 
-The driver tests can be run against several database configurations. The most simple configuration is a standalone mongod with no auth, no ssl, and no compression. To run these basic driver tests, make sure a standalone MongoDB server instance is running at localhost:27017. To run the tests, you can run `make` (on Windows, run `nmake`). This will run coverage, run go-lint, run go-vet, and build the examples.
+The driver tests can be run against several database configurations. The most simple configuration is a standalone mongod with no auth, no ssl, and no compression. To run these basic driver tests, make sure a standalone MongoDB server instance is running at localhost:27017. To run the tests, you can run `task`. This will run coverage, run go-lint, run go-vet, and build the examples.
 
-You can install `libmongocrypt` locally by running `bash etc/build-libmongocrypt.sh`, which will create an `install` directory
+You can install `libmongocrypt` locally by running `task install-libmongocrypt`, which will create an `install` directory
 in the repository top level directory.  On Windows you will also need to add `c:/libmongocrypt/` to your `PATH`.
 
 ### Testing Different Topologies
@@ -142,10 +282,10 @@ The following are the requirements for running the AWS Lambda tests locally:
 1. [AWS SAM CLI](https://docs.aws.amazon.com/serverless-application-model/latest/developerguide/install-sam-cli.html)
 1. [Docker](https://www.docker.com/products/docker-desktop/)
 
-Local testing requires exporting the `MONGODB_URI` environment variables. To build the AWS Lambda image and invoke the `MongoDBFunction` lambda function use the `build-faas-awslambda` make target:
+Local testing requires exporting the `MONGODB_URI` environment variables. To build the AWS Lambda image and invoke the `MongoDBFunction` lambda function use the `build-faas-awslambda` Taskfile target:
 
 ```bash
-MONGODB_URI="mongodb://host.docker.internal:27017" make build-faas-awslambda
+MONGODB_URI="mongodb://host.docker.internal:27017" task build-faas-awslambda
 ```
 
 The usage of host.docker.internal comes from the [Docker networking documentation](https://docs.docker.com/desktop/networking/#i-want-to-connect-from-a-container-to-a-service-on-the-host).
@@ -161,7 +301,9 @@ However, some of the tests require secrets handling.  Please see the team [Wiki]
 The test suite can be run with or without the secrets as follows:
 
 ```bash
-MAKEFILE_TARGET=evg-test-versioned-api bash .evergreen/run-tests.sh
+task setup-env
+task setup-test
+task evg-test-versioned-api
 ```
 
 ### Load Balancer
@@ -185,7 +327,7 @@ MONGODB_URI='mongodb://localhost:27017,localhost:27018/' $PWD/drivers-evergreen-
 - Run the load balancer tests (or use the docker runner below with `evg-test-load-balancers`):
 
 ```bash
-make evg-test-load-balancers
+task evg-test-load-balancers
 ```
 
 ### Testing in Docker
@@ -205,18 +347,18 @@ See the readme in `$DRIVERS_TOOLS/.evergreen/docker` for more information on usa
 1. Finally, run the Go Driver tests using the following script in this repo:
 
 ```bash
-bash etc/run_docker.sh
+make run-docker
 ```
 
-The script takes an optional argument for the `MAKEFILE_TARGET` and allows for some environment variable overrides.
+The script takes an optional argument for the `TASKFILE_TARGET` and allows for some environment variable overrides.
 The docker container has the required binaries, including libmongocrypt.
-The entry script executes the desired `MAKEFILE_TARGET`.
+The entry script executes the desired `TASKFILE_TARGET`.
 
 For example, to test against a sharded cluster (make sure you started the server with a sharded_cluster),
 using enterprise auth, run:
 
 ```bash
-TOPOLOGY=sharded_cluster bash etc/run_docker.sh evg-test-enterprise-auth
+TOPOLOGY=sharded_cluster task run-docker -- evg-test-enterprise-auth
 ```
 
 ## Talk To Us

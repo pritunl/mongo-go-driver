@@ -11,17 +11,18 @@ import (
 	"errors"
 	"time"
 
-	"github.com/pritunl/mongo-go-driver/event"
-	"github.com/pritunl/mongo-go-driver/internal/driverutil"
-	"github.com/pritunl/mongo-go-driver/mongo/description"
-	"github.com/pritunl/mongo-go-driver/mongo/readpref"
-	"github.com/pritunl/mongo-go-driver/x/bsonx/bsoncore"
-	"github.com/pritunl/mongo-go-driver/x/mongo/driver"
-	"github.com/pritunl/mongo-go-driver/x/mongo/driver/session"
+	"github.com/pritunl/mongo-go-driver/v2/event"
+	"github.com/pritunl/mongo-go-driver/v2/internal/driverutil"
+	"github.com/pritunl/mongo-go-driver/v2/mongo/readpref"
+	"github.com/pritunl/mongo-go-driver/v2/x/bsonx/bsoncore"
+	"github.com/pritunl/mongo-go-driver/v2/x/mongo/driver"
+	"github.com/pritunl/mongo-go-driver/v2/x/mongo/driver/description"
+	"github.com/pritunl/mongo-go-driver/v2/x/mongo/driver/session"
 )
 
 // ListCollections performs a listCollections operation.
 type ListCollections struct {
+	authenticator         driver.Authenticator
 	filter                bsoncore.Document
 	nameOnly              *bool
 	authorizedCollections *bool
@@ -38,6 +39,7 @@ type ListCollections struct {
 	batchSize             *int32
 	serverAPI             *driver.ServerAPIOptions
 	timeout               *time.Duration
+	rawData               *bool
 }
 
 // NewListCollections constructs and returns a new ListCollections.
@@ -54,9 +56,12 @@ func (lc *ListCollections) Result(opts driver.CursorOptions) (*driver.BatchCurso
 	return driver.NewBatchCursor(lc.result, lc.session, lc.clock, opts)
 }
 
-func (lc *ListCollections) processResponse(info driver.ResponseInfo) error {
-	var err error
-	lc.result, err = driver.NewCursorResponse(info)
+func (lc *ListCollections) processResponse(_ context.Context, resp bsoncore.Document, info driver.ResponseInfo) error {
+	curDoc, err := driver.ExtractCursorDocument(resp)
+	if err != nil {
+		return err
+	}
+	lc.result, err = driver.NewCursorResponse(curDoc, info)
 	return err
 }
 
@@ -83,11 +88,12 @@ func (lc *ListCollections) Execute(ctx context.Context) error {
 		ServerAPI:         lc.serverAPI,
 		Timeout:           lc.timeout,
 		Name:              driverutil.ListCollectionsOp,
+		Authenticator:     lc.authenticator,
 	}.Execute(ctx)
 
 }
 
-func (lc *ListCollections) command(dst []byte, _ description.SelectedServer) ([]byte, error) {
+func (lc *ListCollections) command(dst []byte, desc description.SelectedServer) ([]byte, error) {
 	dst = bsoncore.AppendInt32Element(dst, "listCollections", 1)
 	if lc.filter != nil {
 		dst = bsoncore.AppendDocumentElement(dst, "filter", lc.filter)
@@ -104,6 +110,11 @@ func (lc *ListCollections) command(dst []byte, _ description.SelectedServer) ([]
 		cursorDoc.AppendInt32("batchSize", *lc.batchSize)
 	}
 	dst = bsoncore.AppendDocumentElement(dst, "cursor", cursorDoc.Build())
+
+	// Set rawData for 8.2+ servers.
+	if lc.rawData != nil && desc.WireVersion != nil && driverutil.VersionRangeIncludes(*desc.WireVersion, 27) {
+		dst = bsoncore.AppendBooleanElement(dst, "rawData", *lc.rawData)
+	}
 
 	return dst, nil
 }
@@ -257,5 +268,25 @@ func (lc *ListCollections) Timeout(timeout *time.Duration) *ListCollections {
 	}
 
 	lc.timeout = timeout
+	return lc
+}
+
+// Authenticator sets the authenticator to use for this operation.
+func (lc *ListCollections) Authenticator(authenticator driver.Authenticator) *ListCollections {
+	if lc == nil {
+		lc = new(ListCollections)
+	}
+
+	lc.authenticator = authenticator
+	return lc
+}
+
+// RawData sets the rawData to access timeseries data in the compressed format.
+func (lc *ListCollections) RawData(rawData bool) *ListCollections {
+	if lc == nil {
+		lc = new(ListCollections)
+	}
+
+	lc.rawData = &rawData
 	return lc
 }

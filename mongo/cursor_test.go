@@ -9,29 +9,32 @@ package mongo
 import (
 	"context"
 	"fmt"
+	"reflect"
 	"testing"
 	"time"
 
-	"github.com/pritunl/mongo-go-driver/bson"
-	"github.com/pritunl/mongo-go-driver/internal/assert"
-	"github.com/pritunl/mongo-go-driver/internal/require"
-	"github.com/pritunl/mongo-go-driver/mongo/options"
-	"github.com/pritunl/mongo-go-driver/x/bsonx/bsoncore"
-	"github.com/pritunl/mongo-go-driver/x/mongo/driver"
+	"github.com/pritunl/mongo-go-driver/v2/bson"
+	"github.com/pritunl/mongo-go-driver/v2/internal/assert"
+	"github.com/pritunl/mongo-go-driver/v2/internal/require"
+	"github.com/pritunl/mongo-go-driver/v2/mongo/options"
+	"github.com/pritunl/mongo-go-driver/v2/x/bsonx/bsoncore"
+	"github.com/pritunl/mongo-go-driver/v2/x/mongo/driver"
 )
 
 type testBatchCursor struct {
-	batches []*bsoncore.DocumentSequence
-	batch   *bsoncore.DocumentSequence
+	batches []*bsoncore.Iterator
+	batch   *bsoncore.Iterator
 	closed  bool
 }
 
+var _ batchCursor = (*testBatchCursor)(nil)
+
 func newTestBatchCursor(numBatches, batchSize int) *testBatchCursor {
-	batches := make([]*bsoncore.DocumentSequence, 0, numBatches)
+	batches := make([]*bsoncore.Iterator, 0, numBatches)
 
 	counter := 0
 	for batch := 0; batch < numBatches; batch++ {
-		var docSequence []byte
+		var values []bsoncore.Value
 
 		for doc := 0; doc < batchSize; doc++ {
 			var elem []byte
@@ -40,12 +43,18 @@ func newTestBatchCursor(numBatches, batchSize int) *testBatchCursor {
 
 			var doc []byte
 			doc = bsoncore.BuildDocumentFromElements(doc, elem)
-			docSequence = append(docSequence, doc...)
+			val := bsoncore.Value{
+				Type: bsoncore.TypeEmbeddedDocument,
+				Data: doc,
+			}
+
+			values = append(values, val)
 		}
 
-		batches = append(batches, &bsoncore.DocumentSequence{
-			Style: bsoncore.SequenceStyle,
-			Data:  docSequence,
+		arr := bsoncore.BuildArray(nil, values...)
+
+		batches = append(batches, &bsoncore.Iterator{
+			List: arr,
 		})
 	}
 
@@ -72,7 +81,7 @@ func (tbc *testBatchCursor) Next(context.Context) bool {
 	return true
 }
 
-func (tbc *testBatchCursor) Batch() *bsoncore.DocumentSequence {
+func (tbc *testBatchCursor) Batch() *bsoncore.Iterator {
 	return tbc.batch
 }
 
@@ -89,32 +98,28 @@ func (tbc *testBatchCursor) Close(context.Context) error {
 	return nil
 }
 
-func (tbc *testBatchCursor) SetBatchSize(int32)       {}
-func (tbc *testBatchCursor) SetComment(interface{})   {}
-func (tbc *testBatchCursor) SetMaxTime(time.Duration) {}
+func (tbc *testBatchCursor) SetBatchSize(int32)            {}
+func (tbc *testBatchCursor) SetComment(any)                {}
+func (tbc *testBatchCursor) SetMaxAwaitTime(time.Duration) {}
+func (tbc *testBatchCursor) MaxAwaitTime() *time.Duration  { return nil }
 
 func TestCursor(t *testing.T) {
-	t.Run("loops until docs available", func(t *testing.T) {})
-	t.Run("returns false on context cancellation", func(t *testing.T) {})
-	t.Run("returns false if error occurred", func(t *testing.T) {})
-	t.Run("returns false if ID is zero and no more docs", func(t *testing.T) {})
-
 	t.Run("TestAll", func(t *testing.T) {
 		t.Run("errors if argument is not pointer to slice", func(t *testing.T) {
 			cursor, err := newCursor(newTestBatchCursor(1, 5), nil, nil)
-			assert.Nil(t, err, "newCursor error: %v", err)
+			require.NoError(t, err, "newCursor error: %v", err)
 			err = cursor.All(context.Background(), []bson.D{})
-			assert.NotNil(t, err, "expected error, got nil")
+			assert.Error(t, err, "expected error, got nil")
 		})
 
 		t.Run("fills slice with all documents", func(t *testing.T) {
 			cursor, err := newCursor(newTestBatchCursor(1, 5), nil, nil)
-			assert.Nil(t, err, "newCursor error: %v", err)
+			require.NoError(t, err, "newCursor error: %v", err)
 
 			var docs []bson.D
 			err = cursor.All(context.Background(), &docs)
-			assert.Nil(t, err, "All error: %v", err)
-			assert.Equal(t, 5, len(docs), "expected 5 docs, got %v", len(docs))
+			require.NoError(t, err, "All error: %v", err)
+			assert.Len(t, docs, 5, "expected 5 docs, got %v", len(docs))
 
 			for index, doc := range docs {
 				expected := bson.D{{"foo", int32(index)}}
@@ -122,17 +127,49 @@ func TestCursor(t *testing.T) {
 			}
 		})
 
+		t.Run("nil slice", func(t *testing.T) {
+			cursor, err := newCursor(newTestBatchCursor(0, 0), nil, nil)
+			require.NoError(t, err, "newCursor error: %v", err)
+
+			var docs []bson.D
+			err = cursor.All(context.Background(), &docs)
+			require.NoError(t, err, "All error: %v", err)
+			assert.Nil(t, docs, "expected nil docs")
+		})
+
+		t.Run("empty slice", func(t *testing.T) {
+			cursor, err := newCursor(newTestBatchCursor(0, 0), nil, nil)
+			require.NoError(t, err, "newCursor error: %v", err)
+
+			docs := []bson.D{}
+			err = cursor.All(context.Background(), &docs)
+			require.NoError(t, err, "All error: %v", err)
+			assert.NotNil(t, docs, "expected non-nil docs")
+			assert.Len(t, docs, 0, "expected 0 docs, got %v", len(docs))
+		})
+
+		t.Run("empty slice overwritten", func(t *testing.T) {
+			cursor, err := newCursor(newTestBatchCursor(0, 0), nil, nil)
+			require.NoError(t, err, "newCursor error: %v", err)
+
+			docs := []bson.D{{{"foo", "bar"}}, {{"hello", "world"}, {"pi", 3.14159}}}
+			err = cursor.All(context.Background(), &docs)
+			require.NoError(t, err, "All error: %v", err)
+			assert.NotNil(t, docs, "expected non-nil docs")
+			assert.Len(t, docs, 0, "expected 0 docs, got %v", len(docs))
+		})
+
 		t.Run("decodes each document into slice type", func(t *testing.T) {
 			cursor, err := newCursor(newTestBatchCursor(1, 5), nil, nil)
-			assert.Nil(t, err, "newCursor error: %v", err)
+			require.NoError(t, err, "newCursor error: %v", err)
 
 			type Document struct {
 				Foo int32 `bson:"foo"`
 			}
 			var docs []Document
 			err = cursor.All(context.Background(), &docs)
-			assert.Nil(t, err, "All error: %v", err)
-			assert.Equal(t, 5, len(docs), "expected 5 documents, got %v", len(docs))
+			require.NoError(t, err, "All error: %v", err)
+			assert.Len(t, docs, 5, "expected 5 documents, got %v", len(docs))
 
 			for index, doc := range docs {
 				expected := Document{Foo: int32(index)}
@@ -142,11 +179,11 @@ func TestCursor(t *testing.T) {
 
 		t.Run("multiple batches are included", func(t *testing.T) {
 			cursor, err := newCursor(newTestBatchCursor(2, 5), nil, nil)
-			assert.Nil(t, err, "newCursor error: %v", err)
+			require.NoError(t, err, "newCursor error: %v", err)
 			var docs []bson.D
 			err = cursor.All(context.Background(), &docs)
-			assert.Nil(t, err, "All error: %v", err)
-			assert.Equal(t, 10, len(docs), "expected 10 docs, got %v", len(docs))
+			require.NoError(t, err, "All error: %v", err)
+			assert.Len(t, docs, 10, "expected 10 docs, got %v", len(docs))
 
 			for index, doc := range docs {
 				expected := bson.D{{"foo", int32(index)}}
@@ -159,31 +196,31 @@ func TestCursor(t *testing.T) {
 
 			tbc := newTestBatchCursor(1, 5)
 			cursor, err := newCursor(tbc, nil, nil)
-			assert.Nil(t, err, "newCursor error: %v", err)
+			require.NoError(t, err, "newCursor error: %v", err)
 
 			err = cursor.All(context.Background(), &docs)
-			assert.Nil(t, err, "All error: %v", err)
+			require.NoError(t, err, "All error: %v", err)
 			assert.True(t, tbc.closed, "expected batch cursor to be closed but was not")
 		})
 
 		t.Run("does not error given interface as parameter", func(t *testing.T) {
-			var docs interface{} = []bson.D{}
+			var docs any = []bson.D{}
 
 			cursor, err := newCursor(newTestBatchCursor(1, 5), nil, nil)
-			assert.Nil(t, err, "newCursor error: %v", err)
+			require.NoError(t, err, "newCursor error: %v", err)
 
 			err = cursor.All(context.Background(), &docs)
-			assert.Nil(t, err, "expected Nil, got error: %v", err)
-			assert.Equal(t, 5, len(docs.([]bson.D)), "expected 5 documents, got %v", len(docs.([]bson.D)))
+			require.NoError(t, err, "All error: %v", err)
+			assert.Len(t, docs.([]bson.D), 5, "expected 5 documents, got %v", len(docs.([]bson.D)))
 		})
 		t.Run("errors when not given pointer to slice", func(t *testing.T) {
-			var docs interface{} = "test"
+			var docs any = "test"
 
 			cursor, err := newCursor(newTestBatchCursor(1, 5), nil, nil)
-			assert.Nil(t, err, "newCursor error: %v", err)
+			require.NoError(t, err, "newCursor error: %v", err)
 
 			err = cursor.All(context.Background(), &docs)
-			assert.NotNil(t, err, "expected error, got: %v", err)
+			assert.Error(t, err, "expected error, got: %v", err)
 		})
 		t.Run("with BSONOptions", func(t *testing.T) {
 			cursor, err := newCursor(
@@ -192,7 +229,7 @@ func TestCursor(t *testing.T) {
 					UseJSONStructTags: true,
 				},
 				nil)
-			require.NoError(t, err, "newCursor error")
+			require.NoError(t, err, "newCursor error: %v", err)
 
 			type myDocument struct {
 				A int32 `json:"foo"`
@@ -200,7 +237,7 @@ func TestCursor(t *testing.T) {
 			var got []myDocument
 
 			err = cursor.All(context.Background(), &got)
-			require.NoError(t, err, "All error")
+			require.NoError(t, err, "All error: %v", err)
 
 			want := []myDocument{{A: 0}, {A: 1}, {A: 2}, {A: 3}, {A: 4}}
 
@@ -212,24 +249,24 @@ func TestCursor(t *testing.T) {
 func TestNewCursorFromDocuments(t *testing.T) {
 	// Mock documents returned by Find in a Cursor.
 	t.Run("mock Find", func(t *testing.T) {
-		findResult := []interface{}{
+		findResult := []any{
 			bson.D{{"_id", 0}, {"foo", "bar"}},
 			bson.D{{"_id", 1}, {"baz", "qux"}},
 			bson.D{{"_id", 2}, {"quux", "quuz"}},
 		}
 		cur, err := NewCursorFromDocuments(findResult, nil, nil)
-		assert.Nil(t, err, "NewCursorFromDocuments error: %v", err)
+		require.NoError(t, err, "NewCursorFromDocuments error: %v", err)
 
 		// Assert that decoded documents are as expected.
 		var i int
 		for cur.Next(context.Background()) {
 			docBytes, err := bson.Marshal(findResult[i])
-			assert.Nil(t, err, "Marshal error: %v", err)
+			require.NoError(t, err, "Marshal error: %v", err)
 			expectedDecoded := bson.Raw(docBytes)
 
 			var decoded bson.Raw
 			err = cur.Decode(&decoded)
-			assert.Nil(t, err, "Decode error: %v", err)
+			require.NoError(t, err, "Decode error: %v", err)
 			assert.Equal(t, expectedDecoded, decoded,
 				"expected decoded document %v of Cursor to be %v, got %v",
 				i, expectedDecoded, decoded)
@@ -238,27 +275,78 @@ func TestNewCursorFromDocuments(t *testing.T) {
 		assert.Equal(t, 3, i, "expected 3 calls to cur.Next, got %v", i)
 
 		// Check for error on Cursor.
-		assert.Nil(t, cur.Err(), "Cursor error: %v", cur.Err())
+		require.NoError(t, cur.Err(), "Cursor error: %v", cur.Err())
 
 		// Assert that a call to cur.Close will not fail.
 		err = cur.Close(context.Background())
-		assert.Nil(t, err, "Close error: %v", err)
+		require.NoError(t, err, "Close error: %v", err)
 	})
 
 	// Mock an error in a Cursor.
 	t.Run("mock Find with error", func(t *testing.T) {
 		mockErr := fmt.Errorf("mock error")
-		findResult := []interface{}{bson.D{{"_id", 0}, {"foo", "bar"}}}
+		findResult := []any{bson.D{{"_id", 0}, {"foo", "bar"}}}
 		cur, err := NewCursorFromDocuments(findResult, mockErr, nil)
-		assert.Nil(t, err, "NewCursorFromDocuments error: %v", err)
+		require.NoError(t, err, "NewCursorFromDocuments error: %v", err)
 
 		// Assert that a call to Next will return false because of existing error.
 		next := cur.Next(context.Background())
 		assert.False(t, next, "expected call to Next to return false, got true")
 
 		// Check for error on Cursor.
-		assert.NotNil(t, cur.Err(), "expected Cursor error, got nil")
+		assert.Error(t, cur.Err(), "expected Cursor error, got nil")
 		assert.Equal(t, mockErr, cur.Err(), "expected Cursor error %v, got %v",
 			mockErr, cur.Err())
 	})
+}
+
+func TestGetDecoder(t *testing.T) {
+	t.Parallel()
+
+	decT := reflect.TypeOf((*bson.Decoder)(nil))
+	ctxT := reflect.TypeOf(bson.DecodeContext{})
+	for i := 0; i < decT.NumMethod(); i++ {
+		m := decT.Method(i)
+		// Test methods with no input/output parameter.
+		if m.Type.NumIn() != 1 || m.Type.NumOut() != 0 {
+			continue
+		}
+		t.Run(m.Name, func(t *testing.T) {
+			var opts options.BSONOptions
+			optsV := reflect.ValueOf(&opts).Elem()
+			f, ok := optsV.Type().FieldByName(m.Name)
+			require.True(t, ok, "expected %s field in %s", m.Name, optsV.Type())
+
+			wantDec := reflect.ValueOf(bson.NewDecoder(nil))
+			_ = wantDec.Method(i).Call(nil)
+			wantCtx := wantDec.Elem().Field(0)
+			require.Equal(t, ctxT, wantCtx.Type())
+
+			optsV.FieldByIndex(f.Index).SetBool(true)
+			gotDec := getDecoder(nil, &opts, nil)
+			gotCtx := reflect.ValueOf(gotDec).Elem().Field(0)
+			require.Equal(t, ctxT, gotCtx.Type())
+
+			assert.True(t, gotCtx.Equal(wantCtx), "expected %v: %v, got: %v", ctxT, wantCtx, gotCtx)
+		})
+	}
+}
+
+func BenchmarkNewCursorFromDocuments(b *testing.B) {
+	// Prepare sample data
+	documents := []any{
+		bson.D{{"_id", 0}, {"foo", "bar"}},
+		bson.D{{"_id", 1}, {"baz", "qux"}},
+		bson.D{{"_id", 2}, {"quux", "quuz"}},
+	}
+
+	b.ReportAllocs()
+	b.ResetTimer()
+
+	for i := 0; i < b.N; i++ {
+		_, err := NewCursorFromDocuments(documents, nil, nil)
+		if err != nil {
+			b.Fatalf("Error creating cursor: %v", err)
+		}
+	}
 }

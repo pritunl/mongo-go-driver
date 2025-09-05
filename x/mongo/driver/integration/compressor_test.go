@@ -11,12 +11,11 @@ import (
 	"os"
 	"testing"
 
-	"github.com/pritunl/mongo-go-driver/bson"
-	"github.com/pritunl/mongo-go-driver/internal/integtest"
-	"github.com/pritunl/mongo-go-driver/internal/require"
-	"github.com/pritunl/mongo-go-driver/mongo/writeconcern"
-	"github.com/pritunl/mongo-go-driver/x/bsonx/bsoncore"
-	"github.com/pritunl/mongo-go-driver/x/mongo/driver/operation"
+	"github.com/pritunl/mongo-go-driver/v2/internal/integtest"
+	"github.com/pritunl/mongo-go-driver/v2/internal/require"
+	"github.com/pritunl/mongo-go-driver/v2/mongo/writeconcern"
+	"github.com/pritunl/mongo-go-driver/v2/x/bsonx/bsoncore"
+	"github.com/pritunl/mongo-go-driver/v2/x/mongo/driver/operation"
 )
 
 func TestCompression(t *testing.T) {
@@ -25,7 +24,7 @@ func TestCompression(t *testing.T) {
 		t.Skip("Skipping because no compressor specified")
 	}
 
-	wc := writeconcern.New(writeconcern.WMajority())
+	wc := writeconcern.Majority()
 	collOne := integtest.ColName(t)
 
 	dropCollection(t, integtest.DBName(t), collOne)
@@ -52,7 +51,7 @@ func TestCompression(t *testing.T) {
 	networkVal, err := result.LookupErr("network")
 	noerr(t, err)
 
-	require.Equal(t, networkVal.Type, bson.TypeEmbeddedDocument)
+	require.Equal(t, bsoncore.TypeEmbeddedDocument, networkVal.Type)
 
 	compressionVal, err := networkVal.Document().LookupErr("compression")
 	noerr(t, err)

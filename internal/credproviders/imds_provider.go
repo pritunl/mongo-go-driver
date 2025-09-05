@@ -15,7 +15,7 @@ import (
 	"net/url"
 	"time"
 
-	"github.com/pritunl/mongo-go-driver/internal/aws/credentials"
+	"github.com/pritunl/mongo-go-driver/v2/internal/aws/credentials"
 )
 
 const (

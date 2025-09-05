@@ -15,7 +15,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/pritunl/mongo-go-driver/internal/aws/awserr"
+	"github.com/pritunl/mongo-go-driver/v2/internal/aws/awserr"
 	"golang.org/x/sync/singleflight"
 )
 

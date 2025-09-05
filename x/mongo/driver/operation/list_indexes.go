@@ -11,29 +11,30 @@ import (
 	"errors"
 	"time"
 
-	"github.com/pritunl/mongo-go-driver/event"
-	"github.com/pritunl/mongo-go-driver/internal/driverutil"
-	"github.com/pritunl/mongo-go-driver/mongo/description"
-	"github.com/pritunl/mongo-go-driver/x/bsonx/bsoncore"
-	"github.com/pritunl/mongo-go-driver/x/mongo/driver"
-	"github.com/pritunl/mongo-go-driver/x/mongo/driver/session"
+	"github.com/pritunl/mongo-go-driver/v2/event"
+	"github.com/pritunl/mongo-go-driver/v2/internal/driverutil"
+	"github.com/pritunl/mongo-go-driver/v2/x/bsonx/bsoncore"
+	"github.com/pritunl/mongo-go-driver/v2/x/mongo/driver"
+	"github.com/pritunl/mongo-go-driver/v2/x/mongo/driver/description"
+	"github.com/pritunl/mongo-go-driver/v2/x/mongo/driver/session"
 )
 
 // ListIndexes performs a listIndexes operation.
 type ListIndexes struct {
-	batchSize  *int32
-	maxTime    *time.Duration
-	session    *session.Client
-	clock      *session.ClusterClock
-	collection string
-	monitor    *event.CommandMonitor
-	database   string
-	deployment driver.Deployment
-	selector   description.ServerSelector
-	retry      *driver.RetryMode
-	crypt      driver.Crypt
-	serverAPI  *driver.ServerAPIOptions
-	timeout    *time.Duration
+	authenticator driver.Authenticator
+	batchSize     *int32
+	session       *session.Client
+	clock         *session.ClusterClock
+	collection    string
+	monitor       *event.CommandMonitor
+	database      string
+	deployment    driver.Deployment
+	selector      description.ServerSelector
+	retry         *driver.RetryMode
+	crypt         driver.Crypt
+	serverAPI     *driver.ServerAPIOptions
+	timeout       *time.Duration
+	rawData       *bool
 
 	result driver.CursorResponse
 }
@@ -53,10 +54,12 @@ func (li *ListIndexes) Result(opts driver.CursorOptions) (*driver.BatchCursor, e
 	return driver.NewBatchCursor(li.result, clientSession, clock, opts)
 }
 
-func (li *ListIndexes) processResponse(info driver.ResponseInfo) error {
-	var err error
-
-	li.result, err = driver.NewCursorResponse(info)
+func (li *ListIndexes) processResponse(_ context.Context, resp bsoncore.Document, info driver.ResponseInfo) error {
+	curDoc, err := driver.ExtractCursorDocument(resp)
+	if err != nil {
+		return err
+	}
+	li.result, err = driver.NewCursorResponse(curDoc, info)
 	return err
 
 }
@@ -76,7 +79,6 @@ func (li *ListIndexes) Execute(ctx context.Context) error {
 		CommandMonitor: li.monitor,
 		Database:       li.database,
 		Deployment:     li.deployment,
-		MaxTime:        li.maxTime,
 		Selector:       li.selector,
 		Crypt:          li.crypt,
 		Legacy:         driver.LegacyListIndexes,
@@ -85,20 +87,24 @@ func (li *ListIndexes) Execute(ctx context.Context) error {
 		ServerAPI:      li.serverAPI,
 		Timeout:        li.timeout,
 		Name:           driverutil.ListIndexesOp,
+		Authenticator:  li.authenticator,
 	}.Execute(ctx)
 
 }
 
-func (li *ListIndexes) command(dst []byte, _ description.SelectedServer) ([]byte, error) {
+func (li *ListIndexes) command(dst []byte, desc description.SelectedServer) ([]byte, error) {
 	dst = bsoncore.AppendStringElement(dst, "listIndexes", li.collection)
 	cursorIdx, cursorDoc := bsoncore.AppendDocumentStart(nil)
 
 	if li.batchSize != nil {
-
 		cursorDoc = bsoncore.AppendInt32Element(cursorDoc, "batchSize", *li.batchSize)
 	}
 	cursorDoc, _ = bsoncore.AppendDocumentEnd(cursorDoc, cursorIdx)
 	dst = bsoncore.AppendDocumentElement(dst, "cursor", cursorDoc)
+	// Set rawData for 8.2+ servers.
+	if li.rawData != nil && desc.WireVersion != nil && driverutil.VersionRangeIncludes(*desc.WireVersion, 27) {
+		dst = bsoncore.AppendBooleanElement(dst, "rawData", *li.rawData)
+	}
 
 	return dst, nil
 }
@@ -110,16 +116,6 @@ func (li *ListIndexes) BatchSize(batchSize int32) *ListIndexes {
 	}
 
 	li.batchSize = &batchSize
-	return li
-}
-
-// MaxTime specifies the maximum amount of time to allow the query to run on the server.
-func (li *ListIndexes) MaxTime(maxTime *time.Duration) *ListIndexes {
-	if li == nil {
-		li = new(ListIndexes)
-	}
-
-	li.maxTime = maxTime
 	return li
 }
 
@@ -231,5 +227,25 @@ func (li *ListIndexes) Timeout(timeout *time.Duration) *ListIndexes {
 	}
 
 	li.timeout = timeout
+	return li
+}
+
+// Authenticator sets the authenticator to use for this operation.
+func (li *ListIndexes) Authenticator(authenticator driver.Authenticator) *ListIndexes {
+	if li == nil {
+		li = new(ListIndexes)
+	}
+
+	li.authenticator = authenticator
+	return li
+}
+
+// RawData sets the rawData to access timeseries data in the compressed format.
+func (li *ListIndexes) RawData(rawData bool) *ListIndexes {
+	if li == nil {
+		li = new(ListIndexes)
+	}
+
+	li.rawData = &rawData
 	return li
 }

@@ -7,13 +7,21 @@
 package topology
 
 import (
+	"context"
 	"fmt"
 	"net/url"
+	"reflect"
 	"testing"
 	"time"
 
-	"github.com/pritunl/mongo-go-driver/internal/assert"
-	"github.com/pritunl/mongo-go-driver/mongo/options"
+	"github.com/pritunl/mongo-go-driver/v2/internal/assert"
+	"github.com/pritunl/mongo-go-driver/v2/internal/require"
+	"github.com/pritunl/mongo-go-driver/v2/mongo/options"
+	"github.com/pritunl/mongo-go-driver/v2/x/mongo/driver"
+	"github.com/pritunl/mongo-go-driver/v2/x/mongo/driver/description"
+	"github.com/pritunl/mongo-go-driver/v2/x/mongo/driver/drivertest"
+	"github.com/pritunl/mongo-go-driver/v2/x/mongo/driver/mnet"
+	"github.com/pritunl/mongo-go-driver/v2/x/mongo/driver/xoptions"
 )
 
 func TestDirectConnectionFromConnString(t *testing.T) {
@@ -73,11 +81,81 @@ func TestLoadBalancedFromConnString(t *testing.T) {
 			assert.Nil(t, err, "topology.New error: %v", err)
 			assert.Equal(t, tc.loadBalanced, topo.cfg.LoadBalanced, "expected loadBalanced %v, got %v", tc.loadBalanced, topo.cfg.LoadBalanced)
 
-			srvr := NewServer("", topo.id, topo.cfg.ServerOpts...)
+			srvr := NewServer("", topo.id, defaultConnectionTimeout, topo.cfg.ServerOpts...)
 			assert.Equal(t, tc.loadBalanced, srvr.cfg.loadBalanced, "expected loadBalanced %v, got %v", tc.loadBalanced, srvr.cfg.loadBalanced)
 
 			conn := newConnection("", srvr.cfg.connectionOpts...)
 			assert.Equal(t, tc.loadBalanced, conn.config.loadBalanced, "expected loadBalanced %v, got %v", tc.loadBalanced, conn.config.loadBalanced)
+		})
+	}
+}
+
+type testAuthenticator struct{}
+
+var _ driver.Authenticator = &testAuthenticator{}
+
+func (a *testAuthenticator) Auth(context.Context, *driver.AuthConfig) error {
+	return fmt.Errorf("test error")
+}
+
+func (a *testAuthenticator) Reauth(context.Context, *driver.AuthConfig) error {
+	return nil
+}
+
+func TestAuthenticateToAnything(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name    string
+		set     func(*options.ClientOptions) error
+		require func(*testing.T, error)
+	}{
+		{
+			name: "default",
+			set:  func(*options.ClientOptions) error { return nil },
+			require: func(t *testing.T, err error) {
+				require.NoError(t, err)
+			},
+		},
+		{
+			name: "positive",
+			set: func(opt *options.ClientOptions) error {
+				return xoptions.SetInternalClientOptions(opt, "authenticateToAnything", true)
+			},
+			require: func(t *testing.T, err error) {
+				require.EqualError(t, err, "auth error: test error")
+			},
+		},
+		{
+			name: "negative",
+			set: func(opt *options.ClientOptions) error {
+				return xoptions.SetInternalClientOptions(opt, "authenticateToAnything", false)
+			},
+			require: func(t *testing.T, err error) {
+				require.NoError(t, err)
+			},
+		},
+	}
+
+	describer := &drivertest.ChannelConn{
+		Desc: description.Server{Kind: description.ServerKindRSArbiter},
+	}
+	for _, tc := range cases {
+		tc := tc
+
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			opt := options.Client().SetAuth(options.Credential{Username: "foo", Password: "bar"})
+			err := tc.set(opt)
+			require.NoError(t, err, "error setting authenticateToAnything: %v", err)
+			cfg, err := NewConfigFromOptionsWithAuthenticator(opt, nil, &testAuthenticator{})
+			require.NoError(t, err, "error constructing topology config: %v", err)
+
+			srvrCfg := newServerConfig(defaultConnectionTimeout, cfg.ServerOpts...)
+			connCfg := newConnectionConfig(srvrCfg.connectionOpts...)
+			err = connCfg.handshaker.FinishHandshake(context.TODO(), &mnet.Connection{Describer: describer})
+			tc.require(t, err)
 		})
 	}
 }
@@ -103,4 +181,78 @@ func TestTopologyNewConfig(t *testing.T) {
 		assert.Nil(t, err, "error constructing topology config: %v", err)
 		assert.Equal(t, []string{"localhost:27018"}, cfg.SeedList)
 	})
+}
+
+// Test that convertOIDCArgs exhaustively copies all fields of a driver.OIDCArgs
+// into an options.OIDCArgs.
+func TestConvertOIDCArgs(t *testing.T) {
+	t.Parallel()
+	refreshToken := "test refresh token"
+
+	testCases := []struct {
+		desc string
+		args *driver.OIDCArgs
+	}{
+		{
+			desc: "populated args",
+			args: &driver.OIDCArgs{
+				Version: 9,
+				IDPInfo: &driver.IDPInfo{
+					Issuer:        "test issuer",
+					ClientID:      "test client ID",
+					RequestScopes: []string{"test scope 1", "test scope 2"},
+				},
+				RefreshToken: &refreshToken,
+			},
+		},
+		{
+			desc: "nil",
+			args: nil,
+		},
+		{
+			desc: "nil IDPInfo and RefreshToken",
+			args: &driver.OIDCArgs{
+				Version:      9,
+				IDPInfo:      nil,
+				RefreshToken: nil,
+			},
+		},
+	}
+
+	for _, tc := range testCases {
+		tc := tc // Capture range variable.
+
+		t.Run(tc.desc, func(t *testing.T) {
+			t.Parallel()
+
+			got := convertOIDCArgs(tc.args)
+
+			if tc.args == nil {
+				assert.Nil(t, got, "expected nil when input is nil")
+				return
+			}
+
+			require.Equal(t,
+				3,
+				reflect.ValueOf(*tc.args).NumField(),
+				"expected the driver.OIDCArgs struct to have exactly 3 fields")
+			require.Equal(t,
+				3,
+				reflect.ValueOf(*got).NumField(),
+				"expected the options.OIDCArgs struct to have exactly 3 fields")
+
+			assert.Equal(t,
+				tc.args.Version,
+				got.Version,
+				"expected Version field to be equal")
+			assert.EqualValues(t,
+				tc.args.IDPInfo,
+				got.IDPInfo,
+				"expected IDPInfo field to be convertible to equal values")
+			assert.Equal(t,
+				tc.args.RefreshToken,
+				got.RefreshToken,
+				"expected RefreshToken field to be equal")
+		})
+	}
 }

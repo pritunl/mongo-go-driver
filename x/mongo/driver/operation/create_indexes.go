@@ -12,33 +12,33 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/pritunl/mongo-go-driver/bson/bsontype"
-	"github.com/pritunl/mongo-go-driver/event"
-	"github.com/pritunl/mongo-go-driver/internal/driverutil"
-	"github.com/pritunl/mongo-go-driver/mongo/description"
-	"github.com/pritunl/mongo-go-driver/mongo/writeconcern"
-	"github.com/pritunl/mongo-go-driver/x/bsonx/bsoncore"
-	"github.com/pritunl/mongo-go-driver/x/mongo/driver"
-	"github.com/pritunl/mongo-go-driver/x/mongo/driver/session"
+	"github.com/pritunl/mongo-go-driver/v2/event"
+	"github.com/pritunl/mongo-go-driver/v2/internal/driverutil"
+	"github.com/pritunl/mongo-go-driver/v2/mongo/writeconcern"
+	"github.com/pritunl/mongo-go-driver/v2/x/bsonx/bsoncore"
+	"github.com/pritunl/mongo-go-driver/v2/x/mongo/driver"
+	"github.com/pritunl/mongo-go-driver/v2/x/mongo/driver/description"
+	"github.com/pritunl/mongo-go-driver/v2/x/mongo/driver/session"
 )
 
 // CreateIndexes performs a createIndexes operation.
 type CreateIndexes struct {
-	commitQuorum bsoncore.Value
-	indexes      bsoncore.Document
-	maxTime      *time.Duration
-	session      *session.Client
-	clock        *session.ClusterClock
-	collection   string
-	monitor      *event.CommandMonitor
-	crypt        driver.Crypt
-	database     string
-	deployment   driver.Deployment
-	selector     description.ServerSelector
-	writeConcern *writeconcern.WriteConcern
-	result       CreateIndexesResult
-	serverAPI    *driver.ServerAPIOptions
-	timeout      *time.Duration
+	authenticator driver.Authenticator
+	commitQuorum  bsoncore.Value
+	indexes       bsoncore.Document
+	session       *session.Client
+	clock         *session.ClusterClock
+	collection    string
+	monitor       *event.CommandMonitor
+	crypt         driver.Crypt
+	database      string
+	deployment    driver.Deployment
+	selector      description.ServerSelector
+	writeConcern  *writeconcern.WriteConcern
+	result        CreateIndexesResult
+	serverAPI     *driver.ServerAPIOptions
+	timeout       *time.Duration
+	rawData       *bool
 }
 
 // CreateIndexesResult represents a createIndexes result returned by the server.
@@ -92,9 +92,9 @@ func NewCreateIndexes(indexes bsoncore.Document) *CreateIndexes {
 // Result returns the result of executing this operation.
 func (ci *CreateIndexes) Result() CreateIndexesResult { return ci.result }
 
-func (ci *CreateIndexes) processResponse(info driver.ResponseInfo) error {
+func (ci *CreateIndexes) processResponse(_ context.Context, resp bsoncore.Document, _ driver.ResponseInfo) error {
 	var err error
-	ci.result, err = buildCreateIndexesResult(info.ServerResponse)
+	ci.result, err = buildCreateIndexesResult(resp)
 	return err
 }
 
@@ -113,26 +113,30 @@ func (ci *CreateIndexes) Execute(ctx context.Context) error {
 		Crypt:             ci.crypt,
 		Database:          ci.database,
 		Deployment:        ci.deployment,
-		MaxTime:           ci.maxTime,
 		Selector:          ci.selector,
 		WriteConcern:      ci.writeConcern,
 		ServerAPI:         ci.serverAPI,
 		Timeout:           ci.timeout,
 		Name:              driverutil.CreateIndexesOp,
+		Authenticator:     ci.authenticator,
 	}.Execute(ctx)
 
 }
 
 func (ci *CreateIndexes) command(dst []byte, desc description.SelectedServer) ([]byte, error) {
 	dst = bsoncore.AppendStringElement(dst, "createIndexes", ci.collection)
-	if ci.commitQuorum.Type != bsontype.Type(0) {
-		if desc.WireVersion == nil || !desc.WireVersion.Includes(9) {
+	if ci.commitQuorum.Type != bsoncore.Type(0) {
+		if desc.WireVersion == nil || !driverutil.VersionRangeIncludes(*desc.WireVersion, 9) {
 			return nil, errors.New("the 'commitQuorum' command parameter requires a minimum server wire version of 9")
 		}
 		dst = bsoncore.AppendValueElement(dst, "commitQuorum", ci.commitQuorum)
 	}
 	if ci.indexes != nil {
 		dst = bsoncore.AppendArrayElement(dst, "indexes", ci.indexes)
+	}
+	// Set rawData for 8.2+ servers.
+	if ci.rawData != nil && desc.WireVersion != nil && driverutil.VersionRangeIncludes(*desc.WireVersion, 27) {
+		dst = bsoncore.AppendBooleanElement(dst, "rawData", *ci.rawData)
 	}
 	return dst, nil
 }
@@ -156,16 +160,6 @@ func (ci *CreateIndexes) Indexes(indexes bsoncore.Document) *CreateIndexes {
 	}
 
 	ci.indexes = indexes
-	return ci
-}
-
-// MaxTime specifies the maximum amount of time to allow the query to run on the server.
-func (ci *CreateIndexes) MaxTime(maxTime *time.Duration) *CreateIndexes {
-	if ci == nil {
-		ci = new(CreateIndexes)
-	}
-
-	ci.maxTime = maxTime
 	return ci
 }
 
@@ -276,5 +270,25 @@ func (ci *CreateIndexes) Timeout(timeout *time.Duration) *CreateIndexes {
 	}
 
 	ci.timeout = timeout
+	return ci
+}
+
+// Authenticator sets the authenticator to use for this operation.
+func (ci *CreateIndexes) Authenticator(authenticator driver.Authenticator) *CreateIndexes {
+	if ci == nil {
+		ci = new(CreateIndexes)
+	}
+
+	ci.authenticator = authenticator
+	return ci
+}
+
+// RawData sets the rawData to access timeseries data in the compressed format.
+func (ci *CreateIndexes) RawData(rawData bool) *CreateIndexes {
+	if ci == nil {
+		ci = new(CreateIndexes)
+	}
+
+	ci.rawData = &rawData
 	return ci
 }

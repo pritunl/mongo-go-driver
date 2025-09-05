@@ -9,7 +9,7 @@ package credproviders
 import (
 	"os"
 
-	"github.com/pritunl/mongo-go-driver/internal/aws/credentials"
+	"github.com/pritunl/mongo-go-driver/v2/internal/aws/credentials"
 )
 
 // envProviderName provides a name of Env provider

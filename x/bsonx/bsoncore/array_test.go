@@ -10,11 +10,12 @@ import (
 	"bytes"
 	"encoding/binary"
 	"errors"
+	"fmt"
 	"io"
 	"testing"
 
 	"github.com/google/go-cmp/cmp"
-	"github.com/pritunl/mongo-go-driver/bson/bsontype"
+	"github.com/pritunl/mongo-go-driver/v2/internal/assert"
 )
 
 func TestArray(t *testing.T) {
@@ -151,21 +152,21 @@ func TestArray(t *testing.T) {
 			{"first",
 				0,
 				Value{
-					Type: bsontype.String,
+					Type: TypeString,
 					Data: []byte{0x04, 0x00, 0x00, 0x00, 0x62, 0x61, 0x72, 0x00},
 				},
 			},
 			{"second",
 				1,
 				Value{
-					Type: bsontype.String,
+					Type: TypeString,
 					Data: []byte{0x04, 0x00, 0x00, 0x00, 0x62, 0x61, 0x7a, 0x00},
 				},
 			},
 			{"third",
 				2,
 				Value{
-					Type: bsontype.String,
+					Type: TypeString,
 					Data: []byte{0x04, 0x00, 0x00, 0x00, 0x71, 0x75, 0x78, 0x00},
 				},
 			},
@@ -346,4 +347,81 @@ func TestArray(t *testing.T) {
 			})
 		}
 	})
+}
+
+var arrayStringTestCases = []struct {
+	description string
+	array       Array
+	want        string
+}{
+	{
+		description: "empty array",
+		array:       BuildArray(nil),
+		want:        `[]`,
+	},
+	{
+		description: "array with 1 element",
+		array: BuildArray(nil, Value{
+			Type: TypeInt32,
+			Data: AppendInt32(nil, 123),
+		}),
+		want: `[{"$numberInt":"123"}]`,
+	},
+	{
+		description: "nested array",
+		array: BuildArray(nil, Value{
+			Type: TypeArray,
+			Data: BuildArray(nil, Value{
+				Type: TypeString,
+				Data: AppendString(nil, "abc"),
+			}),
+		}),
+		want: `[["abc"]]`,
+	},
+	{
+		description: "array with mixed types",
+		array: BuildArray(nil,
+			Value{
+				Type: TypeString,
+				Data: AppendString(nil, "abc"),
+			},
+			Value{
+				Type: TypeInt32,
+				Data: AppendInt32(nil, 123),
+			},
+			Value{
+				Type: TypeBoolean,
+				Data: AppendBoolean(nil, true),
+			},
+		),
+		want: `["abc",{"$numberInt":"123"},true]`,
+	},
+}
+
+func TestArray_String(t *testing.T) {
+	for _, tc := range arrayStringTestCases {
+		t.Run(tc.description, func(t *testing.T) {
+			got := tc.array.String()
+			assert.Equal(t, tc.want, got, "expected string %s, got %s", tc.want, got)
+		})
+	}
+}
+
+func TestArray_StringN(t *testing.T) {
+	for _, tc := range arrayStringTestCases {
+		for n := -1; n <= len(tc.want)+1; n++ {
+			t.Run(fmt.Sprintf("%s n==%d", tc.description, n), func(t *testing.T) {
+				got, truncated := tc.array.StringN(n)
+				l := n
+				toBeTruncated := true
+				if l >= len(tc.want) || l < 0 {
+					l = len(tc.want)
+					toBeTruncated = false
+				}
+				want := tc.want[:l]
+				assert.Equal(t, want, got, "expected truncated string %s, got %s", want, got)
+				assert.Equal(t, toBeTruncated, truncated, "expected truncated to be %t, got %t", toBeTruncated, truncated)
+			})
+		}
+	}
 }

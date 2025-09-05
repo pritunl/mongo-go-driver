@@ -11,7 +11,7 @@
 //
 // WARNING: THIS PACKAGE IS EXPERIMENTAL AND MAY BE MODIFIED OR REMOVED WITHOUT
 // NOTICE! USE WITH EXTREME CAUTION!
-package connstring // import "github.com/pritunl/mongo-go-driver/x/mongo/driver/connstring"
+package connstring
 
 import (
 	"errors"
@@ -22,10 +22,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/pritunl/mongo-go-driver/internal/randutil"
-	"github.com/pritunl/mongo-go-driver/mongo/writeconcern"
-	"github.com/pritunl/mongo-go-driver/x/mongo/driver/dns"
-	"github.com/pritunl/mongo-go-driver/x/mongo/driver/wiremessage"
+	"github.com/pritunl/mongo-go-driver/v2/internal/randutil"
+	"github.com/pritunl/mongo-go-driver/v2/x/mongo/driver/auth"
+	"github.com/pritunl/mongo-go-driver/v2/x/mongo/driver/dns"
+	"github.com/pritunl/mongo-go-driver/v2/x/mongo/driver/wiremessage"
 )
 
 const (
@@ -187,10 +187,6 @@ type ConnString struct {
 	ZstdLevel                          int
 	ZstdLevelSet                       bool
 
-	WTimeout              time.Duration
-	WTimeoutSet           bool
-	WTimeoutSetFromOption bool
-
 	Options        map[string][]string
 	UnknownOptions map[string][]string
 }
@@ -221,7 +217,7 @@ func (u *ConnString) Validate() error {
 
 	// Check for invalid write concern (i.e. w=0 and j=true)
 	if u.WNumberSet && u.WNumber == 0 && u.JSet && u.J {
-		return writeconcern.ErrInconsistent
+		return errors.New("a write concern cannot have both w=0 and j=true")
 	}
 
 	// Check for invalid use of direct connections.
@@ -258,6 +254,16 @@ func (u *ConnString) Validate() error {
 		}
 	}
 
+	// Check for OIDC auth mechanism properties that cannot be set in the ConnString.
+	if u.AuthMechanism == auth.MongoDBOIDC {
+		if _, ok := u.AuthMechanismProperties[auth.AllowedHostsProp]; ok {
+			return fmt.Errorf(
+				"ALLOWED_HOSTS cannot be specified in the URI connection string for the %q auth mechanism, it must be specified through the ClientOptions directly",
+				auth.MongoDBOIDC,
+			)
+		}
+	}
+
 	return nil
 }
 
@@ -285,14 +291,12 @@ func (u *ConnString) setDefaultAuthParams(dbName string) error {
 			u.AuthMechanismProperties["SERVICE_NAME"] = "mongodb"
 		}
 		fallthrough
-	case "mongodb-aws", "mongodb-x509":
+	case "mongodb-aws", "mongodb-x509", "mongodb-oidc":
 		if u.AuthSource == "" {
 			u.AuthSource = "$external"
 		} else if u.AuthSource != "$external" {
 			return fmt.Errorf("auth source must be $external")
 		}
-	case "mongodb-cr":
-		fallthrough
 	case "scram-sha-1":
 		fallthrough
 	case "scram-sha-256":
@@ -650,24 +654,6 @@ func (u *ConnString) addOptions(connectionArgPairs []string) error {
 
 			u.WString = value
 			u.WNumberSet = false
-
-		case "wtimeoutms":
-			n, err := strconv.Atoi(value)
-			if err != nil || n < 0 {
-				return fmt.Errorf("invalid value for %q: %q", key, value)
-			}
-			u.WTimeout = time.Duration(n) * time.Millisecond
-			u.WTimeoutSet = true
-		case "wtimeout":
-			// Defer to wtimeoutms, but not to a manually-set option.
-			if u.WTimeoutSet {
-				break
-			}
-			n, err := strconv.Atoi(value)
-			if err != nil || n < 0 {
-				return fmt.Errorf("invalid value for %q: %q", key, value)
-			}
-			u.WTimeout = time.Duration(n) * time.Millisecond
 		case "zlibcompressionlevel":
 			level, err := strconv.Atoi(value)
 			if err != nil || (level < -1 || level > 9) {
@@ -708,16 +694,6 @@ func (u *ConnString) addOptions(connectionArgPairs []string) error {
 
 func (u *ConnString) validateAuth() error {
 	switch strings.ToLower(u.AuthMechanism) {
-	case "mongodb-cr":
-		if u.Username == "" {
-			return fmt.Errorf("username required for MONGO-CR")
-		}
-		if u.Password == "" {
-			return fmt.Errorf("password required for MONGO-CR")
-		}
-		if u.AuthMechanismProperties != nil {
-			return fmt.Errorf("MONGO-CR cannot have mechanism properties")
-		}
 	case "mongodb-x509":
 		if u.Password != "" {
 			return fmt.Errorf("password cannot be specified for MONGO-X509")
@@ -780,6 +756,10 @@ func (u *ConnString) validateAuth() error {
 		}
 		if u.AuthMechanismProperties != nil {
 			return fmt.Errorf("SCRAM-SHA-256 cannot have mechanism properties")
+		}
+	case "mongodb-oidc":
+		if u.Password != "" {
+			return fmt.Errorf("password cannot be specified for MONGODB-OIDC")
 		}
 	case "":
 		if u.UsernameSet && u.Username == "" {
@@ -887,15 +867,16 @@ func (p *parser) parse(original string) (*ConnString, error) {
 	uri := original
 
 	var err error
-	if strings.HasPrefix(uri, SchemeMongoDBSRV+"://") {
+	switch {
+	case strings.HasPrefix(uri, SchemeMongoDBSRV+"://"):
 		connStr.Scheme = SchemeMongoDBSRV
 		// remove the scheme
 		uri = uri[len(SchemeMongoDBSRV)+3:]
-	} else if strings.HasPrefix(uri, SchemeMongoDB+"://") {
+	case strings.HasPrefix(uri, SchemeMongoDB+"://"):
 		connStr.Scheme = SchemeMongoDB
 		// remove the scheme
 		uri = uri[len(SchemeMongoDB)+3:]
-	} else {
+	default:
 		return nil, errors.New(`scheme must be "mongodb" or "mongodb+srv"`)
 	}
 
@@ -906,9 +887,9 @@ func (p *parser) parse(original string) (*ConnString, error) {
 		username := userInfo
 		var password string
 
-		if idx := strings.Index(userInfo, ":"); idx != -1 {
-			username = userInfo[:idx]
-			password = userInfo[idx+1:]
+		if u, p, ok := strings.Cut(userInfo, ":"); ok {
+			username = u
+			password = p
 			connStr.PasswordSet = true
 		}
 
@@ -1030,11 +1011,6 @@ func (p *parser) parse(original string) (*ConnString, error) {
 	err = connStr.setDefaultAuthParams(extractedDatabase.db)
 	if err != nil {
 		return nil, err
-	}
-
-	// If WTimeout was set from manual options passed in, set WTImeoutSet to true.
-	if connStr.WTimeoutSetFromOption {
-		connStr.WTimeoutSet = true
 	}
 
 	return connStr, nil

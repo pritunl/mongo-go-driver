@@ -10,10 +10,10 @@ import (
 	"context"
 	"testing"
 
-	"github.com/pritunl/mongo-go-driver/x/bsonx/bsoncore"
-	"github.com/pritunl/mongo-go-driver/x/mongo/driver"
-	"github.com/pritunl/mongo-go-driver/x/mongo/driver/operation"
-	"github.com/pritunl/mongo-go-driver/x/mongo/driver/topology"
+	"github.com/pritunl/mongo-go-driver/v2/x/bsonx/bsoncore"
+	"github.com/pritunl/mongo-go-driver/v2/x/mongo/driver"
+	"github.com/pritunl/mongo-go-driver/v2/x/mongo/driver/operation"
+	"github.com/pritunl/mongo-go-driver/v2/x/mongo/driver/topology"
 )
 
 func TestInsert(t *testing.T) {

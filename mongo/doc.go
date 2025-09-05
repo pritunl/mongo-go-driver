@@ -13,7 +13,7 @@
 //
 //	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 //	defer cancel()
-//	client, err := mongo.Connect(ctx, options.Client().ApplyURI("mongodb://foo:bar@localhost:27017"))
+//	client, err := mongo.Connect( options.Client().ApplyURI("mongodb://foo:bar@localhost:27017"))
 //	if err != nil { return err }
 //
 // This will create a new client and start monitoring the MongoDB server on localhost.
@@ -73,8 +73,8 @@
 //	if err != nil { return err }
 //	// do something with result...
 //
-// All Client, Collection, and Database methods that take parameters of type interface{}
-// will return ErrNilDocument if nil is passed in for an interface{}.
+// All Client, Collection, and Database methods that take parameters of type any
+// will return ErrNilDocument if nil is passed in for an any.
 //
 // Additional examples can be found under the examples directory in the driver's repository and
 // on the MongoDB website.
@@ -102,16 +102,23 @@
 // using a different DNS server (8.8.8.8 is the common default), and, if that's not possible, avoiding the "mongodb+srv"
 // scheme.
 //
-// # Client Side Encryption
+// # In-Use Encryption
 //
-// Client-side encryption is a new feature in MongoDB 4.2 that allows specific data fields to be encrypted. Using this
+// MongoDB provides two approaches to In-Use Encryption: Queryable Encryption (QE) and Client-Side Field Level Encryption (CSFLE).
+//
+// The Queryable Encryption and CSFLE features share much of the same API with some exceptions.
+//
+// - AutoEncryptionOptions.SetEncryptedFieldsMap only applies to Queryable Encryption.
+// - AutoEncryptionOptions.SetSchemaMap only applies to CSFLE.
+//
+// In-use encryption is a new feature in MongoDB 4.2 that allows specific data fields to be encrypted. Using this
 // feature requires specifying the "cse" build tag during compilation:
 //
 //	go build -tags cse
 //
 // Note: Auto encryption is an enterprise- and Atlas-only feature.
 //
-// The libmongocrypt C library is required when using client-side encryption. Specific versions of libmongocrypt
+// The libmongocrypt C library is required when using in-use encryption. Specific versions of libmongocrypt
 // are required for different versions of the Go Driver:
 //
 // - Go Driver v1.2.0 requires libmongocrypt v1.0.0 or higher

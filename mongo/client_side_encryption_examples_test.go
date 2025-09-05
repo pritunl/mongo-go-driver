@@ -13,9 +13,8 @@ import (
 	"fmt"
 	"log"
 
-	"github.com/pritunl/mongo-go-driver/bson"
-	"github.com/pritunl/mongo-go-driver/bson/primitive"
-	"github.com/pritunl/mongo-go-driver/mongo/options"
+	"github.com/pritunl/mongo-go-driver/v2/bson"
+	"github.com/pritunl/mongo-go-driver/v2/mongo/options"
 )
 
 func Example_clientSideEncryption() {
@@ -23,9 +22,9 @@ func Example_clientSideEncryption() {
 	// encryption key.
 	localKey := make([]byte, 96)
 	if _, err := rand.Read(localKey); err != nil {
-		log.Fatal(err)
+		log.Panic(err)
 	}
-	kmsProviders := map[string]map[string]interface{}{
+	kmsProviders := map[string]map[string]any{
 		"local": {
 			"key": localKey,
 		},
@@ -39,30 +38,30 @@ func Example_clientSideEncryption() {
 	clientOpts := options.Client().
 		ApplyURI(uri).
 		SetAutoEncryptionOptions(autoEncryptionOpts)
-	client, err := Connect(context.TODO(), clientOpts)
+	client, err := Connect(clientOpts)
 	if err != nil {
-		log.Fatalf("Connect error: %v", err)
+		log.Panicf("Connect error: %v", err)
 	}
 	defer func() {
 		if err = client.Disconnect(context.TODO()); err != nil {
-			log.Fatalf("Disconnect error: %v", err)
+			log.Panicf("Disconnect error: %v", err)
 		}
 	}()
 
 	collection := client.Database("test").Collection("coll")
 	if err := collection.Drop(context.TODO()); err != nil {
-		log.Fatalf("Collection.Drop error: %v", err)
+		log.Panicf("Collection.Drop error: %v", err)
 	}
 
 	_, err = collection.InsertOne(
 		context.TODO(),
 		bson.D{{"encryptedField", "123456789"}})
 	if err != nil {
-		log.Fatalf("InsertOne error: %v", err)
+		log.Panicf("InsertOne error: %v", err)
 	}
 	res, err := collection.FindOne(context.TODO(), bson.D{}).Raw()
 	if err != nil {
-		log.Fatalf("FindOne error: %v", err)
+		log.Panicf("FindOne error: %v", err)
 	}
 	fmt.Println(res)
 }
@@ -72,33 +71,31 @@ func Example_clientSideEncryptionCreateKey() {
 	uri := "mongodb://localhost:27017"
 	// kmsProviders would have to be populated with the correct KMS provider
 	// information before it's used.
-	var kmsProviders map[string]map[string]interface{}
+	var kmsProviders map[string]map[string]any
 
 	// Create Client and ClientEncryption
 	clientEncryptionOpts := options.ClientEncryption().
 		SetKeyVaultNamespace(keyVaultNamespace).
 		SetKmsProviders(kmsProviders)
-	keyVaultClient, err := Connect(
-		context.TODO(),
-		options.Client().ApplyURI(uri))
+	keyVaultClient, err := Connect(options.Client().ApplyURI(uri))
 	if err != nil {
-		log.Fatalf("Connect error for keyVaultClient: %v", err)
+		log.Panicf("Connect error for keyVaultClient: %v", err)
 	}
 	clientEnc, err := NewClientEncryption(keyVaultClient, clientEncryptionOpts)
 	if err != nil {
-		log.Fatalf("NewClientEncryption error: %v", err)
+		log.Panicf("NewClientEncryption error: %v", err)
 	}
 	defer func() {
 		// this will disconnect the keyVaultClient as well
 		if err = clientEnc.Close(context.TODO()); err != nil {
-			log.Fatalf("Close error: %v", err)
+			log.Panicf("Close error: %v", err)
 		}
 	}()
 
 	// Create a new data key and encode it as base64
 	dataKeyID, err := clientEnc.CreateDataKey(context.TODO(), "local")
 	if err != nil {
-		log.Fatalf("CreateDataKey error: %v", err)
+		log.Panicf("CreateDataKey error: %v", err)
 	}
 	dataKeyBase64 := base64.StdEncoding.EncodeToString(dataKeyID.Data)
 
@@ -125,13 +122,13 @@ func Example_clientSideEncryptionCreateKey() {
 	var schemaDoc bson.Raw
 	err = bson.UnmarshalExtJSON([]byte(schema), true, &schemaDoc)
 	if err != nil {
-		log.Fatalf("UnmarshalExtJSON error: %v", err)
+		log.Panicf("UnmarshalExtJSON error: %v", err)
 	}
 
 	// Configure a Client with auto encryption using the new schema
 	dbName := "test"
 	collName := "coll"
-	schemaMap := map[string]interface{}{
+	schemaMap := map[string]any{
 		dbName + "." + collName: schemaDoc,
 	}
 	autoEncryptionOpts := options.AutoEncryption().
@@ -142,9 +139,9 @@ func Example_clientSideEncryptionCreateKey() {
 	clientOptions := options.Client().
 		ApplyURI(uri).
 		SetAutoEncryptionOptions(autoEncryptionOpts)
-	client, err := Connect(context.TODO(), clientOptions)
+	client, err := Connect(clientOptions)
 	if err != nil {
-		log.Fatalf("Connect error for encrypted client: %v", err)
+		log.Panicf("Connect error for encrypted client: %v", err)
 	}
 	defer func() {
 		_ = client.Disconnect(context.TODO())
@@ -157,7 +154,7 @@ func Example_explictEncryption() {
 	// localMasterKey must be the same master key that was used to create the
 	// encryption key.
 	var localMasterKey []byte
-	kmsProviders := map[string]map[string]interface{}{
+	kmsProviders := map[string]map[string]any{
 		"local": {
 			"key": localMasterKey,
 		},
@@ -169,9 +166,8 @@ func Example_explictEncryption() {
 	keyVaultNamespace := keyVaultDBName + "." + keyVaultCollName
 
 	// The Client used to read/write application data.
-	client, err := Connect(
-		context.TODO(),
-		options.Client().ApplyURI("mongodb://localhost:27017"))
+	opts := options.Client().ApplyURI("mongodb://localhost:27017")
+	client, err := Connect(opts)
 	if err != nil {
 		panic(err)
 	}
@@ -258,7 +254,7 @@ func Example_explictEncryption() {
 	// Decrypt the encrypted field in the found document.
 	decrypted, err := clientEncryption.Decrypt(
 		context.TODO(),
-		foundDoc["encryptedField"].(primitive.Binary))
+		foundDoc["encryptedField"].(bson.Binary))
 	if err != nil {
 		panic(err)
 	}
@@ -272,7 +268,7 @@ func Example_explictEncryptionWithAutomaticDecryption() {
 	// localMasterKey must be the same master key that was used to create the
 	// encryption key.
 	var localMasterKey []byte
-	kmsProviders := map[string]map[string]interface{}{
+	kmsProviders := map[string]map[string]any{
 		"local": {
 			"key": localMasterKey,
 		},
@@ -294,7 +290,7 @@ func Example_explictEncryptionWithAutomaticDecryption() {
 	clientOpts := options.Client().
 		ApplyURI("mongodb://localhost:27017").
 		SetAutoEncryptionOptions(autoEncryptionOpts)
-	client, err := Connect(context.TODO(), clientOpts)
+	client, err := Connect(clientOpts)
 	if err != nil {
 		panic(err)
 	}

@@ -10,7 +10,7 @@ import (
 	"bytes"
 	"testing"
 
-	"github.com/pritunl/mongo-go-driver/x/bsonx/bsoncore"
+	"github.com/pritunl/mongo-go-driver/v2/x/bsonx/bsoncore"
 )
 
 func TestClusterClock(t *testing.T) {

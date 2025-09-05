@@ -14,10 +14,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/pritunl/mongo-go-driver/internal/assert"
-	"github.com/pritunl/mongo-go-driver/internal/integtest"
-	"github.com/pritunl/mongo-go-driver/mongo/options"
-	"github.com/pritunl/mongo-go-driver/mongo/readpref"
+	"github.com/pritunl/mongo-go-driver/v2/internal/assert"
+	"github.com/pritunl/mongo-go-driver/v2/internal/integtest"
+	"github.com/pritunl/mongo-go-driver/v2/mongo/options"
+	"github.com/pritunl/mongo-go-driver/v2/mongo/readpref"
 )
 
 func TestOCSP(t *testing.T) {
@@ -32,7 +32,7 @@ func TestOCSP(t *testing.T) {
 
 	t.Run("tls", func(t *testing.T) {
 		clientOpts := createOCSPClientOptions(cs.Original)
-		client, err := Connect(bgCtx, clientOpts)
+		client, err := Connect(clientOpts)
 		assert.Nil(t, err, "Connect error: %v", err)
 		defer func() { _ = client.Disconnect(bgCtx) }()
 
@@ -47,7 +47,7 @@ func TestOCSP(t *testing.T) {
 	})
 	t.Run("tlsInsecure", func(t *testing.T) {
 		clientOpts := createInsecureOCSPClientOptions(cs.Original)
-		client, err := Connect(bgCtx, clientOpts)
+		client, err := Connect(clientOpts)
 		assert.Nil(t, err, "Connect error: %v", err)
 		defer func() { _ = client.Disconnect(bgCtx) }()
 
@@ -73,8 +73,11 @@ func createInsecureOCSPClientOptions(uri string) *options.ClientOptions {
 
 	if opts.TLSConfig != nil {
 		opts.TLSConfig.InsecureSkipVerify = true
+		opts.SetTLSConfig(opts.TLSConfig)
+
 		return opts
 	}
+
 	return opts.SetTLSConfig(&tls.Config{
 		InsecureSkipVerify: true,
 	})

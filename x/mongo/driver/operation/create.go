@@ -10,16 +10,18 @@ import (
 	"context"
 	"errors"
 
-	"github.com/pritunl/mongo-go-driver/event"
-	"github.com/pritunl/mongo-go-driver/mongo/description"
-	"github.com/pritunl/mongo-go-driver/mongo/writeconcern"
-	"github.com/pritunl/mongo-go-driver/x/bsonx/bsoncore"
-	"github.com/pritunl/mongo-go-driver/x/mongo/driver"
-	"github.com/pritunl/mongo-go-driver/x/mongo/driver/session"
+	"github.com/pritunl/mongo-go-driver/v2/event"
+	"github.com/pritunl/mongo-go-driver/v2/internal/driverutil"
+	"github.com/pritunl/mongo-go-driver/v2/mongo/writeconcern"
+	"github.com/pritunl/mongo-go-driver/v2/x/bsonx/bsoncore"
+	"github.com/pritunl/mongo-go-driver/v2/x/mongo/driver"
+	"github.com/pritunl/mongo-go-driver/v2/x/mongo/driver/description"
+	"github.com/pritunl/mongo-go-driver/v2/x/mongo/driver/session"
 )
 
 // Create represents a create operation.
 type Create struct {
+	authenticator                driver.Authenticator
 	capped                       *bool
 	collation                    bsoncore.Document
 	changeStreamPreAndPostImages bsoncore.Document
@@ -55,7 +57,7 @@ func NewCreate(collectionName string) *Create {
 	}
 }
 
-func (c *Create) processResponse(driver.ResponseInfo) error {
+func (c *Create) processResponse(context.Context, bsoncore.Document, driver.ResponseInfo) error {
 	return nil
 }
 
@@ -77,6 +79,7 @@ func (c *Create) Execute(ctx context.Context) error {
 		Selector:          c.selector,
 		WriteConcern:      c.writeConcern,
 		ServerAPI:         c.serverAPI,
+		Authenticator:     c.authenticator,
 	}.Execute(ctx)
 }
 
@@ -91,7 +94,7 @@ func (c *Create) command(dst []byte, desc description.SelectedServer) ([]byte, e
 		dst = bsoncore.AppendDocumentElement(dst, "changeStreamPreAndPostImages", c.changeStreamPreAndPostImages)
 	}
 	if c.collation != nil {
-		if desc.WireVersion == nil || !desc.WireVersion.Includes(5) {
+		if desc.WireVersion == nil || !driverutil.VersionRangeIncludes(*desc.WireVersion, 5) {
 			return nil, errors.New("the 'collation' command parameter requires a minimum server wire version of 5")
 		}
 		dst = bsoncore.AppendDocumentElement(dst, "collation", c.collation)
@@ -148,7 +151,7 @@ func (c *Create) Capped(capped bool) *Create {
 	return c
 }
 
-// Collation specifies a collation. This option is only valid for server versions 3.4 and above.
+// Collation specifies a collation.
 func (c *Create) Collation(collation bsoncore.Document) *Create {
 	if c == nil {
 		c = new(Create)
@@ -397,5 +400,15 @@ func (c *Create) ClusteredIndex(ci bsoncore.Document) *Create {
 	}
 
 	c.clusteredIndex = ci
+	return c
+}
+
+// Authenticator sets the authenticator to use for this operation.
+func (c *Create) Authenticator(authenticator driver.Authenticator) *Create {
+	if c == nil {
+		c = new(Create)
+	}
+
+	c.authenticator = authenticator
 	return c
 }

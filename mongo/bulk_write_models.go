@@ -7,7 +7,7 @@
 package mongo
 
 import (
-	"github.com/pritunl/mongo-go-driver/mongo/options"
+	"github.com/pritunl/mongo-go-driver/v2/mongo/options"
 )
 
 // WriteModel is an interface implemented by models that can be used in a BulkWrite operation. Each WriteModel
@@ -20,8 +20,10 @@ type WriteModel interface {
 }
 
 // InsertOneModel is used to insert a single document in a BulkWrite operation.
+//
+// See corresponding setter methods for documentation.
 type InsertOneModel struct {
-	Document interface{}
+	Document any
 }
 
 // NewInsertOneModel creates a new InsertOneModel.
@@ -32,7 +34,7 @@ func NewInsertOneModel() *InsertOneModel {
 // SetDocument specifies the document to be inserted. The document cannot be nil. If it does not have an _id field when
 // transformed into BSON, one will be added automatically to the marshalled document. The original document will not be
 // modified.
-func (iom *InsertOneModel) SetDocument(doc interface{}) *InsertOneModel {
+func (iom *InsertOneModel) SetDocument(doc any) *InsertOneModel {
 	iom.Document = doc
 	return iom
 }
@@ -40,10 +42,12 @@ func (iom *InsertOneModel) SetDocument(doc interface{}) *InsertOneModel {
 func (*InsertOneModel) writeModel() {}
 
 // DeleteOneModel is used to delete at most one document in a BulkWriteOperation.
+//
+// See corresponding setter methods for documentation.
 type DeleteOneModel struct {
-	Filter    interface{}
+	Filter    any
 	Collation *options.Collation
-	Hint      interface{}
+	Hint      any
 }
 
 // NewDeleteOneModel creates a new DeleteOneModel.
@@ -54,7 +58,7 @@ func NewDeleteOneModel() *DeleteOneModel {
 // SetFilter specifies a filter to use to select the document to delete. The filter must be a document containing query
 // operators. It cannot be nil. If the filter matches multiple documents, one will be selected from the matching
 // documents.
-func (dom *DeleteOneModel) SetFilter(filter interface{}) *DeleteOneModel {
+func (dom *DeleteOneModel) SetFilter(filter any) *DeleteOneModel {
 	dom.Filter = filter
 	return dom
 }
@@ -66,13 +70,14 @@ func (dom *DeleteOneModel) SetCollation(collation *options.Collation) *DeleteOne
 	return dom
 }
 
-// SetHint specifies the index to use for the operation. This should either be the index name as a string or the index
-// specification as a document. This option is only valid for MongoDB versions >= 4.4. Server versions >= 3.4 will
-// return an error if this option is specified. For server versions < 3.4, the driver will return a client-side error if
-// this option is specified. The driver will return an error if this option is specified during an unacknowledged write
-// operation. The driver will return an error if the hint parameter is a multi-key map. The default value is nil, which
-// means that no hint will be sent.
-func (dom *DeleteOneModel) SetHint(hint interface{}) *DeleteOneModel {
+// SetHint specifies the index to use for the operation. This should either be
+// the index name as a string or the index specification as a document. This
+// option is only valid for MongoDB versions >= 4.4. Server versions < 4.4 will
+// return an error if this option is specified. The driver will return an error
+// if this option is specified during an unacknowledged write operation. The
+// driver will return an error if the hint parameter is a multi-key map. The
+// default value is nil, which means that no hint will be sent.
+func (dom *DeleteOneModel) SetHint(hint any) *DeleteOneModel {
 	dom.Hint = hint
 	return dom
 }
@@ -80,10 +85,12 @@ func (dom *DeleteOneModel) SetHint(hint interface{}) *DeleteOneModel {
 func (*DeleteOneModel) writeModel() {}
 
 // DeleteManyModel is used to delete multiple documents in a BulkWrite operation.
+//
+// See corresponding setter methods for documentation.
 type DeleteManyModel struct {
-	Filter    interface{}
+	Filter    any
 	Collation *options.Collation
-	Hint      interface{}
+	Hint      any
 }
 
 // NewDeleteManyModel creates a new DeleteManyModel.
@@ -93,7 +100,7 @@ func NewDeleteManyModel() *DeleteManyModel {
 
 // SetFilter specifies a filter to use to select documents to delete. The filter must be a document containing query
 // operators. It cannot be nil.
-func (dmm *DeleteManyModel) SetFilter(filter interface{}) *DeleteManyModel {
+func (dmm *DeleteManyModel) SetFilter(filter any) *DeleteManyModel {
 	dmm.Filter = filter
 	return dmm
 }
@@ -105,13 +112,14 @@ func (dmm *DeleteManyModel) SetCollation(collation *options.Collation) *DeleteMa
 	return dmm
 }
 
-// SetHint specifies the index to use for the operation. This should either be the index name as a string or the index
-// specification as a document. This option is only valid for MongoDB versions >= 4.4. Server versions >= 3.4 will
-// return an error if this option is specified. For server versions < 3.4, the driver will return a client-side error if
-// this option is specified. The driver will return an error if this option is specified during an unacknowledged write
-// operation. The driver will return an error if the hint parameter is a multi-key map. The default value is nil, which
-// means that no hint will be sent.
-func (dmm *DeleteManyModel) SetHint(hint interface{}) *DeleteManyModel {
+// SetHint specifies the index to use for the operation. This should either be
+// the index name as a string or the index specification as a document. This
+// option is only valid for MongoDB versions >= 4.4. Server versions < 4.4 will
+// return an error if this option is specified. The driver will return an error
+// if this option is specified during an unacknowledged write operation. The
+// driver will return an error if the hint parameter is a multi-key map. The
+// default value is nil, which means that no hint will be sent.
+func (dmm *DeleteManyModel) SetHint(hint any) *DeleteManyModel {
 	dmm.Hint = hint
 	return dmm
 }
@@ -119,12 +127,15 @@ func (dmm *DeleteManyModel) SetHint(hint interface{}) *DeleteManyModel {
 func (*DeleteManyModel) writeModel() {}
 
 // ReplaceOneModel is used to replace at most one document in a BulkWrite operation.
+//
+// See corresponding setter methods for documentation.
 type ReplaceOneModel struct {
 	Collation   *options.Collation
 	Upsert      *bool
-	Filter      interface{}
-	Replacement interface{}
-	Hint        interface{}
+	Filter      any
+	Replacement any
+	Hint        any
+	Sort        any
 }
 
 // NewReplaceOneModel creates a new ReplaceOneModel.
@@ -132,13 +143,14 @@ func NewReplaceOneModel() *ReplaceOneModel {
 	return &ReplaceOneModel{}
 }
 
-// SetHint specifies the index to use for the operation. This should either be the index name as a string or the index
-// specification as a document. This option is only valid for MongoDB versions >= 4.2. Server versions >= 3.4 will
-// return an error if this option is specified. For server versions < 3.4, the driver will return a client-side error if
-// this option is specified. The driver will return an error if this option is specified during an unacknowledged write
-// operation. The driver will return an error if the hint parameter is a multi-key map. The default value is nil, which
-// means that no hint will be sent.
-func (rom *ReplaceOneModel) SetHint(hint interface{}) *ReplaceOneModel {
+// SetHint specifies the index to use for the operation. This should either be
+// the index name as a string or the index specification as a document. This
+// option is only valid for MongoDB versions >= 4.2. Server versions < 4.2 will
+// return an error if this option is specified. The driver will return an error
+// if this option is specified during an unacknowledged write operation. The
+// driver will return an error if the hint parameter is a multi-key map. The
+// default value is nil, which means that no hint will be sent.
+func (rom *ReplaceOneModel) SetHint(hint any) *ReplaceOneModel {
 	rom.Hint = hint
 	return rom
 }
@@ -146,14 +158,14 @@ func (rom *ReplaceOneModel) SetHint(hint interface{}) *ReplaceOneModel {
 // SetFilter specifies a filter to use to select the document to replace. The filter must be a document containing query
 // operators. It cannot be nil. If the filter matches multiple documents, one will be selected from the matching
 // documents.
-func (rom *ReplaceOneModel) SetFilter(filter interface{}) *ReplaceOneModel {
+func (rom *ReplaceOneModel) SetFilter(filter any) *ReplaceOneModel {
 	rom.Filter = filter
 	return rom
 }
 
 // SetReplacement specifies a document that will be used to replace the selected document. It cannot be nil and cannot
 // contain any update operators (https://www.mongodb.com/docs/manual/reference/operator/update/).
-func (rom *ReplaceOneModel) SetReplacement(rep interface{}) *ReplaceOneModel {
+func (rom *ReplaceOneModel) SetReplacement(rep any) *ReplaceOneModel {
 	rom.Replacement = rep
 	return rom
 }
@@ -173,16 +185,28 @@ func (rom *ReplaceOneModel) SetUpsert(upsert bool) *ReplaceOneModel {
 	return rom
 }
 
+// SetSort specifies which document the operation replaces if the query matches multiple documents. The first document
+// matched by the sort order will be replaced. This option is only valid for MongoDB versions >= 8.0. The sort parameter
+// is evaluated sequentially, so the driver will return an error if it is a multi-key map (which is unordeded). The
+// default value is nil.
+func (rom *ReplaceOneModel) SetSort(sort any) *ReplaceOneModel {
+	rom.Sort = sort
+	return rom
+}
+
 func (*ReplaceOneModel) writeModel() {}
 
 // UpdateOneModel is used to update at most one document in a BulkWrite operation.
+//
+// See corresponding setter methods for documentation.
 type UpdateOneModel struct {
 	Collation    *options.Collation
 	Upsert       *bool
-	Filter       interface{}
-	Update       interface{}
-	ArrayFilters *options.ArrayFilters
-	Hint         interface{}
+	Filter       any
+	Update       any
+	ArrayFilters []any
+	Hint         any
+	Sort         any
 }
 
 // NewUpdateOneModel creates a new UpdateOneModel.
@@ -190,13 +214,14 @@ func NewUpdateOneModel() *UpdateOneModel {
 	return &UpdateOneModel{}
 }
 
-// SetHint specifies the index to use for the operation. This should either be the index name as a string or the index
-// specification as a document. This option is only valid for MongoDB versions >= 4.2. Server versions >= 3.4 will
-// return an error if this option is specified. For server versions < 3.4, the driver will return a client-side error if
-// this option is specified. The driver will return an error if this option is specified during an unacknowledged write
-// operation. The driver will return an error if the hint parameter is a multi-key map. The default value is nil, which
-// means that no hint will be sent.
-func (uom *UpdateOneModel) SetHint(hint interface{}) *UpdateOneModel {
+// SetHint specifies the index to use for the operation. This should either be
+// the index name as a string or the index specification as a document. This
+// option is only valid for MongoDB versions >= 4.2. Server versions < 4.2 will
+// return an error if this option is specified. The driver will return an error
+// if this option is specified during an unacknowledged write operation. The
+// driver will return an error if the hint parameter is a multi-key map. The
+// default value is nil, which means that no hint will be sent.
+func (uom *UpdateOneModel) SetHint(hint any) *UpdateOneModel {
 	uom.Hint = hint
 	return uom
 }
@@ -204,22 +229,22 @@ func (uom *UpdateOneModel) SetHint(hint interface{}) *UpdateOneModel {
 // SetFilter specifies a filter to use to select the document to update. The filter must be a document containing query
 // operators. It cannot be nil. If the filter matches multiple documents, one will be selected from the matching
 // documents.
-func (uom *UpdateOneModel) SetFilter(filter interface{}) *UpdateOneModel {
+func (uom *UpdateOneModel) SetFilter(filter any) *UpdateOneModel {
 	uom.Filter = filter
 	return uom
 }
 
 // SetUpdate specifies the modifications to be made to the selected document. The value must be a document containing
 // update operators (https://www.mongodb.com/docs/manual/reference/operator/update/). It cannot be nil or empty.
-func (uom *UpdateOneModel) SetUpdate(update interface{}) *UpdateOneModel {
+func (uom *UpdateOneModel) SetUpdate(update any) *UpdateOneModel {
 	uom.Update = update
 	return uom
 }
 
 // SetArrayFilters specifies a set of filters to determine which elements should be modified when updating an array
 // field.
-func (uom *UpdateOneModel) SetArrayFilters(filters options.ArrayFilters) *UpdateOneModel {
-	uom.ArrayFilters = &filters
+func (uom *UpdateOneModel) SetArrayFilters(filters []any) *UpdateOneModel {
+	uom.ArrayFilters = filters
 	return uom
 }
 
@@ -238,16 +263,27 @@ func (uom *UpdateOneModel) SetUpsert(upsert bool) *UpdateOneModel {
 	return uom
 }
 
+// SetSort specifies which document the operation updates if the query matches multiple documents. The first document
+// matched by the sort order will be updated. This option is only valid for MongoDB versions >= 8.0. The sort parameter
+// is evaluated sequentially, so the driver will return an error if it is a multi-key map (which is unordeded). The
+// default value is nil.
+func (uom *UpdateOneModel) SetSort(sort any) *UpdateOneModel {
+	uom.Sort = sort
+	return uom
+}
+
 func (*UpdateOneModel) writeModel() {}
 
 // UpdateManyModel is used to update multiple documents in a BulkWrite operation.
+//
+// See corresponding setter methods for documentation.
 type UpdateManyModel struct {
 	Collation    *options.Collation
 	Upsert       *bool
-	Filter       interface{}
-	Update       interface{}
-	ArrayFilters *options.ArrayFilters
-	Hint         interface{}
+	Filter       any
+	Update       any
+	ArrayFilters []any
+	Hint         any
 }
 
 // NewUpdateManyModel creates a new UpdateManyModel.
@@ -255,35 +291,36 @@ func NewUpdateManyModel() *UpdateManyModel {
 	return &UpdateManyModel{}
 }
 
-// SetHint specifies the index to use for the operation. This should either be the index name as a string or the index
-// specification as a document. This option is only valid for MongoDB versions >= 4.2. Server versions >= 3.4 will
-// return an error if this option is specified. For server versions < 3.4, the driver will return a client-side error if
-// this option is specified. The driver will return an error if this option is specified during an unacknowledged write
-// operation. The driver will return an error if the hint parameter is a multi-key map. The default value is nil, which
-// means that no hint will be sent.
-func (umm *UpdateManyModel) SetHint(hint interface{}) *UpdateManyModel {
+// SetHint specifies the index to use for the operation. This should either be
+// the index name as a string or the index specification as a document. This
+// option is only valid for MongoDB versions >= 4.2. Server versions < 4.2 will
+// return an error if this option is specified. The driver will return an error
+// if this option is specified during an unacknowledged write operation. The
+// driver will return an error if the hint parameter is a multi-key map. The
+// default value is nil, which means that no hint will be sent.
+func (umm *UpdateManyModel) SetHint(hint any) *UpdateManyModel {
 	umm.Hint = hint
 	return umm
 }
 
 // SetFilter specifies a filter to use to select documents to update. The filter must be a document containing query
 // operators. It cannot be nil.
-func (umm *UpdateManyModel) SetFilter(filter interface{}) *UpdateManyModel {
+func (umm *UpdateManyModel) SetFilter(filter any) *UpdateManyModel {
 	umm.Filter = filter
 	return umm
 }
 
 // SetUpdate specifies the modifications to be made to the selected documents. The value must be a document containing
 // update operators (https://www.mongodb.com/docs/manual/reference/operator/update/). It cannot be nil or empty.
-func (umm *UpdateManyModel) SetUpdate(update interface{}) *UpdateManyModel {
+func (umm *UpdateManyModel) SetUpdate(update any) *UpdateManyModel {
 	umm.Update = update
 	return umm
 }
 
 // SetArrayFilters specifies a set of filters to determine which elements should be modified when updating an array
 // field.
-func (umm *UpdateManyModel) SetArrayFilters(filters options.ArrayFilters) *UpdateManyModel {
-	umm.ArrayFilters = &filters
+func (umm *UpdateManyModel) SetArrayFilters(filters []any) *UpdateManyModel {
+	umm.ArrayFilters = filters
 	return umm
 }
 

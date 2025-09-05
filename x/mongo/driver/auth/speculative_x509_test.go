@@ -9,14 +9,16 @@ package auth
 import (
 	"bytes"
 	"context"
+	"net/http"
 	"testing"
 
-	"github.com/pritunl/mongo-go-driver/bson"
-	"github.com/pritunl/mongo-go-driver/internal/assert"
-	"github.com/pritunl/mongo-go-driver/internal/handshake"
-	"github.com/pritunl/mongo-go-driver/mongo/address"
-	"github.com/pritunl/mongo-go-driver/x/bsonx/bsoncore"
-	"github.com/pritunl/mongo-go-driver/x/mongo/driver/drivertest"
+	"github.com/pritunl/mongo-go-driver/v2/bson"
+	"github.com/pritunl/mongo-go-driver/v2/internal/assert"
+	"github.com/pritunl/mongo-go-driver/v2/internal/handshake"
+	"github.com/pritunl/mongo-go-driver/v2/mongo/address"
+	"github.com/pritunl/mongo-go-driver/v2/x/bsonx/bsoncore"
+	"github.com/pritunl/mongo-go-driver/v2/x/mongo/driver/drivertest"
+	"github.com/pritunl/mongo-go-driver/v2/x/mongo/driver/mnet"
 )
 
 var (
@@ -32,7 +34,7 @@ func TestSpeculativeX509(t *testing.T) {
 		// Tests for X509 when the hello response contains a reply to the speculative authentication attempt. The
 		// driver should not send any more commands after the hello.
 
-		authenticator, err := CreateAuthenticator("MONGODB-X509", &Cred{})
+		authenticator, err := CreateAuthenticator("MONGODB-X509", &Cred{}, &http.Client{})
 		assert.Nil(t, err, "CreateAuthenticator error: %v", err)
 		handshaker := Handshaker(nil, &HandshakeOptions{
 			Authenticator: authenticator,
@@ -47,12 +49,14 @@ func TestSpeculativeX509(t *testing.T) {
 			ReadResp: responses,
 		}
 
-		info, err := handshaker.GetHandshakeInformation(context.Background(), address.Address("localhost:27017"), conn)
+		mnetconn := mnet.NewConnection(conn)
+
+		info, err := handshaker.GetHandshakeInformation(context.Background(), address.Address("localhost:27017"), mnetconn)
 		assert.Nil(t, err, "GetDescription error: %v", err)
 		assert.NotNil(t, info.SpeculativeAuthenticate, "desc.SpeculativeAuthenticate not set")
 		conn.Desc = info.Description
 
-		err = handshaker.FinishHandshake(context.Background(), conn)
+		err = handshaker.FinishHandshake(context.Background(), mnetconn)
 		assert.Nil(t, err, "FinishHandshake error: %v", err)
 		assert.Equal(t, 0, len(conn.ReadResp), "%d messages left unread", len(conn.ReadResp))
 
@@ -76,7 +80,7 @@ func TestSpeculativeX509(t *testing.T) {
 		// Tests for X509 when the hello response does not contain a reply to the speculative authentication attempt.
 		// The driver should send an authenticate command after the hello.
 
-		authenticator, err := CreateAuthenticator("MONGODB-X509", &Cred{})
+		authenticator, err := CreateAuthenticator("MONGODB-X509", &Cred{}, &http.Client{})
 		assert.Nil(t, err, "CreateAuthenticator error: %v", err)
 		handshaker := Handshaker(nil, &HandshakeOptions{
 			Authenticator: authenticator,
@@ -91,13 +95,15 @@ func TestSpeculativeX509(t *testing.T) {
 			ReadResp: responses,
 		}
 
-		info, err := handshaker.GetHandshakeInformation(context.Background(), address.Address("localhost:27017"), conn)
+		mnetconn := mnet.NewConnection(conn)
+
+		info, err := handshaker.GetHandshakeInformation(context.Background(), address.Address("localhost:27017"), mnetconn)
 		assert.Nil(t, err, "GetDescription error: %v", err)
 		assert.Nil(t, info.SpeculativeAuthenticate, "expected desc.SpeculativeAuthenticate to be unset, got %s",
 			bson.Raw(info.SpeculativeAuthenticate))
 		conn.Desc = info.Description
 
-		err = handshaker.FinishHandshake(context.Background(), conn)
+		err = handshaker.FinishHandshake(context.Background(), mnetconn)
 		assert.Nil(t, err, "FinishHandshake error: %v", err)
 		assert.Equal(t, 0, len(conn.ReadResp), "%d messages left unread", len(conn.ReadResp))
 

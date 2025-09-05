@@ -13,8 +13,11 @@ import (
 	"context"
 	"testing"
 
-	"github.com/pritunl/mongo-go-driver/mongo/address"
-	"github.com/pritunl/mongo-go-driver/mongo/description"
+	"github.com/pritunl/mongo-go-driver/v2/mongo/address"
+	"github.com/pritunl/mongo-go-driver/v2/x/mongo/driver"
+	"github.com/pritunl/mongo-go-driver/v2/x/mongo/driver/description"
+	"github.com/pritunl/mongo-go-driver/v2/x/mongo/driver/drivertest"
+	"github.com/pritunl/mongo-go-driver/v2/x/mongo/driver/mnet"
 )
 
 func TestGSSAPIAuthenticator(t *testing.T) {
@@ -36,7 +39,13 @@ func TestGSSAPIAuthenticator(t *testing.T) {
 			},
 			Addr: address.Address("foo:27017"),
 		}
-		err := authenticator.Auth(context.Background(), &Config{Description: desc})
+		chanconn := &drivertest.ChannelConn{
+			Desc: desc,
+		}
+
+		mnetconn := mnet.NewConnection(chanconn)
+
+		err := authenticator.Auth(context.Background(), &driver.AuthConfig{Connection: mnetconn})
 		if err == nil {
 			t.Fatalf("expected err, got nil")
 		}

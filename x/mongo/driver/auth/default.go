@@ -9,10 +9,13 @@ package auth
 import (
 	"context"
 	"fmt"
+	"net/http"
+
+	"github.com/pritunl/mongo-go-driver/v2/x/mongo/driver"
 )
 
-func newDefaultAuthenticator(cred *Cred) (Authenticator, error) {
-	scram, err := newScramSHA256Authenticator(cred)
+func newDefaultAuthenticator(cred *Cred, httpClient *http.Client) (Authenticator, error) {
+	scram, err := newScramSHA256Authenticator(cred, httpClient)
 	if err != nil {
 		return nil, newAuthError("failed to create internal authenticator", err)
 	}
@@ -25,17 +28,20 @@ func newDefaultAuthenticator(cred *Cred) (Authenticator, error) {
 	return &DefaultAuthenticator{
 		Cred:                     cred,
 		speculativeAuthenticator: speculative,
+		httpClient:               httpClient,
 	}, nil
 }
 
-// DefaultAuthenticator uses SCRAM-SHA-1 or MONGODB-CR depending
-// on the server version.
+// DefaultAuthenticator uses SCRAM-SHA-1 or SCRAM-SHA-256, depending on the
+// server's SASL supported mechanisms.
 type DefaultAuthenticator struct {
 	Cred *Cred
 
 	// The authenticator to use for speculative authentication. Because the correct auth mechanism is unknown when doing
 	// the initial hello, SCRAM-SHA-256 is used for the speculative attempt.
 	speculativeAuthenticator SpeculativeAuthenticator
+
+	httpClient *http.Client
 }
 
 var _ SpeculativeAuthenticator = (*DefaultAuthenticator)(nil)
@@ -46,19 +52,21 @@ func (a *DefaultAuthenticator) CreateSpeculativeConversation() (SpeculativeConve
 }
 
 // Auth authenticates the connection.
-func (a *DefaultAuthenticator) Auth(ctx context.Context, cfg *Config) error {
-	var actual Authenticator
-	var err error
+func (a *DefaultAuthenticator) Auth(ctx context.Context, cfg *driver.AuthConfig) error {
+	actual, err := func() (Authenticator, error) {
+		// If a server provides a list of supported mechanisms, we choose
+		// SCRAM-SHA-256 if it exists or else MUST use SCRAM-SHA-1.
+		// Otherwise, we decide based on what is supported.
+		if saslSupportedMechs := cfg.HandshakeInfo.SaslSupportedMechs; saslSupportedMechs != nil {
+			for _, v := range saslSupportedMechs {
+				if v == SCRAMSHA256 {
+					return newScramSHA256Authenticator(a.Cred, a.httpClient)
+				}
+			}
+		}
 
-	switch chooseAuthMechanism(cfg) {
-	case SCRAMSHA256:
-		actual, err = newScramSHA256Authenticator(a.Cred)
-	case SCRAMSHA1:
-		actual, err = newScramSHA1Authenticator(a.Cred)
-	default:
-		actual, err = newMongoDBCRAuthenticator(a.Cred)
-	}
-
+		return newScramSHA1Authenticator(a.Cred, a.httpClient)
+	}()
 	if err != nil {
 		return newAuthError("error creating authenticator", err)
 	}
@@ -66,17 +74,7 @@ func (a *DefaultAuthenticator) Auth(ctx context.Context, cfg *Config) error {
 	return actual.Auth(ctx, cfg)
 }
 
-// If a server provides a list of supported mechanisms, we choose
-// SCRAM-SHA-256 if it exists or else MUST use SCRAM-SHA-1.
-// Otherwise, we decide based on what is supported.
-func chooseAuthMechanism(cfg *Config) string {
-	if saslSupportedMechs := cfg.HandshakeInfo.SaslSupportedMechs; saslSupportedMechs != nil {
-		for _, v := range saslSupportedMechs {
-			if v == SCRAMSHA256 {
-				return v
-			}
-		}
-	}
-
-	return SCRAMSHA1
+// Reauth reauthenticates the connection.
+func (a *DefaultAuthenticator) Reauth(_ context.Context, _ *driver.AuthConfig) error {
+	return newAuthError("DefaultAuthenticator does not support reauthentication", nil)
 }

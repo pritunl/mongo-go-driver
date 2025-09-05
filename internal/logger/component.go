@@ -10,7 +10,7 @@ import (
 	"os"
 	"strconv"
 
-	"github.com/pritunl/mongo-go-driver/bson/primitive"
+	"github.com/pritunl/mongo-go-driver/v2/bson"
 )
 
 const (
@@ -75,10 +75,10 @@ const (
 )
 
 // KeyValues is a list of key-value pairs.
-type KeyValues []interface{}
+type KeyValues []any
 
 // Add adds a key-value pair to an instance of a KeyValues list.
-func (kvs *KeyValues) Add(key string, value interface{}) {
+func (kvs *KeyValues) Add(key string, value any) {
 	*kvs = append(*kvs, key, value)
 }
 
@@ -144,23 +144,22 @@ func EnvHasComponentVariables() bool {
 // Command is a struct defining common fields that must be included in all
 // commands.
 type Command struct {
-	// TODO(GODRIVER-2824): change the DriverConnectionID type to int64.
-	DriverConnectionID uint64              // Driver's ID for the connection
-	Name               string              // Command name
-	DatabaseName       string              // Database name
-	Message            string              // Message associated with the command
-	OperationID        int32               // Driver-generated operation ID
-	RequestID          int64               // Driver-generated request ID
-	ServerConnectionID *int64              // Server's ID for the connection used for the command
-	ServerHost         string              // Hostname or IP address for the server
-	ServerPort         string              // Port for the server
-	ServiceID          *primitive.ObjectID // ID for the command  in load balancer mode
+	DriverConnectionID int64          // Driver's ID for the connection
+	Name               string         // Command name
+	DatabaseName       string         // Database name
+	Message            string         // Message associated with the command
+	OperationID        int32          // Driver-generated operation ID
+	RequestID          int64          // Driver-generated request ID
+	ServerConnectionID *int64         // Server's ID for the connection used for the command
+	ServerHost         string         // Hostname or IP address for the server
+	ServerPort         string         // Port for the server
+	ServiceID          *bson.ObjectID // ID for the command  in load balancer mode
 }
 
 // SerializeCommand takes a command and a variable number of key-value pairs and
-// returns a slice of interface{} that can be passed to the logger for
+// returns a slice of any that can be passed to the logger for
 // structured logging.
-func SerializeCommand(cmd Command, extraKeysAndValues ...interface{}) KeyValues {
+func SerializeCommand(cmd Command, extraKeysAndValues ...any) KeyValues {
 	// Initialize the boilerplate keys and values.
 	keysAndValues := KeyValues{
 		KeyCommandName, cmd.Name,
@@ -204,7 +203,7 @@ type Connection struct {
 
 // SerializeConnection serializes a Connection message into a slice of keys and
 // values that can be passed to a logger.
-func SerializeConnection(conn Connection, extraKeysAndValues ...interface{}) KeyValues {
+func SerializeConnection(conn Connection, extraKeysAndValues ...any) KeyValues {
 	// Initialize the boilerplate keys and values.
 	keysAndValues := KeyValues{
 		KeyMessage, conn.Message,
@@ -226,17 +225,17 @@ func SerializeConnection(conn Connection, extraKeysAndValues ...interface{}) Key
 
 // Server contains data that all server messages MAY contain.
 type Server struct {
-	DriverConnectionID uint64             // Driver's ID for the connection
-	TopologyID         primitive.ObjectID // Driver's unique ID for this topology
-	Message            string             // Message associated with the topology
-	ServerConnectionID *int64             // Server's ID for the connection
-	ServerHost         string             // Hostname or IP address for the server
-	ServerPort         string             // Port for the server
+	DriverConnectionID int64         // Driver's ID for the connection
+	TopologyID         bson.ObjectID // Driver's unique ID for this topology
+	Message            string        // Message associated with the topology
+	ServerConnectionID *int64        // Server's ID for the connection
+	ServerHost         string        // Hostname or IP address for the server
+	ServerPort         string        // Port for the server
 }
 
 // SerializeServer serializes a Server message into a slice of keys and
 // values that can be passed to a logger.
-func SerializeServer(srv Server, extraKV ...interface{}) KeyValues {
+func SerializeServer(srv Server, extraKV ...any) KeyValues {
 	// Initialize the boilerplate keys and values.
 	keysAndValues := KeyValues{
 		KeyDriverConnectionID, srv.DriverConnectionID,
@@ -273,7 +272,7 @@ type ServerSelection struct {
 
 // SerializeServerSelection serializes a Topology message into a slice of keys
 // and values that can be passed to a logger.
-func SerializeServerSelection(srvSelection ServerSelection, extraKV ...interface{}) KeyValues {
+func SerializeServerSelection(srvSelection ServerSelection, extraKV ...any) KeyValues {
 	keysAndValues := KeyValues{
 		KeySelector, srvSelection.Selector,
 		KeyOperation, srvSelection.Operation,
@@ -294,13 +293,13 @@ func SerializeServerSelection(srvSelection ServerSelection, extraKV ...interface
 
 // Topology contains data that all topology messages MAY contain.
 type Topology struct {
-	ID      primitive.ObjectID // Driver's unique ID for this topology
-	Message string             // Message associated with the topology
+	ID      bson.ObjectID // Driver's unique ID for this topology
+	Message string        // Message associated with the topology
 }
 
 // SerializeTopology serializes a Topology message into a slice of keys and
 // values that can be passed to a logger.
-func SerializeTopology(topo Topology, extraKV ...interface{}) KeyValues {
+func SerializeTopology(topo Topology, extraKV ...any) KeyValues {
 	keysAndValues := KeyValues{
 		KeyTopologyID, topo.ID.Hex(),
 	}

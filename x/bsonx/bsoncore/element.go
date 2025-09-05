@@ -9,8 +9,9 @@ package bsoncore
 import (
 	"bytes"
 	"fmt"
+	"strings"
 
-	"github.com/pritunl/mongo-go-driver/bson/bsontype"
+	"github.com/pritunl/mongo-go-driver/v2/internal/bsoncoreutil"
 )
 
 // MalformedElementError represents a class of errors that RawElement methods return.
@@ -51,7 +52,7 @@ func (e Element) KeyErr() (string, error) {
 // KeyBytesErr returns the key for this element as a []byte, returning an error if the element is
 // not valid.
 func (e Element) KeyBytesErr() ([]byte, error) {
-	if len(e) <= 0 {
+	if len(e) == 0 {
 		return nil, ErrElementMissingType
 	}
 	idx := bytes.IndexByte(e[1:], 0x00)
@@ -70,7 +71,7 @@ func (e Element) Validate() error {
 	if idx == -1 {
 		return ErrElementMissingKey
 	}
-	return Value{Type: bsontype.Type(e[0]), Data: e[idx+2:]}.Validate()
+	return Value{Type: Type(e[0]), Data: e[idx+2:]}.Validate()
 }
 
 // CompareKey will compare this element's key to key. This method makes it easy to compare keys
@@ -99,7 +100,7 @@ func (e Element) Value() Value {
 
 // ValueErr returns the value for this element, returning an error if the element is not valid.
 func (e Element) ValueErr() (Value, error) {
-	if len(e) <= 0 {
+	if len(e) == 0 {
 		return Value{}, ErrElementMissingType
 	}
 	idx := bytes.IndexByte(e[1:], 0x00)
@@ -107,7 +108,7 @@ func (e Element) ValueErr() (Value, error) {
 		return Value{}, ErrElementMissingKey
 	}
 
-	val, rem, exists := ReadValue(e[idx+2:], bsontype.Type(e[0]))
+	val, rem, exists := ReadValue(e[idx+2:], Type(e[0]))
 	if !exists {
 		return Value{}, NewInsufficientBytesError(e, rem)
 	}
@@ -116,29 +117,89 @@ func (e Element) ValueErr() (Value, error) {
 
 // String implements the fmt.String interface. The output will be in extended JSON format.
 func (e Element) String() string {
-	if len(e) <= 0 {
-		return ""
+	str, _ := e.StringN(-1)
+	return str
+}
+
+// StringN will return values in extended JSON format that will stringify an element upto N bytes.
+// If N is non-negative, it will truncate the string to N bytes. Otherwise, it will return the full
+// string representation. The second return value indicates whether the string was truncated or not.
+// If the element is not valid, this returns an empty string
+func (e Element) StringN(n int) (string, bool) {
+	if len(e) == 0 {
+		return "", false
 	}
-	t := bsontype.Type(e[0])
+	if n == 0 {
+		return "", true
+	}
+	if n == 1 {
+		return `"`, true
+	}
+
+	t := Type(e[0])
 	idx := bytes.IndexByte(e[1:], 0x00)
-	if idx == -1 {
-		return ""
+	if idx <= 0 {
+		return "", false
 	}
-	key, valBytes := []byte(e[1:idx+1]), []byte(e[idx+2:])
-	val, _, valid := ReadValue(valBytes, t)
+	key := e[1 : idx+1]
+
+	var buf strings.Builder
+	buf.WriteByte('"')
+	const suffix = `": `
+	switch {
+	case n < 0 || idx <= n-buf.Len()-len(suffix):
+		buf.Write(key)
+		buf.WriteString(suffix)
+	case idx < n:
+		buf.Write(key)
+		buf.WriteString(suffix[:n-idx-1])
+		return buf.String(), true
+	default:
+		buf.WriteString(bsoncoreutil.Truncate(string(key), n-1))
+		return buf.String(), true
+	}
+
+	needStrLen := -1
+	// Set needStrLen if n is positive, meaning we want to limit the string length.
+	if n > 0 {
+		// Stop stringifying if we reach the limit, that also ensures needStrLen is
+		// greater than 0 if we need to limit the length.
+		if buf.Len() >= n {
+			return buf.String(), true
+		}
+		needStrLen = n - buf.Len()
+	}
+
+	val, _, valid := ReadValue(e[idx+2:], t)
 	if !valid {
-		return ""
+		return "", false
 	}
-	return "\"" + string(key) + "\": " + val.String()
+
+	var str string
+	var truncated bool
+	if _, ok := val.StringValueOK(); ok {
+		str, truncated = val.StringN(needStrLen)
+	} else if arr, ok := val.ArrayOK(); ok {
+		str, truncated = arr.StringN(needStrLen)
+	} else {
+		str = val.String()
+		if needStrLen > 0 && len(str) > needStrLen {
+			truncated = true
+			str = bsoncoreutil.Truncate(str, needStrLen)
+		}
+	}
+
+	buf.WriteString(str)
+	return buf.String(), truncated
 }
 
 // DebugString outputs a human readable version of RawElement. It will attempt to stringify the
 // valid components of the element even if the entire element is not valid.
 func (e Element) DebugString() string {
-	if len(e) <= 0 {
+	if len(e) == 0 {
 		return "<malformed>"
 	}
-	t := bsontype.Type(e[0])
+	t := Type(e[0])
 	idx := bytes.IndexByte(e[1:], 0x00)
 	if idx == -1 {
 		return fmt.Sprintf(`bson.Element{[%s]<malformed>}`, t)

@@ -12,38 +12,39 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/pritunl/mongo-go-driver/bson/bsontype"
-	"github.com/pritunl/mongo-go-driver/event"
-	"github.com/pritunl/mongo-go-driver/internal/driverutil"
-	"github.com/pritunl/mongo-go-driver/internal/logger"
-	"github.com/pritunl/mongo-go-driver/mongo/description"
-	"github.com/pritunl/mongo-go-driver/mongo/writeconcern"
-	"github.com/pritunl/mongo-go-driver/x/bsonx/bsoncore"
-	"github.com/pritunl/mongo-go-driver/x/mongo/driver"
-	"github.com/pritunl/mongo-go-driver/x/mongo/driver/session"
+	"github.com/pritunl/mongo-go-driver/v2/event"
+	"github.com/pritunl/mongo-go-driver/v2/internal/driverutil"
+	"github.com/pritunl/mongo-go-driver/v2/internal/logger"
+	"github.com/pritunl/mongo-go-driver/v2/mongo/writeconcern"
+	"github.com/pritunl/mongo-go-driver/v2/x/bsonx/bsoncore"
+	"github.com/pritunl/mongo-go-driver/v2/x/mongo/driver"
+	"github.com/pritunl/mongo-go-driver/v2/x/mongo/driver/description"
+	"github.com/pritunl/mongo-go-driver/v2/x/mongo/driver/session"
 )
 
 // Delete performs a delete operation
 type Delete struct {
-	comment      bsoncore.Value
-	deletes      []bsoncore.Document
-	ordered      *bool
-	session      *session.Client
-	clock        *session.ClusterClock
-	collection   string
-	monitor      *event.CommandMonitor
-	crypt        driver.Crypt
-	database     string
-	deployment   driver.Deployment
-	selector     description.ServerSelector
-	writeConcern *writeconcern.WriteConcern
-	retry        *driver.RetryMode
-	hint         *bool
-	result       DeleteResult
-	serverAPI    *driver.ServerAPIOptions
-	let          bsoncore.Document
-	timeout      *time.Duration
-	logger       *logger.Logger
+	authenticator driver.Authenticator
+	comment       bsoncore.Value
+	deletes       []bsoncore.Document
+	ordered       *bool
+	session       *session.Client
+	clock         *session.ClusterClock
+	collection    string
+	monitor       *event.CommandMonitor
+	crypt         driver.Crypt
+	database      string
+	deployment    driver.Deployment
+	selector      description.ServerSelector
+	writeConcern  *writeconcern.WriteConcern
+	retry         *driver.RetryMode
+	hint          *bool
+	result        DeleteResult
+	serverAPI     *driver.ServerAPIOptions
+	let           bsoncore.Document
+	timeout       *time.Duration
+	rawData       *bool
+	logger        *logger.Logger
 }
 
 // DeleteResult represents a delete result returned by the server.
@@ -59,8 +60,7 @@ func buildDeleteResult(response bsoncore.Document) (DeleteResult, error) {
 	}
 	dr := DeleteResult{}
 	for _, element := range elements {
-		switch element.Key() {
-		case "n":
+		if element.Key() == "n" {
 			var ok bool
 			dr.N, ok = element.Value().AsInt64OK()
 			if !ok {
@@ -81,8 +81,8 @@ func NewDelete(deletes ...bsoncore.Document) *Delete {
 // Result returns the result of executing this operation.
 func (d *Delete) Result() DeleteResult { return d.result }
 
-func (d *Delete) processResponse(info driver.ResponseInfo) error {
-	dr, err := buildDeleteResult(info.ServerResponse)
+func (d *Delete) processResponse(_ context.Context, resp bsoncore.Document, _ driver.ResponseInfo) error {
+	dr, err := buildDeleteResult(resp)
 	d.result.N += dr.N
 	return err
 }
@@ -116,20 +116,21 @@ func (d *Delete) Execute(ctx context.Context) error {
 		Timeout:           d.timeout,
 		Logger:            d.logger,
 		Name:              driverutil.DeleteOp,
+		Authenticator:     d.authenticator,
 	}.Execute(ctx)
 
 }
 
 func (d *Delete) command(dst []byte, desc description.SelectedServer) ([]byte, error) {
 	dst = bsoncore.AppendStringElement(dst, "delete", d.collection)
-	if d.comment.Type != bsontype.Type(0) {
+	if d.comment.Type != bsoncore.Type(0) {
 		dst = bsoncore.AppendValueElement(dst, "comment", d.comment)
 	}
 	if d.ordered != nil {
 		dst = bsoncore.AppendBooleanElement(dst, "ordered", *d.ordered)
 	}
 	if d.hint != nil && *d.hint {
-		if desc.WireVersion == nil || !desc.WireVersion.Includes(5) {
+		if desc.WireVersion == nil || !driverutil.VersionRangeIncludes(*desc.WireVersion, 5) {
 			return nil, errors.New("the 'hint' command parameter requires a minimum server wire version of 5")
 		}
 		if !d.writeConcern.Acknowledged() {
@@ -138,6 +139,10 @@ func (d *Delete) command(dst []byte, desc description.SelectedServer) ([]byte, e
 	}
 	if d.let != nil {
 		dst = bsoncore.AppendDocumentElement(dst, "let", d.let)
+	}
+	// Set rawData for 8.2+ servers.
+	if d.rawData != nil && desc.WireVersion != nil && driverutil.VersionRangeIncludes(*desc.WireVersion, 27) {
+		dst = bsoncore.AppendBooleanElement(dst, "rawData", *d.rawData)
 	}
 	return dst, nil
 }
@@ -277,8 +282,7 @@ func (d *Delete) Retry(retry driver.RetryMode) *Delete {
 }
 
 // Hint is a flag to indicate that the update document contains a hint. Hint is only supported by
-// servers >= 4.4. Older servers >= 3.4 will report an error for using the hint option. For servers <
-// 3.4, the driver will return an error if the hint option is used.
+// servers >= 4.4. Older servers will report an error for using the hint option.
 func (d *Delete) Hint(hint bool) *Delete {
 	if d == nil {
 		d = new(Delete)
@@ -326,5 +330,25 @@ func (d *Delete) Logger(logger *logger.Logger) *Delete {
 
 	d.logger = logger
 
+	return d
+}
+
+// Authenticator sets the authenticator to use for this operation.
+func (d *Delete) Authenticator(authenticator driver.Authenticator) *Delete {
+	if d == nil {
+		d = new(Delete)
+	}
+
+	d.authenticator = authenticator
+	return d
+}
+
+// RawData sets the rawData to access timeseries data in the compressed format.
+func (d *Delete) RawData(rawData bool) *Delete {
+	if d == nil {
+		d = new(Delete)
+	}
+
+	d.rawData = &rawData
 	return d
 }

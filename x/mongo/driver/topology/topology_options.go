@@ -7,24 +7,26 @@
 package topology
 
 import (
+	"context"
 	"crypto/tls"
 	"fmt"
 	"net/http"
-	"strings"
 	"time"
 
-	"github.com/pritunl/mongo-go-driver/event"
-	"github.com/pritunl/mongo-go-driver/internal/logger"
-	"github.com/pritunl/mongo-go-driver/mongo/description"
-	"github.com/pritunl/mongo-go-driver/mongo/options"
-	"github.com/pritunl/mongo-go-driver/x/mongo/driver"
-	"github.com/pritunl/mongo-go-driver/x/mongo/driver/auth"
-	"github.com/pritunl/mongo-go-driver/x/mongo/driver/ocsp"
-	"github.com/pritunl/mongo-go-driver/x/mongo/driver/operation"
-	"github.com/pritunl/mongo-go-driver/x/mongo/driver/session"
+	"github.com/pritunl/mongo-go-driver/v2/event"
+	"github.com/pritunl/mongo-go-driver/v2/internal/logger"
+	"github.com/pritunl/mongo-go-driver/v2/internal/optionsutil"
+	"github.com/pritunl/mongo-go-driver/v2/mongo/options"
+	"github.com/pritunl/mongo-go-driver/v2/x/mongo/driver"
+	"github.com/pritunl/mongo-go-driver/v2/x/mongo/driver/auth"
+	"github.com/pritunl/mongo-go-driver/v2/x/mongo/driver/description"
+	"github.com/pritunl/mongo-go-driver/v2/x/mongo/driver/ocsp"
+	"github.com/pritunl/mongo-go-driver/v2/x/mongo/driver/operation"
+	"github.com/pritunl/mongo-go-driver/v2/x/mongo/driver/session"
 )
 
 const defaultServerSelectionTimeout = 30 * time.Second
+const defaultConnectionTimeout = 30 * time.Second
 
 // Config is used to construct a topology.
 type Config struct {
@@ -33,6 +35,8 @@ type Config struct {
 	SeedList               []string
 	ServerOpts             []ServerOption
 	URI                    string
+	ConnectTimeout         time.Duration
+	Timeout                *time.Duration
 	ServerSelectionTimeout time.Duration
 	ServerMonitor          *event.ServerMonitor
 	SRVMaxHosts            int
@@ -41,14 +45,15 @@ type Config struct {
 	logger                 *logger.Logger
 }
 
-// ConvertToDriverAPIOptions converts a options.ServerAPIOptions instance to a driver.ServerAPIOptions.
-func ConvertToDriverAPIOptions(s *options.ServerAPIOptions) *driver.ServerAPIOptions {
-	driverOpts := driver.NewServerAPIOptions(string(s.ServerAPIVersion))
-	if s.Strict != nil {
-		driverOpts.SetStrict(*s.Strict)
+// ConvertToDriverAPIOptions converts a given ServerAPIOptions object from the
+// options package to a ServerAPIOptions object from the driver package.
+func ConvertToDriverAPIOptions(opts *options.ServerAPIOptions) *driver.ServerAPIOptions {
+	driverOpts := driver.NewServerAPIOptions(string(opts.ServerAPIVersion))
+	if opts.Strict != nil {
+		driverOpts.SetStrict(*opts.Strict)
 	}
-	if s.DeprecationErrors != nil {
-		driverOpts.SetDeprecationErrors(*s.DeprecationErrors)
+	if opts.DeprecationErrors != nil {
+		driverOpts.SetDeprecationErrors(*opts.DeprecationErrors)
 	}
 	return driverOpts
 }
@@ -71,22 +76,95 @@ func newLogger(opts *options.LoggerOptions) (*logger.Logger, error) {
 	return log, nil
 }
 
-// NewConfig will translate data from client options into a topology config for building non-default deployments.
-// Server and topology options are not honored if a custom deployment is used.
-func NewConfig(co *options.ClientOptions, clock *session.ClusterClock) (*Config, error) {
+// convertOIDCArgs converts the internal *driver.OIDCArgs into the equivalent
+// public type *options.OIDCArgs.
+func convertOIDCArgs(args *driver.OIDCArgs) *options.OIDCArgs {
+	if args == nil {
+		return nil
+	}
+	return &options.OIDCArgs{
+		Version:      args.Version,
+		IDPInfo:      (*options.IDPInfo)(args.IDPInfo),
+		RefreshToken: args.RefreshToken,
+	}
+}
+
+// ConvertCreds takes an [options.Credential] and returns the equivalent
+// [driver.Cred].
+func ConvertCreds(cred *options.Credential) *driver.Cred {
+	if cred == nil {
+		return nil
+	}
+
+	var oidcMachineCallback auth.OIDCCallback
+	if cred.OIDCMachineCallback != nil {
+		oidcMachineCallback = func(ctx context.Context, args *driver.OIDCArgs) (*driver.OIDCCredential, error) {
+			cred, err := cred.OIDCMachineCallback(ctx, convertOIDCArgs(args))
+			return (*driver.OIDCCredential)(cred), err
+		}
+	}
+
+	var oidcHumanCallback auth.OIDCCallback
+	if cred.OIDCHumanCallback != nil {
+		oidcHumanCallback = func(ctx context.Context, args *driver.OIDCArgs) (*driver.OIDCCredential, error) {
+			cred, err := cred.OIDCHumanCallback(ctx, convertOIDCArgs(args))
+			return (*driver.OIDCCredential)(cred), err
+		}
+	}
+
+	return &auth.Cred{
+		Source:              cred.AuthSource,
+		Username:            cred.Username,
+		Password:            cred.Password,
+		PasswordSet:         cred.PasswordSet,
+		Props:               cred.AuthMechanismProperties,
+		OIDCMachineCallback: oidcMachineCallback,
+		OIDCHumanCallback:   oidcHumanCallback,
+	}
+}
+
+// NewConfig will translate data from client options into a topology config for
+// building non-default deployments. Server and topology options are not honored
+// if a custom deployment is used.
+func NewConfig(opts *options.ClientOptions, clock *session.ClusterClock) (*Config, error) {
+	var authenticator driver.Authenticator
+	var err error
+	if opts.Auth != nil {
+		authenticator, err = auth.CreateAuthenticator(
+			opts.Auth.AuthMechanism,
+			ConvertCreds(opts.Auth),
+			opts.HTTPClient,
+		)
+		if err != nil {
+			return nil, fmt.Errorf("error creating authenticator: %w", err)
+		}
+	}
+	return NewConfigFromOptionsWithAuthenticator(opts, clock, authenticator)
+}
+
+// NewConfigFromOptionsWithAuthenticator will translate data from client options into a
+// topology config for building non-default deployments. Server and topology
+// options are not honored if a custom deployment is used. It uses a passed in
+// authenticator to authenticate the connection.
+func NewConfigFromOptionsWithAuthenticator(opts *options.ClientOptions, clock *session.ClusterClock, authenticator driver.Authenticator) (*Config, error) {
 	var serverAPI *driver.ServerAPIOptions
 
-	if err := co.Validate(); err != nil {
+	if err := opts.Validate(); err != nil {
 		return nil, err
 	}
 
 	var connOpts []ConnectionOption
 	var serverOpts []ServerOption
 
-	cfgp := &Config{}
+	cfgp := &Config{
+		Timeout: opts.Timeout,
+	}
 
 	// Set the default "ServerSelectionTimeout" to 30 seconds.
 	cfgp.ServerSelectionTimeout = defaultServerSelectionTimeout
+
+	// Set the default "ConnectionTimeout" to 30 seconds.
+	cfgp.ConnectTimeout = defaultConnectionTimeout
 
 	// Set the default "SeedList" to localhost.
 	cfgp.SeedList = []string{"localhost:27017"}
@@ -95,36 +173,56 @@ func NewConfig(co *options.ClientOptions, clock *session.ClusterClock) (*Config,
 
 	// ServerAPIOptions need to be handled early as other client and server options below reference
 	// c.serverAPI and serverOpts.serverAPI.
-	if co.ServerAPIOptions != nil {
-		serverAPI = ConvertToDriverAPIOptions(co.ServerAPIOptions)
+	if opts.ServerAPIOptions != nil {
+		serverAPI = ConvertToDriverAPIOptions(opts.ServerAPIOptions)
 		serverOpts = append(serverOpts, WithServerAPI(func(*driver.ServerAPIOptions) *driver.ServerAPIOptions {
 			return serverAPI
 		}))
 	}
 
-	cfgp.URI = co.GetURI()
+	cfgp.URI = opts.GetURI()
 
-	if co.SRVServiceName != nil {
-		cfgp.SRVServiceName = *co.SRVServiceName
+	if opts.SRVServiceName != nil {
+		cfgp.SRVServiceName = *opts.SRVServiceName
 	}
 
-	if co.SRVMaxHosts != nil {
-		cfgp.SRVMaxHosts = *co.SRVMaxHosts
+	if opts.SRVMaxHosts != nil {
+		cfgp.SRVMaxHosts = *opts.SRVMaxHosts
 	}
 
 	// AppName
 	var appName string
-	if co.AppName != nil {
-		appName = *co.AppName
+	if opts.AppName != nil {
+		appName = *opts.AppName
 
 		serverOpts = append(serverOpts, WithServerAppName(func(string) string {
 			return appName
 		}))
 	}
+
+	var outerLibraryName, outerLibraryVersion, outerLibraryPlatform string
+	if opts.DriverInfo != nil {
+		outerLibraryName = opts.DriverInfo.Name
+		outerLibraryVersion = opts.DriverInfo.Version
+		outerLibraryPlatform = opts.DriverInfo.Platform
+
+		serverOpts = append(serverOpts, WithOuterLibraryName(func(string) string {
+			return outerLibraryName
+		}))
+
+		serverOpts = append(serverOpts, WithOuterLibraryVersion(func(string) string {
+			return outerLibraryVersion
+		}))
+
+		serverOpts = append(serverOpts, WithOuterLibraryPlatform(func(string) string {
+			return outerLibraryPlatform
+		}))
+	}
+
 	// Compressors & ZlibLevel
 	var comps []string
-	if len(co.Compressors) > 0 {
-		comps = co.Compressors
+	if len(opts.Compressors) > 0 {
+		comps = opts.Compressors
 
 		connOpts = append(connOpts, WithCompressors(
 			func(compressors []string) []string {
@@ -135,12 +233,12 @@ func NewConfig(co *options.ClientOptions, clock *session.ClusterClock) (*Config,
 		for _, comp := range comps {
 			switch comp {
 			case "zlib":
-				connOpts = append(connOpts, WithZlibLevel(func(level *int) *int {
-					return co.ZlibLevel
+				connOpts = append(connOpts, WithZlibLevel(func(*int) *int {
+					return opts.ZlibLevel
 				}))
 			case "zstd":
-				connOpts = append(connOpts, WithZstdLevel(func(level *int) *int {
-					return co.ZstdLevel
+				connOpts = append(connOpts, WithZstdLevel(func(*int) *int {
+					return opts.ZstdLevel
 				}))
 			}
 		}
@@ -151,176 +249,155 @@ func NewConfig(co *options.ClientOptions, clock *session.ClusterClock) (*Config,
 	}
 
 	var loadBalanced bool
-	if co.LoadBalanced != nil {
-		loadBalanced = *co.LoadBalanced
+	if opts.LoadBalanced != nil {
+		loadBalanced = *opts.LoadBalanced
 	}
 
 	// Handshaker
-	var handshaker = func(driver.Handshaker) driver.Handshaker {
-		return operation.NewHello().AppName(appName).Compressors(comps).ClusterClock(clock).
-			ServerAPI(serverAPI).LoadBalanced(loadBalanced)
-	}
-	// Auth & Database & Password & Username
-	if co.Auth != nil {
-		cred := &auth.Cred{
-			Username:    co.Auth.Username,
-			Password:    co.Auth.Password,
-			PasswordSet: co.Auth.PasswordSet,
-			Props:       co.Auth.AuthMechanismProperties,
-			Source:      co.Auth.AuthSource,
-		}
-		mechanism := co.Auth.AuthMechanism
-
-		if len(cred.Source) == 0 {
-			switch strings.ToUpper(mechanism) {
-			case auth.MongoDBX509, auth.GSSAPI, auth.PLAIN:
-				cred.Source = "$external"
-			default:
-				cred.Source = "admin"
-			}
-		}
-
-		authenticator, err := auth.CreateAuthenticator(mechanism, cred)
-		if err != nil {
-			return nil, err
-		}
-
+	var handshaker func(driver.Handshaker) driver.Handshaker
+	if authenticator != nil {
 		handshakeOpts := &auth.HandshakeOptions{
-			AppName:       appName,
-			Authenticator: authenticator,
-			Compressors:   comps,
-			ServerAPI:     serverAPI,
-			LoadBalanced:  loadBalanced,
-			ClusterClock:  clock,
-			HTTPClient:    co.HTTPClient,
+			AppName:              appName,
+			Authenticator:        authenticator,
+			Compressors:          comps,
+			ServerAPI:            serverAPI,
+			LoadBalanced:         loadBalanced,
+			ClusterClock:         clock,
+			OuterLibraryName:     outerLibraryName,
+			OuterLibraryVersion:  outerLibraryVersion,
+			OuterLibraryPlatform: outerLibraryPlatform,
 		}
 
-		if mechanism == "" {
+		if opts.Auth.AuthMechanism == "" {
 			// Required for SASL mechanism negotiation during handshake
-			handshakeOpts.DBUser = cred.Source + "." + cred.Username
+			handshakeOpts.DBUser = opts.Auth.AuthSource + "." + opts.Auth.Username
 		}
-		if co.AuthenticateToAnything != nil && *co.AuthenticateToAnything {
-			// Authenticate arbiters
-			handshakeOpts.PerformAuthentication = func(serv description.Server) bool {
-				return true
+		if a := optionsutil.Value(opts.Custom, "authenticateToAnything"); a != nil {
+			if v, ok := a.(bool); ok && v {
+				// Authenticate arbiters
+				handshakeOpts.PerformAuthentication = func(_ description.Server) bool {
+					return true
+				}
 			}
 		}
 
 		handshaker = func(driver.Handshaker) driver.Handshaker {
 			return auth.Handshaker(nil, handshakeOpts)
 		}
+
+	} else {
+		handshaker = func(driver.Handshaker) driver.Handshaker {
+			return operation.NewHello().
+				AppName(appName).
+				Compressors(comps).
+				ClusterClock(clock).
+				ServerAPI(serverAPI).
+				LoadBalanced(loadBalanced).
+				OuterLibraryName(outerLibraryName).
+				OuterLibraryVersion(outerLibraryVersion).
+				OuterLibraryPlatform(outerLibraryPlatform)
+		}
 	}
+
 	connOpts = append(connOpts, WithHandshaker(handshaker))
-	// ConnectTimeout
-	if co.ConnectTimeout != nil {
-		serverOpts = append(serverOpts, WithHeartbeatTimeout(
-			func(time.Duration) time.Duration { return *co.ConnectTimeout },
-		))
-		connOpts = append(connOpts, WithConnectTimeout(
-			func(time.Duration) time.Duration { return *co.ConnectTimeout },
-		))
-	}
+
 	// Dialer
-	if co.Dialer != nil {
+	if opts.Dialer != nil {
 		connOpts = append(connOpts, WithDialer(
-			func(Dialer) Dialer { return co.Dialer },
+			func(Dialer) Dialer { return opts.Dialer },
 		))
 	}
 	// Direct
-	if co.Direct != nil && *co.Direct {
+	if opts.Direct != nil && *opts.Direct {
 		cfgp.Mode = SingleMode
 	}
 
 	// HeartbeatInterval
-	if co.HeartbeatInterval != nil {
+	if opts.HeartbeatInterval != nil {
 		serverOpts = append(serverOpts, WithHeartbeatInterval(
-			func(time.Duration) time.Duration { return *co.HeartbeatInterval },
+			func(time.Duration) time.Duration { return *opts.HeartbeatInterval },
 		))
 	}
 	// Hosts
 	cfgp.SeedList = []string{"localhost:27017"} // default host
-	if len(co.Hosts) > 0 {
-		cfgp.SeedList = co.Hosts
+	if len(opts.Hosts) > 0 {
+		cfgp.SeedList = opts.Hosts
 	}
 
 	// MaxConIdleTime
-	if co.MaxConnIdleTime != nil {
+	if opts.MaxConnIdleTime != nil {
 		serverOpts = append(serverOpts, WithConnectionPoolMaxIdleTime(
-			func(time.Duration) time.Duration { return *co.MaxConnIdleTime },
+			func(time.Duration) time.Duration { return *opts.MaxConnIdleTime },
 		))
 	}
 	// MaxPoolSize
-	if co.MaxPoolSize != nil {
+	if opts.MaxPoolSize != nil {
 		serverOpts = append(
 			serverOpts,
-			WithMaxConnections(func(uint64) uint64 { return *co.MaxPoolSize }),
+			WithMaxConnections(func(uint64) uint64 { return *opts.MaxPoolSize }),
 		)
 	}
 	// MinPoolSize
-	if co.MinPoolSize != nil {
+	if opts.MinPoolSize != nil {
 		serverOpts = append(
 			serverOpts,
-			WithMinConnections(func(uint64) uint64 { return *co.MinPoolSize }),
+			WithMinConnections(func(uint64) uint64 { return *opts.MinPoolSize }),
 		)
 	}
 	// MaxConnecting
-	if co.MaxConnecting != nil {
+	if opts.MaxConnecting != nil {
 		serverOpts = append(
 			serverOpts,
-			WithMaxConnecting(func(uint64) uint64 { return *co.MaxConnecting }),
+			WithMaxConnecting(func(uint64) uint64 { return *opts.MaxConnecting }),
 		)
 	}
 	// PoolMonitor
-	if co.PoolMonitor != nil {
+	if opts.PoolMonitor != nil {
 		serverOpts = append(
 			serverOpts,
-			WithConnectionPoolMonitor(func(*event.PoolMonitor) *event.PoolMonitor { return co.PoolMonitor }),
+			WithConnectionPoolMonitor(func(*event.PoolMonitor) *event.PoolMonitor { return opts.PoolMonitor }),
 		)
 	}
 	// Monitor
-	if co.Monitor != nil {
+	if opts.Monitor != nil {
 		connOpts = append(connOpts, WithMonitor(
-			func(*event.CommandMonitor) *event.CommandMonitor { return co.Monitor },
+			func(*event.CommandMonitor) *event.CommandMonitor { return opts.Monitor },
 		))
 	}
 	// ServerMonitor
-	if co.ServerMonitor != nil {
+	if opts.ServerMonitor != nil {
 		serverOpts = append(
 			serverOpts,
-			WithServerMonitor(func(*event.ServerMonitor) *event.ServerMonitor { return co.ServerMonitor }),
+			WithServerMonitor(func(*event.ServerMonitor) *event.ServerMonitor { return opts.ServerMonitor }),
 		)
-		cfgp.ServerMonitor = co.ServerMonitor
+		cfgp.ServerMonitor = opts.ServerMonitor
 	}
 	// ReplicaSet
-	if co.ReplicaSet != nil {
-		cfgp.ReplicaSetName = *co.ReplicaSet
+	if opts.ReplicaSet != nil {
+		cfgp.ReplicaSetName = *opts.ReplicaSet
 	}
 	// ServerSelectionTimeout
-	if co.ServerSelectionTimeout != nil {
-		cfgp.ServerSelectionTimeout = *co.ServerSelectionTimeout
+	if opts.ServerSelectionTimeout != nil {
+		cfgp.ServerSelectionTimeout = *opts.ServerSelectionTimeout
 	}
-	// SocketTimeout
-	if co.SocketTimeout != nil {
-		connOpts = append(
-			connOpts,
-			WithReadTimeout(func(time.Duration) time.Duration { return *co.SocketTimeout }),
-			WithWriteTimeout(func(time.Duration) time.Duration { return *co.SocketTimeout }),
-		)
+	// ConnectionTimeout
+	if opts.ConnectTimeout != nil {
+		cfgp.ConnectTimeout = *opts.ConnectTimeout
 	}
 	// TLSConfig
-	if co.TLSConfig != nil {
+	if opts.TLSConfig != nil {
 		connOpts = append(connOpts, WithTLSConfig(
 			func(*tls.Config) *tls.Config {
-				return co.TLSConfig
+				return opts.TLSConfig
 			},
 		))
 	}
 
 	// HTTP Client
-	if co.HTTPClient != nil {
+	if opts.HTTPClient != nil {
 		connOpts = append(connOpts, WithHTTPClient(
 			func(*http.Client) *http.Client {
-				return co.HTTPClient
+				return opts.HTTPClient
 			},
 		))
 	}
@@ -333,28 +410,28 @@ func NewConfig(co *options.ClientOptions, clock *session.ClusterClock) (*Config,
 	)
 
 	// Disable communication with external OCSP responders.
-	if co.DisableOCSPEndpointCheck != nil {
+	if opts.DisableOCSPEndpointCheck != nil {
 		connOpts = append(
 			connOpts,
-			WithDisableOCSPEndpointCheck(func(bool) bool { return *co.DisableOCSPEndpointCheck }),
+			WithDisableOCSPEndpointCheck(func(bool) bool { return *opts.DisableOCSPEndpointCheck }),
 		)
 	}
 
 	// LoadBalanced
-	if co.LoadBalanced != nil {
-		cfgp.LoadBalanced = *co.LoadBalanced
+	if opts.LoadBalanced != nil {
+		cfgp.LoadBalanced = *opts.LoadBalanced
 
 		serverOpts = append(
 			serverOpts,
-			WithServerLoadBalanced(func(bool) bool { return *co.LoadBalanced }),
+			WithServerLoadBalanced(func(bool) bool { return *opts.LoadBalanced }),
 		)
 		connOpts = append(
 			connOpts,
-			WithConnectionLoadBalanced(func(bool) bool { return *co.LoadBalanced }),
+			WithConnectionLoadBalanced(func(bool) bool { return *opts.LoadBalanced }),
 		)
 	}
 
-	lgr, err := newLogger(co.LoggerOptions)
+	lgr, err := newLogger(opts.LoggerOptions)
 	if err != nil {
 		return nil, err
 	}
@@ -362,7 +439,7 @@ func NewConfig(co *options.ClientOptions, clock *session.ClusterClock) (*Config,
 	serverOpts = append(
 		serverOpts,
 		withLogger(func() *logger.Logger { return lgr }),
-		withServerMonitoringMode(co.ServerMonitoringMode),
+		withServerMonitoringMode(opts.ServerMonitoringMode),
 	)
 
 	cfgp.logger = lgr

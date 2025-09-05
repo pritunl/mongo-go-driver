@@ -9,14 +9,16 @@ package auth
 import (
 	"bytes"
 	"context"
+	"net/http"
 	"testing"
 
-	"github.com/pritunl/mongo-go-driver/bson"
-	"github.com/pritunl/mongo-go-driver/internal/assert"
-	"github.com/pritunl/mongo-go-driver/internal/handshake"
-	"github.com/pritunl/mongo-go-driver/mongo/address"
-	"github.com/pritunl/mongo-go-driver/x/bsonx/bsoncore"
-	"github.com/pritunl/mongo-go-driver/x/mongo/driver/drivertest"
+	"github.com/pritunl/mongo-go-driver/v2/bson"
+	"github.com/pritunl/mongo-go-driver/v2/internal/assert"
+	"github.com/pritunl/mongo-go-driver/v2/internal/handshake"
+	"github.com/pritunl/mongo-go-driver/v2/mongo/address"
+	"github.com/pritunl/mongo-go-driver/v2/x/bsonx/bsoncore"
+	"github.com/pritunl/mongo-go-driver/v2/x/mongo/driver/drivertest"
+	"github.com/pritunl/mongo-go-driver/v2/x/mongo/driver/mnet"
 )
 
 var (
@@ -63,7 +65,7 @@ func TestSpeculativeSCRAM(t *testing.T) {
 			t.Run(tc.name, func(t *testing.T) {
 				// Create a SCRAM authenticator and overwrite the nonce generator to make the conversation
 				// deterministic.
-				authenticator, err := CreateAuthenticator(tc.mechanism, cred)
+				authenticator, err := CreateAuthenticator(tc.mechanism, cred, &http.Client{})
 				assert.Nil(t, err, "CreateAuthenticator error: %v", err)
 				setNonce(t, authenticator, tc.nonce)
 
@@ -80,13 +82,15 @@ func TestSpeculativeSCRAM(t *testing.T) {
 					ReadResp: responses,
 				}
 
+				mnetconn := mnet.NewConnection(conn)
+
 				// Do both parts of the handshake.
-				info, err := handshaker.GetHandshakeInformation(context.Background(), address.Address("localhost:27017"), conn)
+				info, err := handshaker.GetHandshakeInformation(context.Background(), address.Address("localhost:27017"), mnetconn)
 				assert.Nil(t, err, "GetHandshakeInformation error: %v", err)
 				assert.NotNil(t, info.SpeculativeAuthenticate, "desc.SpeculativeAuthenticate not set")
 				conn.Desc = info.Description // Set conn.Desc so the new description will be used for the authentication.
 
-				err = handshaker.FinishHandshake(context.Background(), conn)
+				err = handshaker.FinishHandshake(context.Background(), mnetconn)
 				assert.Nil(t, err, "FinishHandshake error: %v", err)
 				assert.Equal(t, 0, len(conn.ReadResp), "%d messages left unread", len(conn.ReadResp))
 
@@ -148,7 +152,7 @@ func TestSpeculativeSCRAM(t *testing.T) {
 
 		for _, tc := range testCases {
 			t.Run(tc.mechanism, func(t *testing.T) {
-				authenticator, err := CreateAuthenticator(tc.mechanism, cred)
+				authenticator, err := CreateAuthenticator(tc.mechanism, cred, &http.Client{})
 				assert.Nil(t, err, "CreateAuthenticator error: %v", err)
 				setNonce(t, authenticator, tc.nonce)
 
@@ -165,13 +169,15 @@ func TestSpeculativeSCRAM(t *testing.T) {
 					ReadResp: responses,
 				}
 
-				info, err := handshaker.GetHandshakeInformation(context.Background(), address.Address("localhost:27017"), conn)
+				mnetconn := mnet.NewConnection(conn)
+
+				info, err := handshaker.GetHandshakeInformation(context.Background(), address.Address("localhost:27017"), mnetconn)
 				assert.Nil(t, err, "GetHandshakeInformation error: %v", err)
 				assert.Nil(t, info.SpeculativeAuthenticate, "expected desc.SpeculativeAuthenticate to be unset, got %s",
 					bson.Raw(info.SpeculativeAuthenticate))
 				conn.Desc = info.Description
 
-				err = handshaker.FinishHandshake(context.Background(), conn)
+				err = handshaker.FinishHandshake(context.Background(), mnetconn)
 				assert.Nil(t, err, "FinishHandshake error: %v", err)
 				assert.Equal(t, 0, len(conn.ReadResp), "%d messages left unread", len(conn.ReadResp))
 

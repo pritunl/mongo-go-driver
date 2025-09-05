@@ -12,27 +12,28 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/pritunl/mongo-go-driver/event"
-	"github.com/pritunl/mongo-go-driver/mongo/description"
-	"github.com/pritunl/mongo-go-driver/x/bsonx/bsoncore"
-	"github.com/pritunl/mongo-go-driver/x/mongo/driver"
-	"github.com/pritunl/mongo-go-driver/x/mongo/driver/session"
+	"github.com/pritunl/mongo-go-driver/v2/event"
+	"github.com/pritunl/mongo-go-driver/v2/x/bsonx/bsoncore"
+	"github.com/pritunl/mongo-go-driver/v2/x/mongo/driver"
+	"github.com/pritunl/mongo-go-driver/v2/x/mongo/driver/description"
+	"github.com/pritunl/mongo-go-driver/v2/x/mongo/driver/session"
 )
 
 // DropSearchIndex performs an dropSearchIndex operation.
 type DropSearchIndex struct {
-	index      string
-	session    *session.Client
-	clock      *session.ClusterClock
-	collection string
-	monitor    *event.CommandMonitor
-	crypt      driver.Crypt
-	database   string
-	deployment driver.Deployment
-	selector   description.ServerSelector
-	result     DropSearchIndexResult
-	serverAPI  *driver.ServerAPIOptions
-	timeout    *time.Duration
+	authenticator driver.Authenticator
+	index         string
+	session       *session.Client
+	clock         *session.ClusterClock
+	collection    string
+	monitor       *event.CommandMonitor
+	crypt         driver.Crypt
+	database      string
+	deployment    driver.Deployment
+	selector      description.ServerSelector
+	result        DropSearchIndexResult
+	serverAPI     *driver.ServerAPIOptions
+	timeout       *time.Duration
 }
 
 // DropSearchIndexResult represents a dropSearchIndex result returned by the server.
@@ -47,8 +48,7 @@ func buildDropSearchIndexResult(response bsoncore.Document) (DropSearchIndexResu
 	}
 	dsir := DropSearchIndexResult{}
 	for _, element := range elements {
-		switch element.Key() {
-		case "ok":
+		if element.Key() == "ok" {
 			var ok bool
 			dsir.Ok, ok = element.Value().AsInt32OK()
 			if !ok {
@@ -69,9 +69,9 @@ func NewDropSearchIndex(index string) *DropSearchIndex {
 // Result returns the result of executing this operation.
 func (dsi *DropSearchIndex) Result() DropSearchIndexResult { return dsi.result }
 
-func (dsi *DropSearchIndex) processResponse(info driver.ResponseInfo) error {
+func (dsi *DropSearchIndex) processResponse(_ context.Context, resp bsoncore.Document, _ driver.ResponseInfo) error {
 	var err error
-	dsi.result, err = buildDropSearchIndexResult(info.ServerResponse)
+	dsi.result, err = buildDropSearchIndexResult(resp)
 	return err
 }
 
@@ -93,6 +93,7 @@ func (dsi *DropSearchIndex) Execute(ctx context.Context) error {
 		Selector:          dsi.selector,
 		ServerAPI:         dsi.serverAPI,
 		Timeout:           dsi.timeout,
+		Authenticator:     dsi.authenticator,
 	}.Execute(ctx)
 
 }
@@ -210,5 +211,15 @@ func (dsi *DropSearchIndex) Timeout(timeout *time.Duration) *DropSearchIndex {
 	}
 
 	dsi.timeout = timeout
+	return dsi
+}
+
+// Authenticator sets the authenticator to use for this operation.
+func (dsi *DropSearchIndex) Authenticator(authenticator driver.Authenticator) *DropSearchIndex {
+	if dsi == nil {
+		dsi = new(DropSearchIndex)
+	}
+
+	dsi.authenticator = authenticator
 	return dsi
 }

@@ -8,21 +8,23 @@ package auth_test
 
 import (
 	"context"
+	"encoding/base64"
 	"strings"
 	"testing"
 
-	"encoding/base64"
-
-	"github.com/pritunl/mongo-go-driver/internal/require"
-	"github.com/pritunl/mongo-go-driver/mongo/description"
-	"github.com/pritunl/mongo-go-driver/x/bsonx/bsoncore"
-	"github.com/pritunl/mongo-go-driver/x/mongo/driver/drivertest"
+	"github.com/pritunl/mongo-go-driver/v2/internal/require"
+	"github.com/pritunl/mongo-go-driver/v2/x/bsonx/bsoncore"
+	"github.com/pritunl/mongo-go-driver/v2/x/mongo/driver"
+	"github.com/pritunl/mongo-go-driver/v2/x/mongo/driver/auth"
+	"github.com/pritunl/mongo-go-driver/v2/x/mongo/driver/description"
+	"github.com/pritunl/mongo-go-driver/v2/x/mongo/driver/drivertest"
+	"github.com/pritunl/mongo-go-driver/v2/x/mongo/driver/mnet"
 )
 
 func TestPlainAuthenticator_Fails(t *testing.T) {
 	t.Parallel()
 
-	authenticator := PlainAuthenticator{
+	authenticator := auth.PlainAuthenticator{
 		Username: "user",
 		Password: "pencil",
 	}
@@ -47,7 +49,9 @@ func TestPlainAuthenticator_Fails(t *testing.T) {
 		Desc:     desc,
 	}
 
-	err := authenticator.Auth(context.Background(), &Config{Description: desc, Connection: c})
+	mnetconn := mnet.NewConnection(c)
+
+	err := authenticator.Auth(context.Background(), &driver.AuthConfig{Connection: mnetconn})
 	if err == nil {
 		t.Fatalf("expected an error but got none")
 	}
@@ -61,7 +65,7 @@ func TestPlainAuthenticator_Fails(t *testing.T) {
 func TestPlainAuthenticator_Extra_server_message(t *testing.T) {
 	t.Parallel()
 
-	authenticator := PlainAuthenticator{
+	authenticator := auth.PlainAuthenticator{
 		Username: "user",
 		Password: "pencil",
 	}
@@ -90,7 +94,9 @@ func TestPlainAuthenticator_Extra_server_message(t *testing.T) {
 		Desc:     desc,
 	}
 
-	err := authenticator.Auth(context.Background(), &Config{Description: desc, Connection: c})
+	mnetconn := mnet.NewConnection(c)
+
+	err := authenticator.Auth(context.Background(), &driver.AuthConfig{Connection: mnetconn})
 	if err == nil {
 		t.Fatalf("expected an error but got none")
 	}
@@ -104,7 +110,7 @@ func TestPlainAuthenticator_Extra_server_message(t *testing.T) {
 func TestPlainAuthenticator_Succeeds(t *testing.T) {
 	t.Parallel()
 
-	authenticator := PlainAuthenticator{
+	authenticator := auth.PlainAuthenticator{
 		Username: "user",
 		Password: "pencil",
 	}
@@ -128,7 +134,9 @@ func TestPlainAuthenticator_Succeeds(t *testing.T) {
 		Desc:     desc,
 	}
 
-	err := authenticator.Auth(context.Background(), &Config{Description: desc, Connection: c})
+	mnetconn := mnet.NewConnection(c)
+
+	err := authenticator.Auth(context.Background(), &driver.AuthConfig{Connection: mnetconn})
 	if err != nil {
 		t.Fatalf("expected no error but got \"%s\"", err)
 	}
@@ -149,7 +157,7 @@ func TestPlainAuthenticator_Succeeds(t *testing.T) {
 func TestPlainAuthenticator_SucceedsBoolean(t *testing.T) {
 	t.Parallel()
 
-	authenticator := PlainAuthenticator{
+	authenticator := auth.PlainAuthenticator{
 		Username: "user",
 		Password: "pencil",
 	}
@@ -173,7 +181,9 @@ func TestPlainAuthenticator_SucceedsBoolean(t *testing.T) {
 		Desc:     desc,
 	}
 
-	err := authenticator.Auth(context.Background(), &Config{Description: desc, Connection: c})
+	mnetconn := mnet.NewConnection(c)
+
+	err := authenticator.Auth(context.Background(), &driver.AuthConfig{Connection: mnetconn})
 	require.NoError(t, err, "Auth error")
 	require.Len(t, c.Written, 1, "expected 1 messages to be sent")
 
@@ -186,4 +196,11 @@ func TestPlainAuthenticator_SucceedsBoolean(t *testing.T) {
 		bsoncore.AppendBinaryElement(nil, "payload", 0x00, payload),
 	)
 	compareResponses(t, <-c.Written, expectedCmd, "$external")
+}
+
+func writeReplies(c chan []byte, docs ...bsoncore.Document) {
+	for _, doc := range docs {
+		reply := drivertest.MakeReply(doc)
+		c <- reply
+	}
 }

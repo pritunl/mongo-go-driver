@@ -9,12 +9,12 @@ package mongo
 import (
 	"testing"
 
-	"github.com/pritunl/mongo-go-driver/internal/assert"
+	"github.com/pritunl/mongo-go-driver/v2/internal/assert"
 )
 
 func TestChangeStream(t *testing.T) {
 	t.Run("nil cursor", func(t *testing.T) {
-		cs := &ChangeStream{}
+		cs := &ChangeStream{client: &Client{}}
 
 		id := cs.ID()
 		assert.Equal(t, int64(0), id, "expected ID 0, got %v", id)

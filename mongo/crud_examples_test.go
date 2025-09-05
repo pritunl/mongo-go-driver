@@ -14,12 +14,11 @@ import (
 	"sync"
 	"time"
 
-	"github.com/pritunl/mongo-go-driver/bson"
-	"github.com/pritunl/mongo-go-driver/bson/primitive"
-	"github.com/pritunl/mongo-go-driver/mongo"
-	"github.com/pritunl/mongo-go-driver/mongo/options"
-	"github.com/pritunl/mongo-go-driver/mongo/readconcern"
-	"github.com/pritunl/mongo-go-driver/mongo/readpref"
+	"github.com/pritunl/mongo-go-driver/v2/bson"
+	"github.com/pritunl/mongo-go-driver/v2/mongo"
+	"github.com/pritunl/mongo-go-driver/v2/mongo/options"
+	"github.com/pritunl/mongo-go-driver/v2/mongo/readconcern"
+	"github.com/pritunl/mongo-go-driver/v2/mongo/readpref"
 )
 
 // Client examples
@@ -32,7 +31,7 @@ func ExampleClient_ListDatabaseNames() {
 		context.TODO(),
 		bson.D{{"empty", false}})
 	if err != nil {
-		log.Fatal(err)
+		log.Panic(err)
 	}
 
 	for _, db := range result {
@@ -53,7 +52,7 @@ func ExampleClient_Watch() {
 		mongo.Pipeline{matchStage},
 		opts)
 	if err != nil {
-		log.Fatal(err)
+		log.Panic(err)
 	}
 
 	// Print out all change stream events in the order they're received.
@@ -96,7 +95,7 @@ func ExampleDatabase_CreateCollection() {
 
 	err := db.CreateCollection(context.TODO(), "users", opts)
 	if err != nil {
-		log.Fatal(err)
+		log.Panic(err)
 	}
 }
 
@@ -124,7 +123,7 @@ func ExampleDatabase_CreateView() {
 
 	err := db.CreateView(context.TODO(), "usernames", "users", pipeline, opts)
 	if err != nil {
-		log.Fatal(err)
+		log.Panic(err)
 	}
 }
 
@@ -136,7 +135,7 @@ func ExampleDatabase_ListCollectionNames() {
 		context.TODO(),
 		bson.D{{"options.capped", true}})
 	if err != nil {
-		log.Fatal(err)
+		log.Panic(err)
 	}
 
 	for _, coll := range result {
@@ -156,7 +155,7 @@ func ExampleDatabase_RunCommand() {
 	var result bson.M
 	err := db.RunCommand(context.TODO(), command, opts).Decode(&result)
 	if err != nil {
-		log.Fatal(err)
+		log.Panic(err)
 	}
 	fmt.Println(result)
 }
@@ -174,7 +173,7 @@ func ExampleDatabase_Watch() {
 		mongo.Pipeline{matchStage},
 		opts)
 	if err != nil {
-		log.Fatal(err)
+		log.Panic(err)
 	}
 
 	// Print out all change stream events in the order they're received.
@@ -202,20 +201,20 @@ func ExampleCollection_Aggregate() {
 			}},
 		}},
 	}
-	opts := options.Aggregate().SetMaxTime(2 * time.Second)
+	opts := options.Aggregate()
 	cursor, err := coll.Aggregate(
 		context.TODO(),
 		mongo.Pipeline{groupStage},
 		opts)
 	if err != nil {
-		log.Fatal(err)
+		log.Panic(err)
 	}
 
 	// Get a list of all returned documents and print them out.
 	// See the mongo.Cursor documentation for more examples of using cursors.
 	var results []bson.M
 	if err = cursor.All(context.TODO(), &results); err != nil {
-		log.Fatal(err)
+		log.Panic(err)
 	}
 	for _, result := range results {
 		fmt.Printf(
@@ -227,7 +226,7 @@ func ExampleCollection_Aggregate() {
 
 func ExampleCollection_BulkWrite() {
 	var coll *mongo.Collection
-	var firstID, secondID primitive.ObjectID
+	var firstID, secondID bson.ObjectID
 
 	// Update the "email" field for two users.
 	// For each update, specify the Upsert option to insert a new document if a
@@ -253,7 +252,7 @@ func ExampleCollection_BulkWrite() {
 	opts := options.BulkWrite().SetOrdered(false)
 	res, err := coll.BulkWrite(context.TODO(), models, opts)
 	if err != nil {
-		log.Fatal(err)
+		log.Panic(err)
 	}
 
 	fmt.Printf(
@@ -265,16 +264,15 @@ func ExampleCollection_BulkWrite() {
 func ExampleCollection_CountDocuments() {
 	var coll *mongo.Collection
 
+	// Specify a timeout to limit the amount of time the operation can run on
+	// the server.
+	ctx, cancel := context.WithTimeout(context.TODO(), time.Second)
+	defer cancel()
+
 	// Count the number of times the name "Bob" appears in the collection.
-	// Specify the MaxTime option to limit the amount of time the operation can
-	// run on the server.
-	opts := options.Count().SetMaxTime(2 * time.Second)
-	count, err := coll.CountDocuments(
-		context.TODO(),
-		bson.D{{"name", "Bob"}},
-		opts)
+	count, err := coll.CountDocuments(ctx, bson.D{{"name", "Bob"}}, nil)
 	if err != nil {
-		log.Fatal(err)
+		log.Panic(err)
 	}
 	fmt.Printf("name Bob appears in %v documents", count)
 }
@@ -285,14 +283,14 @@ func ExampleCollection_DeleteMany() {
 	// Delete all documents in which the "name" field is "Bob" or "bob".
 	// Specify the Collation option to provide a collation that will ignore case
 	// for string comparisons.
-	opts := options.Delete().SetCollation(&options.Collation{
+	opts := options.DeleteMany().SetCollation(&options.Collation{
 		Locale:    "en_US",
 		Strength:  1,
 		CaseLevel: false,
 	})
 	res, err := coll.DeleteMany(context.TODO(), bson.D{{"name", "bob"}}, opts)
 	if err != nil {
-		log.Fatal(err)
+		log.Panic(err)
 	}
 	fmt.Printf("deleted %v documents\n", res.DeletedCount)
 }
@@ -303,14 +301,14 @@ func ExampleCollection_DeleteOne() {
 	// Delete at most one document in which the "name" field is "Bob" or "bob".
 	// Specify the SetCollation option to provide a collation that will ignore
 	// case for string comparisons.
-	opts := options.Delete().SetCollation(&options.Collation{
+	opts := options.DeleteOne().SetCollation(&options.Collation{
 		Locale:    "en_US",
 		Strength:  1,
 		CaseLevel: false,
 	})
 	res, err := coll.DeleteOne(context.TODO(), bson.D{{"name", "bob"}}, opts)
 	if err != nil {
-		log.Fatal(err)
+		log.Panic(err)
 	}
 	fmt.Printf("deleted %v documents\n", res.DeletedCount)
 }
@@ -318,15 +316,22 @@ func ExampleCollection_DeleteOne() {
 func ExampleCollection_Distinct() {
 	var coll *mongo.Collection
 
+	// Specify a timeout to limit the amount of time the operation can run on
+	// the server.
+	ctx, cancel := context.WithTimeout(context.TODO(), time.Second)
+	defer cancel()
+
 	// Find all unique values for the "name" field for documents in which the
 	// "age" field is greater than 25.
-	// Specify the MaxTime option to limit the amount of time the operation can
-	// run on the server.
 	filter := bson.D{{"age", bson.D{{"$gt", 25}}}}
-	opts := options.Distinct().SetMaxTime(2 * time.Second)
-	values, err := coll.Distinct(context.TODO(), "name", filter, opts)
+	res := coll.Distinct(ctx, "name", filter)
+	if err := res.Err(); err != nil {
+		log.Panic(err)
+	}
+
+	values, err := res.Raw()
 	if err != nil {
-		log.Fatal(err)
+		log.Panic(err)
 	}
 
 	for _, value := range values {
@@ -337,13 +342,15 @@ func ExampleCollection_Distinct() {
 func ExampleCollection_EstimatedDocumentCount() {
 	var coll *mongo.Collection
 
+	// Specify a timeout to limit the amount of time the operation can run on
+	// the server.
+	ctx, cancel := context.WithTimeout(context.TODO(), time.Second)
+	defer cancel()
+
 	// Get and print an estimated of the number of documents in the collection.
-	// Specify the MaxTime option to limit the amount of time the operation can
-	// run on the server.
-	opts := options.EstimatedDocumentCount().SetMaxTime(2 * time.Second)
-	count, err := coll.EstimatedDocumentCount(context.TODO(), opts)
+	count, err := coll.EstimatedDocumentCount(ctx, nil)
 	if err != nil {
-		log.Fatal(err)
+		log.Panic(err)
 	}
 	fmt.Printf("estimated document count: %v", count)
 }
@@ -357,14 +364,14 @@ func ExampleCollection_Find() {
 	opts := options.Find().SetSort(bson.D{{"age", 1}})
 	cursor, err := coll.Find(context.TODO(), bson.D{{"name", "Bob"}}, opts)
 	if err != nil {
-		log.Fatal(err)
+		log.Panic(err)
 	}
 
 	// Get a list of all returned documents and print them out.
 	// See the mongo.Cursor documentation for more examples of using cursors.
 	var results []bson.M
 	if err = cursor.All(context.TODO(), &results); err != nil {
-		log.Fatal(err)
+		log.Panic(err)
 	}
 	for _, result := range results {
 		fmt.Println(result)
@@ -373,7 +380,7 @@ func ExampleCollection_Find() {
 
 func ExampleCollection_FindOne() {
 	var coll *mongo.Collection
-	var id primitive.ObjectID
+	var id bson.ObjectID
 
 	// Find the document for which the _id field matches id.
 	// Specify the Sort option to sort the documents by age.
@@ -391,14 +398,14 @@ func ExampleCollection_FindOne() {
 		if errors.Is(err, mongo.ErrNoDocuments) {
 			return
 		}
-		log.Fatal(err)
+		log.Panic(err)
 	}
 	fmt.Printf("found document %v", result)
 }
 
 func ExampleCollection_FindOneAndDelete() {
 	var coll *mongo.Collection
-	var id primitive.ObjectID
+	var id bson.ObjectID
 
 	// Find and delete the document for which the _id field matches id.
 	// Specify the Projection option to only include the name and age fields in
@@ -417,14 +424,14 @@ func ExampleCollection_FindOneAndDelete() {
 		if errors.Is(err, mongo.ErrNoDocuments) {
 			return
 		}
-		log.Fatal(err)
+		log.Panic(err)
 	}
 	fmt.Printf("deleted document %v", deletedDocument)
 }
 
 func ExampleCollection_FindOneAndReplace() {
 	var coll *mongo.Collection
-	var id primitive.ObjectID
+	var id bson.ObjectID
 
 	// Find the document for which the _id field matches id and add a field
 	// called "location".
@@ -446,14 +453,14 @@ func ExampleCollection_FindOneAndReplace() {
 		if errors.Is(err, mongo.ErrNoDocuments) {
 			return
 		}
-		log.Fatal(err)
+		log.Panic(err)
 	}
 	fmt.Printf("replaced document %v", replacedDocument)
 }
 
 func ExampleCollection_FindOneAndUpdate() {
 	var coll *mongo.Collection
-	var id primitive.ObjectID
+	var id bson.ObjectID
 
 	// Find the document for which the _id field matches id and set the email to
 	// "newemail@example.com".
@@ -475,7 +482,7 @@ func ExampleCollection_FindOneAndUpdate() {
 		if errors.Is(err, mongo.ErrNoDocuments) {
 			return
 		}
-		log.Fatal(err)
+		log.Panic(err)
 	}
 	fmt.Printf("updated document %v", updatedDocument)
 }
@@ -486,14 +493,14 @@ func ExampleCollection_InsertMany() {
 	// Insert documents {name: "Alice"} and {name: "Bob"}.
 	// Set the Ordered option to false to allow both operations to happen even
 	// if one of them errors.
-	docs := []interface{}{
+	docs := []any{
 		bson.D{{"name", "Alice"}},
 		bson.D{{"name", "Bob"}},
 	}
 	opts := options.InsertMany().SetOrdered(false)
 	res, err := coll.InsertMany(context.TODO(), docs, opts)
 	if err != nil {
-		log.Fatal(err)
+		log.Panic(err)
 	}
 	fmt.Printf("inserted documents with IDs %v\n", res.InsertedIDs)
 }
@@ -504,14 +511,14 @@ func ExampleCollection_InsertOne() {
 	// Insert the document {name: "Alice"}.
 	res, err := coll.InsertOne(context.TODO(), bson.D{{"name", "Alice"}})
 	if err != nil {
-		log.Fatal(err)
+		log.Panic(err)
 	}
 	fmt.Printf("inserted document with ID %v\n", res.InsertedID)
 }
 
 func ExampleCollection_ReplaceOne() {
 	var coll *mongo.Collection
-	var id primitive.ObjectID
+	var id bson.ObjectID
 
 	// Find the document for which the _id field matches id and add a field
 	// called "location".
@@ -522,7 +529,7 @@ func ExampleCollection_ReplaceOne() {
 	replacement := bson.D{{"location", "NYC"}}
 	result, err := coll.ReplaceOne(context.TODO(), filter, replacement, opts)
 	if err != nil {
-		log.Fatal(err)
+		log.Panic(err)
 	}
 
 	if result.MatchedCount != 0 {
@@ -544,7 +551,7 @@ func ExampleCollection_UpdateMany() {
 
 	result, err := coll.UpdateMany(context.TODO(), filter, update)
 	if err != nil {
-		log.Fatal(err)
+		log.Panic(err)
 	}
 
 	if result.MatchedCount != 0 {
@@ -555,19 +562,19 @@ func ExampleCollection_UpdateMany() {
 
 func ExampleCollection_UpdateOne() {
 	var coll *mongo.Collection
-	var id primitive.ObjectID
+	var id bson.ObjectID
 
 	// Find the document for which the _id field matches id and set the email to
 	// "newemail@example.com".
 	// Specify the Upsert option to insert a new document if a document matching
 	// the filter isn't found.
-	opts := options.Update().SetUpsert(true)
+	opts := options.UpdateOne().SetUpsert(true)
 	filter := bson.D{{"_id", id}}
 	update := bson.D{{"$set", bson.D{{"email", "newemail@example.com"}}}}
 
 	result, err := coll.UpdateOne(context.TODO(), filter, update, opts)
 	if err != nil {
-		log.Fatal(err)
+		log.Panic(err)
 	}
 
 	if result.MatchedCount != 0 {
@@ -592,7 +599,7 @@ func ExampleCollection_Watch() {
 		mongo.Pipeline{matchStage},
 		opts)
 	if err != nil {
-		log.Fatal(err)
+		log.Panic(err)
 	}
 
 	// Print out all change stream events in the order they're received.
@@ -615,10 +622,11 @@ func ExampleWithSession() {
 	// The DefaultReadPreference and DefaultWriteConcern options aren't
 	// specified so they will be inheritied from client and be set to primary
 	// and majority, respectively.
-	opts := options.Session().SetDefaultReadConcern(readconcern.Majority())
+	txnOpts := options.Transaction().SetReadConcern(readconcern.Majority())
+	opts := options.Session().SetDefaultTransactionOptions(txnOpts)
 	sess, err := client.StartSession(opts)
 	if err != nil {
-		log.Fatal(err)
+		log.Panic(err)
 	}
 	defer sess.EndSession(context.TODO())
 
@@ -626,8 +634,8 @@ func ExampleWithSession() {
 	err = mongo.WithSession(
 		context.TODO(),
 		sess,
-		func(ctx mongo.SessionContext) error {
-			// Use the mongo.SessionContext as the Context parameter for
+		func(ctx context.Context) error {
+			// Use the context.Context as the Context parameter for
 			// InsertOne and FindOne so both operations are run under the new
 			// Session.
 
@@ -667,7 +675,7 @@ func ExampleWithSession() {
 			return sess.CommitTransaction(context.Background())
 		})
 	if err != nil {
-		log.Fatal(err)
+		log.Panic(err)
 	}
 }
 
@@ -679,16 +687,18 @@ func ExampleClient_UseSessionWithOptions() {
 	// The DefaultReadPreference and DefaultWriteConcern options aren't
 	// specified so they will be inheritied from client and be set to primary
 	// and majority, respectively.
-	opts := options.Session().SetDefaultReadConcern(readconcern.Majority())
+	txnOpts := options.Transaction().SetReadConcern(readconcern.Majority())
+	opts := options.Session().SetDefaultTransactionOptions(txnOpts)
 	err := client.UseSessionWithOptions(
 		context.TODO(),
 		opts,
-		func(ctx mongo.SessionContext) error {
-			// Use the mongo.SessionContext as the Context parameter for
+		func(ctx context.Context) error {
+			sess := mongo.SessionFromContext(ctx)
+			// Use the context.Context as the Context parameter for
 			// InsertOne and FindOne so both operations are run under the new
 			// Session.
 
-			if err := ctx.StartTransaction(); err != nil {
+			if err := sess.StartTransaction(); err != nil {
 				return err
 			}
 
@@ -699,7 +709,7 @@ func ExampleClient_UseSessionWithOptions() {
 				// context.Background() to ensure that the abort can complete
 				// successfully even if the context passed to mongo.WithSession
 				// is changed to have a timeout.
-				_ = ctx.AbortTransaction(context.Background())
+				_ = sess.AbortTransaction(context.Background())
 				return err
 			}
 
@@ -713,7 +723,7 @@ func ExampleClient_UseSessionWithOptions() {
 				// context.Background() to ensure that the abort can complete
 				// successfully even if the context passed to mongo.WithSession
 				// is changed to have a timeout.
-				_ = ctx.AbortTransaction(context.Background())
+				_ = sess.AbortTransaction(context.Background())
 				return err
 			}
 			fmt.Println(result)
@@ -721,10 +731,10 @@ func ExampleClient_UseSessionWithOptions() {
 			// Use context.Background() to ensure that the commit can complete
 			// successfully even if the context passed to mongo.WithSession is
 			// changed to have a timeout.
-			return ctx.CommitTransaction(context.Background())
+			return sess.CommitTransaction(context.Background())
 		})
 	if err != nil {
-		log.Fatal(err)
+		log.Panic(err)
 	}
 }
 
@@ -738,21 +748,21 @@ func ExampleClient_StartSession_withTransaction() {
 	// The DefaultReadPreference and DefaultWriteConcern options aren't
 	// specified so they will be inheritied from client and be set to primary
 	// and majority, respectively.
-	opts := options.Session().SetDefaultReadConcern(readconcern.Majority())
+	txnOpts := options.Transaction().SetReadConcern(readconcern.Majority())
+	opts := options.Session().SetDefaultTransactionOptions(txnOpts)
 	sess, err := client.StartSession(opts)
 	if err != nil {
-		log.Fatal(err)
+		log.Panic(err)
 	}
 	defer sess.EndSession(context.TODO())
 
 	// Specify the ReadPreference option to set the read preference to primary
 	// preferred for this transaction.
-	txnOpts := options.Transaction().
-		SetReadPreference(readpref.PrimaryPreferred())
+	txnOpts.SetReadPreference(readpref.PrimaryPreferred())
 	result, err := sess.WithTransaction(
 		context.TODO(),
-		func(ctx mongo.SessionContext) (interface{}, error) {
-			// Use the mongo.SessionContext as the Context parameter for
+		func(ctx context.Context) (any, error) {
+			// Use the context.Context as the Context parameter for
 			// InsertOne and FindOne so both operations are run in the same
 			// transaction.
 
@@ -774,7 +784,7 @@ func ExampleClient_StartSession_withTransaction() {
 		},
 		txnOpts)
 	if err != nil {
-		log.Fatal(err)
+		log.Panic(err)
 	}
 	fmt.Printf("result: %v\n", result)
 }
@@ -790,7 +800,7 @@ func ExampleNewSessionContext() {
 	defer sess.EndSession(context.TODO())
 	ctx := mongo.NewSessionContext(context.TODO(), sess)
 
-	// Start a transaction and use the mongo.SessionContext as the Context
+	// Start a transaction and use the context.Context as the Context
 	// parameter for InsertOne and FindOne so both operations are run in the
 	// transaction.
 	if err = sess.StartTransaction(); err != nil {
@@ -837,7 +847,7 @@ func ExampleCursor_All() {
 
 	var results []bson.M
 	if err := cursor.All(context.TODO(), &results); err != nil {
-		log.Fatal(err)
+		log.Panic(err)
 	}
 	fmt.Println(results)
 }
@@ -852,12 +862,12 @@ func ExampleCursor_Next() {
 		// A new result variable should be declared for each document.
 		var result bson.M
 		if err := cursor.Decode(&result); err != nil {
-			log.Fatal(err)
+			log.Panic(err)
 		}
 		fmt.Println(result)
 	}
 	if err := cursor.Err(); err != nil {
-		log.Fatal(err)
+		log.Panic(err)
 	}
 }
 
@@ -872,7 +882,7 @@ func ExampleCursor_TryNext() {
 			// A new result variable should be declared for each document.
 			var result bson.M
 			if err := cursor.Decode(&result); err != nil {
-				log.Fatal(err)
+				log.Panic(err)
 			}
 			fmt.Println(result)
 			continue
@@ -882,7 +892,7 @@ func ExampleCursor_TryNext() {
 		// cursor was exhausted and was closed, or an error occurred. TryNext
 		// should only be called again for the empty batch case.
 		if err := cursor.Err(); err != nil {
-			log.Fatal(err)
+			log.Panic(err)
 		}
 		if cursor.ID() == 0 {
 			break
@@ -945,12 +955,12 @@ func ExampleChangeStream_Next() {
 		// A new event variable should be declared for each event.
 		var event bson.M
 		if err := stream.Decode(&event); err != nil {
-			log.Fatal(err)
+			log.Panic(err)
 		}
 		fmt.Println(event)
 	}
 	if err := stream.Err(); err != nil {
-		log.Fatal(err)
+		log.Panic(err)
 	}
 }
 
@@ -966,7 +976,7 @@ func ExampleChangeStream_TryNext() {
 			// A new event variable should be declared for each event.
 			var event bson.M
 			if err := stream.Decode(&event); err != nil {
-				log.Fatal(err)
+				log.Panic(err)
 			}
 			fmt.Println(event)
 			continue
@@ -976,7 +986,7 @@ func ExampleChangeStream_TryNext() {
 		// change stream was closed by the server, or an error occurred. TryNext
 		// should only be called again for the empty batch case.
 		if err := stream.Err(); err != nil {
-			log.Fatal(err)
+			log.Panic(err)
 		}
 		if stream.ID() == 0 {
 			break
@@ -1021,7 +1031,7 @@ func ExampleChangeStream_ResumeToken() {
 	opts := options.ChangeStream().SetResumeAfter(resumeToken)
 	newStream, err := newClient.Watch(context.TODO(), mongo.Pipeline{}, opts)
 	if err != nil {
-		log.Fatal(err)
+		log.Panic(err)
 	}
 	defer newStream.Close(context.TODO())
 }
@@ -1048,10 +1058,9 @@ func ExampleIndexView_CreateMany() {
 
 	// Specify the MaxTime option to limit the amount of time the operation can
 	// run on the server
-	opts := options.CreateIndexes().SetMaxTime(2 * time.Second)
-	names, err := indexView.CreateMany(context.TODO(), models, opts)
+	names, err := indexView.CreateMany(context.TODO(), models, nil)
 	if err != nil {
-		log.Fatal(err)
+		log.Panic(err)
 	}
 
 	fmt.Printf("created indexes %v\n", names)
@@ -1060,18 +1069,20 @@ func ExampleIndexView_CreateMany() {
 func ExampleIndexView_List() {
 	var indexView *mongo.IndexView
 
-	// Specify the MaxTime option to limit the amount of time the operation can
-	// run on the server
-	opts := options.ListIndexes().SetMaxTime(2 * time.Second)
-	cursor, err := indexView.List(context.TODO(), opts)
+	// Specify a timeout to limit the amount of time the operation can run on
+	// the server.
+	ctx, cancel := context.WithTimeout(context.TODO(), time.Second)
+	defer cancel()
+
+	cursor, err := indexView.List(ctx, nil)
 	if err != nil {
-		log.Fatal(err)
+		log.Panic(err)
 	}
 
 	// Get a slice of all indexes returned and print them out.
 	var results []bson.M
-	if err = cursor.All(context.TODO(), &results); err != nil {
-		log.Fatal(err)
+	if err = cursor.All(ctx, &results); err != nil {
+		log.Panic(err)
 	}
 	fmt.Println(results)
 }
@@ -1081,7 +1092,7 @@ func ExampleCollection_Find_primitiveRegex() {
 	clientOptions := options.Client().ApplyURI("mongodb://localhost:27017")
 
 	// Connect to a mongodb server.
-	client, err := mongo.Connect(ctx, clientOptions)
+	client, err := mongo.Connect(clientOptions)
 	if err != nil {
 		panic(err)
 	}
@@ -1095,7 +1106,7 @@ func ExampleCollection_Find_primitiveRegex() {
 
 	// Create a slice of documents to insert. We will lookup a subset of
 	// these documents using regex.
-	toInsert := []interface{}{
+	toInsert := []any{
 		Pet{Type: "cat", Name: "Mo"},
 		Pet{Type: "dog", Name: "Loki"},
 	}
@@ -1109,7 +1120,7 @@ func ExampleCollection_Find_primitiveRegex() {
 	// Create a filter to find a document with key "name" and any value that
 	// starts with letter "m". Use the "i" option to indicate
 	// case-insensitivity.
-	filter := bson.D{{"name", primitive.Regex{Pattern: "^m", Options: "i"}}}
+	filter := bson.D{{"name", bson.Regex{Pattern: "^m", Options: "i"}}}
 
 	_, err = coll.Find(ctx, filter)
 	if err != nil {
@@ -1122,7 +1133,7 @@ func ExampleCollection_Find_regex() {
 	clientOptions := options.Client().ApplyURI("mongodb://localhost:27017")
 
 	// Connect to a mongodb server.
-	client, err := mongo.Connect(ctx, clientOptions)
+	client, err := mongo.Connect(clientOptions)
 	if err != nil {
 		panic(err)
 	}
@@ -1136,7 +1147,7 @@ func ExampleCollection_Find_regex() {
 
 	// Create a slice of documents to insert. We will lookup a subset of
 	// these documents using regex.
-	toInsert := []interface{}{
+	toInsert := []any{
 		Pet{Type: "cat", Name: "Mo"},
 		Pet{Type: "dog", Name: "Loki"},
 	}

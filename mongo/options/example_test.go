@@ -14,8 +14,8 @@ import (
 	"log"
 	"sync"
 
-	"github.com/pritunl/mongo-go-driver/mongo"
-	"github.com/pritunl/mongo-go-driver/mongo/options"
+	"github.com/pritunl/mongo-go-driver/v2/mongo"
+	"github.com/pritunl/mongo-go-driver/v2/mongo/options"
 )
 
 type CustomLogger struct {
@@ -23,14 +23,14 @@ type CustomLogger struct {
 	mu sync.Mutex
 }
 
-func (logger *CustomLogger) Info(level int, msg string, _ ...interface{}) {
+func (logger *CustomLogger) Info(level int, msg string, _ ...any) {
 	logger.mu.Lock()
 	defer logger.mu.Unlock()
 
 	fmt.Fprintf(logger, "level=%d msg=%s\n", level, msg)
 }
 
-func (logger *CustomLogger) Error(err error, msg string, _ ...interface{}) {
+func (logger *CustomLogger) Error(err error, msg string, _ ...any) {
 	logger.mu.Lock()
 	defer logger.mu.Unlock()
 
@@ -53,10 +53,10 @@ func ExampleClientOptions_SetLoggerOptions_customLogger() {
 		ApplyURI("mongodb://localhost:27017").
 		SetLoggerOptions(loggerOptions)
 
-	client, err := mongo.Connect(context.TODO(), clientOptions)
+	client, err := mongo.Connect(clientOptions)
 
 	if err != nil {
-		log.Fatalf("error connecting to MongoDB: %v", err)
+		log.Panicf("error connecting to MongoDB: %v", err)
 	}
 
 	defer func() { _ = client.Disconnect(context.TODO()) }()
@@ -66,7 +66,7 @@ func ExampleClientOptions_SetLoggerOptions_customLogger() {
 
 	_, err = coll.InsertOne(context.TODO(), map[string]string{"foo": "bar"})
 	if err != nil {
-		log.Fatalf("InsertOne failed: %v", err)
+		log.Panicf("InsertOne failed: %v", err)
 	}
 
 	// Print the logs.

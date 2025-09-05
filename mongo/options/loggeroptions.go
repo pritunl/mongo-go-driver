@@ -7,7 +7,7 @@
 package options
 
 import (
-	"github.com/pritunl/mongo-go-driver/internal/logger"
+	"github.com/pritunl/mongo-go-driver/v2/internal/logger"
 )
 
 // LogLevel is an enumeration representing the supported log severity levels.
@@ -63,51 +63,51 @@ type LogSink interface {
 	//
 	// "Level V(0) is the default, and logger.V(0).Info() has the same
 	// meaning as logger.Info()."
-	Info(level int, message string, keysAndValues ...interface{})
+	Info(level int, message string, keysAndValues ...any)
 
 	// Error logs an error message with the given key/value pairs
-	Error(err error, message string, keysAndValues ...interface{})
+	Error(err error, message string, keysAndValues ...any)
 }
 
-// LoggerOptions represent options used to configure Logging in the Go Driver.
+// LoggerOptions represent arguments used to configure Logging in the Go Driver.
+//
+// See corresponding setter methods for documentation.
 type LoggerOptions struct {
-	// ComponentLevels is a map of LogComponent to LogLevel. The LogLevel
-	// for a given LogComponent will be used to determine if a log message
-	// should be logged.
-	ComponentLevels map[LogComponent]LogLevel
-
-	// Sink is the LogSink that will be used to log messages. If this is
-	// nil, the driver will use the standard logging library.
-	Sink LogSink
-
-	// MaxDocumentLength is the maximum length of a document to be logged.
-	// If the underlying document is larger than this value, it will be
-	// truncated and appended with an ellipses "...".
+	ComponentLevels   map[LogComponent]LogLevel
+	Sink              LogSink
 	MaxDocumentLength uint
 }
 
 // Logger creates a new LoggerOptions instance.
 func Logger() *LoggerOptions {
-	return &LoggerOptions{
-		ComponentLevels: map[LogComponent]LogLevel{},
-	}
+	return &LoggerOptions{}
 }
 
-// SetComponentLevel sets the LogLevel value for a LogComponent.
+// SetComponentLevel sets the LogLevel value for a LogComponent. ComponentLevels is a map of
+// LogComponent to LogLevel. The LogLevel for a given LogComponent will be used to determine
+// if a log message should be logged.
 func (opts *LoggerOptions) SetComponentLevel(component LogComponent, level LogLevel) *LoggerOptions {
+	if opts.ComponentLevels == nil {
+		opts.ComponentLevels = map[LogComponent]LogLevel{}
+	}
+
 	opts.ComponentLevels[component] = level
 
 	return opts
 }
 
-// SetMaxDocumentLength sets the maximum length of a document to be logged.
+// SetMaxDocumentLength sets the maximum length of a document to be logged. Sink is the
+// LogSink that will be used to log messages. If this is nil, the driver will use the
+// standard logging library.
 func (opts *LoggerOptions) SetMaxDocumentLength(maxDocumentLength uint) *LoggerOptions {
 	opts.MaxDocumentLength = maxDocumentLength
 
 	return opts
 }
 
-// SetSink sets the LogSink to use for logging.
+// SetSink sets the LogSink to use for logging. MaxDocumentLength is the maximum length
+// of a document to be logged. If the underlying document is larger than this value, it
+// will be truncated and appended with an ellipses "...".
 func (opts *LoggerOptions) SetSink(sink LogSink) *LoggerOptions {
 	opts.Sink = sink
 

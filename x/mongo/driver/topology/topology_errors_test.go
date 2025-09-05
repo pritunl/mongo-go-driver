@@ -16,11 +16,13 @@ import (
 	"testing"
 	"time"
 
-	"github.com/pritunl/mongo-go-driver/internal/assert"
-	"github.com/pritunl/mongo-go-driver/mongo/description"
+	"github.com/pritunl/mongo-go-driver/v2/internal/assert"
+	"github.com/pritunl/mongo-go-driver/v2/internal/require"
+	"github.com/pritunl/mongo-go-driver/v2/internal/serverselector"
+	"github.com/pritunl/mongo-go-driver/v2/x/mongo/driver/description"
 )
 
-var selectNone description.ServerSelectorFunc = func(description.Topology, []description.Server) ([]description.Server, error) {
+var selectNone serverselector.Func = func(description.Topology, []description.Server) ([]description.Server, error) {
 	return []description.Server{}, nil
 }
 
@@ -28,7 +30,7 @@ func TestTopologyErrors(t *testing.T) {
 	t.Run("errors are wrapped", func(t *testing.T) {
 		t.Run("server selection error", func(t *testing.T) {
 			topo, err := New(nil)
-			noerr(t, err)
+			require.NoError(t, err)
 
 			atomic.StoreInt64(&topo.state, topologyConnected)
 			desc := description.Topology{
@@ -38,7 +40,7 @@ func TestTopologyErrors(t *testing.T) {
 
 			ctx, cancel := context.WithCancel(context.Background())
 			cancel()
-			_, err = topo.SelectServer(ctx, description.WriteSelector())
+			_, err = topo.SelectServer(ctx, &serverselector.Write{})
 			assert.True(t, errors.Is(err, context.Canceled), "expected error %v, got %v", context.Canceled, err)
 		})
 		t.Run("context deadline error", func(t *testing.T) {
@@ -50,9 +52,8 @@ func TestTopologyErrors(t *testing.T) {
 				selectServerCtx, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
 				defer cancel()
 
-				state := newServerSelectionState(selectNone, make(<-chan time.Time))
 				subCh := make(<-chan description.Topology)
-				_, serverSelectionErr = topo.selectServerFromSubscription(selectServerCtx, subCh, state)
+				_, serverSelectionErr = topo.selectServerFromSubscription(selectServerCtx, subCh, selectNone)
 				return true
 			}
 			assert.Eventually(t,

@@ -10,8 +10,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/pritunl/mongo-go-driver/internal/assert"
-	"github.com/pritunl/mongo-go-driver/mongo/description"
+	"github.com/pritunl/mongo-go-driver/v2/internal/assert"
+	"github.com/pritunl/mongo-go-driver/v2/x/mongo/driver/description"
 )
 
 func TestServerSession(t *testing.T) {
@@ -33,7 +33,7 @@ func TestServerSession(t *testing.T) {
 			assert.Nil(t, err, "newServerSession error: %v", err)
 
 			// The session should never be considered expired.
-			topoDesc := topologyDescription{kind: description.LoadBalanced}
+			topoDesc := topologyDescription{kind: description.TopologyKindLoadBalanced}
 			assert.False(t, sess.expired(topoDesc), "session reported that it was expired in LB mode with timeoutMinutes=0")
 
 			sess.LastUsed = time.Now().Add(-30 * time.Minute)

@@ -13,9 +13,9 @@ import (
 	"path"
 	"testing"
 
-	"github.com/pritunl/mongo-go-driver/internal/require"
-	"github.com/pritunl/mongo-go-driver/internal/spectest"
-	"github.com/pritunl/mongo-go-driver/mongo/options"
+	"github.com/pritunl/mongo-go-driver/v2/internal/require"
+	"github.com/pritunl/mongo-go-driver/v2/internal/spectest"
+	"github.com/pritunl/mongo-go-driver/v2/mongo/options"
 )
 
 type credential struct {
@@ -23,7 +23,7 @@ type credential struct {
 	Password  *string
 	Source    string
 	Mechanism string
-	MechProps map[string]interface{} `json:"mechanism_properties"`
+	MechProps map[string]any `json:"mechanism_properties"`
 }
 
 type testCase struct {
@@ -38,7 +38,7 @@ type testContainer struct {
 }
 
 // Note a test supporting the deprecated gssapiServiceName property was removed from data/auth/auth_tests.json
-const authTestsDir = "../../../../testdata/auth/"
+var authTestsDir = spectest.Path("auth/tests/legacy")
 
 func runTestsInFile(t *testing.T, dirname string, filename string) {
 	filepath := path.Join(dirname, filename)
@@ -48,52 +48,57 @@ func runTestsInFile(t *testing.T, dirname string, filename string) {
 	var container testContainer
 	require.NoError(t, json.Unmarshal(content, &container))
 
-	// Remove ".json" from filename.
-	filename = filename[:len(filename)-5]
+	t.Run(filename, func(t *testing.T) {
+		for _, testCase := range container.Tests {
+			testCase := testCase // Capture range variable.
 
-	for _, testCase := range container.Tests {
-		runTest(t, filename, testCase)
-	}
-}
+			t.Run(testCase.Description, func(t *testing.T) {
+				spectest.CheckSkip(t)
 
-func runTest(t *testing.T, filename string, test testCase) {
-	t.Run(filename+":"+test.Description, func(t *testing.T) {
-		opts := options.Client().ApplyURI(test.URI)
-		if test.Valid {
-			require.NoError(t, opts.Validate())
-		} else {
-			require.Error(t, opts.Validate())
-			return
-		}
-
-		if test.Credential == nil {
-			require.Nil(t, opts.Auth)
-			return
-		}
-		require.NotNil(t, opts.Auth)
-		require.Equal(t, test.Credential.Username, opts.Auth.Username)
-
-		if test.Credential.Password == nil {
-			require.False(t, opts.Auth.PasswordSet)
-		} else {
-			require.True(t, opts.Auth.PasswordSet)
-			require.Equal(t, *test.Credential.Password, opts.Auth.Password)
-		}
-
-		require.Equal(t, test.Credential.Source, opts.Auth.AuthSource)
-
-		require.Equal(t, test.Credential.Mechanism, opts.Auth.AuthMechanism)
-
-		if len(test.Credential.MechProps) > 0 {
-			require.Equal(t, mapInterfaceToString(test.Credential.MechProps), opts.Auth.AuthMechanismProperties)
-		} else {
-			require.Equal(t, 0, len(opts.Auth.AuthMechanismProperties))
+				runTest(t, testCase)
+			})
 		}
 	})
 }
 
-// Convert each interface{} value in the map to a string.
-func mapInterfaceToString(m map[string]interface{}) map[string]string {
+func runTest(t *testing.T, test testCase) {
+	opts := options.Client().ApplyURI(test.URI)
+
+	if test.Valid {
+		require.NoError(t, opts.Validate())
+	} else {
+		require.Error(t, opts.Validate())
+
+		return
+	}
+
+	if test.Credential == nil {
+		require.Nil(t, opts.Auth)
+		return
+	}
+	require.NotNil(t, opts.Auth)
+	require.Equal(t, test.Credential.Username, opts.Auth.Username)
+
+	if test.Credential.Password == nil {
+		require.False(t, opts.Auth.PasswordSet)
+	} else {
+		require.True(t, opts.Auth.PasswordSet)
+		require.Equal(t, *test.Credential.Password, opts.Auth.Password)
+	}
+
+	require.Equal(t, test.Credential.Source, opts.Auth.AuthSource)
+
+	require.Equal(t, test.Credential.Mechanism, opts.Auth.AuthMechanism)
+
+	if len(test.Credential.MechProps) > 0 {
+		require.Equal(t, mapInterfaceToString(test.Credential.MechProps), opts.Auth.AuthMechanismProperties)
+	} else {
+		require.Equal(t, 0, len(opts.Auth.AuthMechanismProperties))
+	}
+}
+
+// Convert each any value in the map to a string.
+func mapInterfaceToString(m map[string]any) map[string]string {
 	out := make(map[string]string)
 
 	for key, value := range m {

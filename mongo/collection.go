@@ -14,20 +14,20 @@ import (
 	"strings"
 	"time"
 
-	"github.com/pritunl/mongo-go-driver/bson"
-	"github.com/pritunl/mongo-go-driver/bson/bsoncodec"
-	"github.com/pritunl/mongo-go-driver/bson/bsontype"
-	"github.com/pritunl/mongo-go-driver/bson/primitive"
-	"github.com/pritunl/mongo-go-driver/internal/csfle"
-	"github.com/pritunl/mongo-go-driver/mongo/description"
-	"github.com/pritunl/mongo-go-driver/mongo/options"
-	"github.com/pritunl/mongo-go-driver/mongo/readconcern"
-	"github.com/pritunl/mongo-go-driver/mongo/readpref"
-	"github.com/pritunl/mongo-go-driver/mongo/writeconcern"
-	"github.com/pritunl/mongo-go-driver/x/bsonx/bsoncore"
-	"github.com/pritunl/mongo-go-driver/x/mongo/driver"
-	"github.com/pritunl/mongo-go-driver/x/mongo/driver/operation"
-	"github.com/pritunl/mongo-go-driver/x/mongo/driver/session"
+	"github.com/pritunl/mongo-go-driver/v2/bson"
+	"github.com/pritunl/mongo-go-driver/v2/internal/csfle"
+	"github.com/pritunl/mongo-go-driver/v2/internal/mongoutil"
+	"github.com/pritunl/mongo-go-driver/v2/internal/optionsutil"
+	"github.com/pritunl/mongo-go-driver/v2/internal/serverselector"
+	"github.com/pritunl/mongo-go-driver/v2/mongo/options"
+	"github.com/pritunl/mongo-go-driver/v2/mongo/readconcern"
+	"github.com/pritunl/mongo-go-driver/v2/mongo/readpref"
+	"github.com/pritunl/mongo-go-driver/v2/mongo/writeconcern"
+	"github.com/pritunl/mongo-go-driver/v2/x/bsonx/bsoncore"
+	"github.com/pritunl/mongo-go-driver/v2/x/mongo/driver"
+	"github.com/pritunl/mongo-go-driver/v2/x/mongo/driver/description"
+	"github.com/pritunl/mongo-go-driver/v2/x/mongo/driver/operation"
+	"github.com/pritunl/mongo-go-driver/v2/x/mongo/driver/session"
 )
 
 // Collection is a handle to a MongoDB collection. It is safe for concurrent use by multiple goroutines.
@@ -41,16 +41,16 @@ type Collection struct {
 	readSelector   description.ServerSelector
 	writeSelector  description.ServerSelector
 	bsonOpts       *options.BSONOptions
-	registry       *bsoncodec.Registry
+	registry       *bson.Registry
 }
 
 // aggregateParams is used to store information to configure an Aggregate operation.
 type aggregateParams struct {
 	ctx            context.Context
-	pipeline       interface{}
+	pipeline       any
 	client         *Client
 	bsonOpts       *options.BSONOptions
-	registry       *bsoncodec.Registry
+	registry       *bson.Registry
 	readConcern    *readconcern.ReadConcern
 	writeConcern   *writeconcern.WriteConcern
 	retryRead      bool
@@ -59,7 +59,6 @@ type aggregateParams struct {
 	readSelector   description.ServerSelector
 	writeSelector  description.ServerSelector
 	readPreference *readpref.ReadPref
-	opts           []*options.AggregateOptions
 }
 
 func closeImplicitSession(sess *session.Client) {
@@ -68,43 +67,47 @@ func closeImplicitSession(sess *session.Client) {
 	}
 }
 
-func newCollection(db *Database, name string, opts ...*options.CollectionOptions) *Collection {
-	collOpt := options.MergeCollectionOptions(opts...)
+func newCollection(db *Database, name string, opts ...options.Lister[options.CollectionOptions]) *Collection {
+	args, _ := mongoutil.NewOptions[options.CollectionOptions](opts...)
 
 	rc := db.readConcern
-	if collOpt.ReadConcern != nil {
-		rc = collOpt.ReadConcern
+	if args.ReadConcern != nil {
+		rc = args.ReadConcern
 	}
 
 	wc := db.writeConcern
-	if collOpt.WriteConcern != nil {
-		wc = collOpt.WriteConcern
+	if args.WriteConcern != nil {
+		wc = args.WriteConcern
 	}
 
 	rp := db.readPreference
-	if collOpt.ReadPreference != nil {
-		rp = collOpt.ReadPreference
+	if args.ReadPreference != nil {
+		rp = args.ReadPreference
 	}
 
 	bsonOpts := db.bsonOpts
-	if collOpt.BSONOptions != nil {
-		bsonOpts = collOpt.BSONOptions
+	if args.BSONOptions != nil {
+		bsonOpts = args.BSONOptions
 	}
 
 	reg := db.registry
-	if collOpt.Registry != nil {
-		reg = collOpt.Registry
+	if args.Registry != nil {
+		reg = args.Registry
 	}
 
-	readSelector := description.CompositeSelector([]description.ServerSelector{
-		description.ReadPrefSelector(rp),
-		description.LatencySelector(db.client.localThreshold),
-	})
+	readSelector := &serverselector.Composite{
+		Selectors: []description.ServerSelector{
+			&serverselector.ReadPref{ReadPref: rp},
+			&serverselector.Latency{Latency: db.client.localThreshold},
+		},
+	}
 
-	writeSelector := description.CompositeSelector([]description.ServerSelector{
-		description.WriteSelector(),
-		description.LatencySelector(db.client.localThreshold),
-	})
+	writeSelector := &serverselector.Composite{
+		Selectors: []description.ServerSelector{
+			&serverselector.Write{},
+			&serverselector.Latency{Latency: db.client.localThreshold},
+		},
+	}
 
 	coll := &Collection{
 		client:         db.client,
@@ -139,32 +142,35 @@ func (coll *Collection) copy() *Collection {
 // Clone creates a copy of the Collection configured with the given CollectionOptions.
 // The specified options are merged with the existing options on the collection, with the specified options taking
 // precedence.
-func (coll *Collection) Clone(opts ...*options.CollectionOptions) (*Collection, error) {
+func (coll *Collection) Clone(opts ...options.Lister[options.CollectionOptions]) *Collection {
 	copyColl := coll.copy()
-	optsColl := options.MergeCollectionOptions(opts...)
 
-	if optsColl.ReadConcern != nil {
-		copyColl.readConcern = optsColl.ReadConcern
+	args, _ := mongoutil.NewOptions[options.CollectionOptions](opts...)
+
+	if args.ReadConcern != nil {
+		copyColl.readConcern = args.ReadConcern
 	}
 
-	if optsColl.WriteConcern != nil {
-		copyColl.writeConcern = optsColl.WriteConcern
+	if args.WriteConcern != nil {
+		copyColl.writeConcern = args.WriteConcern
 	}
 
-	if optsColl.ReadPreference != nil {
-		copyColl.readPreference = optsColl.ReadPreference
+	if args.ReadPreference != nil {
+		copyColl.readPreference = args.ReadPreference
 	}
 
-	if optsColl.Registry != nil {
-		copyColl.registry = optsColl.Registry
+	if args.Registry != nil {
+		copyColl.registry = args.Registry
 	}
 
-	copyColl.readSelector = description.CompositeSelector([]description.ServerSelector{
-		description.ReadPrefSelector(copyColl.readPreference),
-		description.LatencySelector(copyColl.client.localThreshold),
-	})
+	copyColl.readSelector = &serverselector.Composite{
+		Selectors: []description.ServerSelector{
+			&serverselector.ReadPref{ReadPref: copyColl.readPreference},
+			&serverselector.Latency{Latency: copyColl.client.localThreshold},
+		},
+	}
 
-	return copyColl, nil
+	return copyColl
 }
 
 // Name returns the name of the collection.
@@ -185,10 +191,10 @@ func (coll *Collection) Database() *Database {
 //
 // The opts parameter can be used to specify options for the operation (see the options.BulkWriteOptions documentation.)
 func (coll *Collection) BulkWrite(ctx context.Context, models []WriteModel,
-	opts ...*options.BulkWriteOptions) (*BulkWriteResult, error) {
+	opts ...options.Lister[options.BulkWriteOptions]) (*BulkWriteResult, error) {
 
 	if len(models) == 0 {
-		return nil, ErrEmptySlice
+		return nil, fmt.Errorf("invalid models: %w", ErrEmptySlice)
 	}
 
 	if ctx == nil {
@@ -210,45 +216,58 @@ func (coll *Collection) BulkWrite(ctx context.Context, models []WriteModel,
 	if sess.TransactionRunning() {
 		wc = nil
 	}
-	if !writeconcern.AckWrite(wc) {
+	if !wc.Acknowledged() {
 		sess = nil
 	}
 
 	selector := makePinnedSelector(sess, coll.writeSelector)
 
-	for _, model := range models {
+	for i, model := range models {
 		if model == nil {
-			return nil, ErrNilDocument
+			return nil, fmt.Errorf("invalid model at index %d: %w", i, ErrNilDocument)
 		}
 	}
 
-	bwo := options.MergeBulkWriteOptions(opts...)
+	// Ensure opts have the default case at the front.
+	opts = append([]options.Lister[options.BulkWriteOptions]{options.BulkWrite()}, opts...)
+	args, err := mongoutil.NewOptions(opts...)
+	if err != nil {
+		return nil, err
+	}
 
 	op := bulkWrite{
-		comment:                  bwo.Comment,
-		ordered:                  bwo.Ordered,
-		bypassDocumentValidation: bwo.BypassDocumentValidation,
+		comment:                  args.Comment,
+		ordered:                  args.Ordered,
+		bypassDocumentValidation: args.BypassDocumentValidation,
 		models:                   models,
 		session:                  sess,
 		collection:               coll,
 		selector:                 selector,
 		writeConcern:             wc,
-		let:                      bwo.Let,
+		let:                      args.Let,
+	}
+	if rawDataOpt := optionsutil.Value(args.Internal, "rawData"); rawDataOpt != nil {
+		if rawData, ok := rawDataOpt.(bool); ok {
+			op.rawData = &rawData
+		}
 	}
 
 	err = op.execute(ctx)
 
-	return &op.result, replaceErrors(err)
+	return &op.result, wrapErrors(err)
 }
 
-func (coll *Collection) insert(ctx context.Context, documents []interface{},
-	opts ...*options.InsertManyOptions) ([]interface{}, error) {
+func (coll *Collection) insert(
+	ctx context.Context,
+	documents []any,
+	opts ...options.Lister[options.InsertManyOptions],
+) ([]any, error) {
 
 	if ctx == nil {
 		ctx = context.Background()
 	}
 
-	result := make([]interface{}, len(documents))
+	result := make([]any, len(documents))
 	docs := make([]bsoncore.Document, len(documents))
 
 	for i, doc := range documents {
@@ -256,7 +275,7 @@ func (coll *Collection) insert(ctx context.Context, documents []interface{},
 		if err != nil {
 			return nil, err
 		}
-		bsoncoreDoc, id, err := ensureID(bsoncoreDoc, primitive.NilObjectID, coll.bsonOpts, coll.registry)
+		bsoncoreDoc, id, err := ensureID(bsoncoreDoc, bson.NilObjectID, coll.bsonOpts, coll.registry)
 		if err != nil {
 			return nil, err
 		}
@@ -280,7 +299,7 @@ func (coll *Collection) insert(ctx context.Context, documents []interface{},
 	if sess.TransactionRunning() {
 		wc = nil
 	}
-	if !writeconcern.AckWrite(wc) {
+	if !wc.Acknowledged() {
 		sess = nil
 	}
 
@@ -291,20 +310,30 @@ func (coll *Collection) insert(ctx context.Context, documents []interface{},
 		ServerSelector(selector).ClusterClock(coll.client.clock).
 		Database(coll.db.name).Collection(coll.name).
 		Deployment(coll.client.deployment).Crypt(coll.client.cryptFLE).Ordered(true).
-		ServerAPI(coll.client.serverAPI).Timeout(coll.client.timeout).Logger(coll.client.logger)
-	imo := options.MergeInsertManyOptions(opts...)
-	if imo.BypassDocumentValidation != nil && *imo.BypassDocumentValidation {
-		op = op.BypassDocumentValidation(*imo.BypassDocumentValidation)
+		ServerAPI(coll.client.serverAPI).Timeout(coll.client.timeout).Logger(coll.client.logger).Authenticator(coll.client.authenticator)
+
+	args, err := mongoutil.NewOptions[options.InsertManyOptions](opts...)
+	if err != nil {
+		return nil, fmt.Errorf("failed to construct options from builder: %w", err)
 	}
-	if imo.Comment != nil {
-		comment, err := marshalValue(imo.Comment, coll.bsonOpts, coll.registry)
+
+	if args.BypassDocumentValidation != nil && *args.BypassDocumentValidation {
+		op = op.BypassDocumentValidation(*args.BypassDocumentValidation)
+	}
+	if args.Comment != nil {
+		comment, err := marshalValue(args.Comment, coll.bsonOpts, coll.registry)
 		if err != nil {
 			return nil, err
 		}
 		op = op.Comment(comment)
 	}
-	if imo.Ordered != nil {
-		op = op.Ordered(*imo.Ordered)
+	if args.Ordered != nil {
+		op = op.Ordered(*args.Ordered)
+	}
+	if rawDataOpt := optionsutil.Value(args.Internal, "rawData"); rawDataOpt != nil {
+		if rawData, ok := rawDataOpt.(bool); ok {
+			op = op.RawData(rawData)
+		}
 	}
 	retry := driver.RetryNone
 	if coll.client.retryWrites {
@@ -323,7 +352,7 @@ func (coll *Collection) insert(ctx context.Context, documents []interface{},
 		// i indexes have been removed before the current error, so the index is we.Index-i
 		idIndex := int(we.Index) - i
 		// if the insert is ordered, nothing after the error was inserted
-		if imo.Ordered == nil || *imo.Ordered {
+		if args.Ordered == nil || *args.Ordered {
 			result = result[:idIndex]
 			break
 		}
@@ -342,25 +371,39 @@ func (coll *Collection) insert(ctx context.Context, documents []interface{},
 // The opts parameter can be used to specify options for the operation (see the options.InsertOneOptions documentation.)
 //
 // For more information about the command, see https://www.mongodb.com/docs/manual/reference/command/insert/.
-func (coll *Collection) InsertOne(ctx context.Context, document interface{},
-	opts ...*options.InsertOneOptions) (*InsertOneResult, error) {
+func (coll *Collection) InsertOne(ctx context.Context, document any,
+	opts ...options.Lister[options.InsertOneOptions]) (*InsertOneResult, error) {
 
-	ioOpts := options.MergeInsertOneOptions(opts...)
-	imOpts := options.InsertMany()
-
-	if ioOpts.BypassDocumentValidation != nil && *ioOpts.BypassDocumentValidation {
-		imOpts.SetBypassDocumentValidation(*ioOpts.BypassDocumentValidation)
-	}
-	if ioOpts.Comment != nil {
-		imOpts.SetComment(ioOpts.Comment)
-	}
-	res, err := coll.insert(ctx, []interface{}{document}, imOpts)
-
-	rr, err := processWriteError(err)
-	if rr&rrOne == 0 {
+	args, err := mongoutil.NewOptions(opts...)
+	if err != nil {
 		return nil, err
 	}
-	return &InsertOneResult{InsertedID: res[0]}, err
+	imOpts := options.InsertMany()
+
+	if args.BypassDocumentValidation != nil && *args.BypassDocumentValidation {
+		imOpts.SetBypassDocumentValidation(*args.BypassDocumentValidation)
+	}
+	if args.Comment != nil {
+		imOpts.SetComment(args.Comment)
+	}
+	if rawDataOpt := optionsutil.Value(args.Internal, "rawData"); rawDataOpt != nil {
+		imOpts.Opts = append(imOpts.Opts, func(opts *options.InsertManyOptions) error {
+			optionsutil.WithValue(opts.Internal, "rawData", rawDataOpt)
+
+			return nil
+		})
+	}
+	res, err := coll.insert(ctx, []any{document}, imOpts)
+
+	rr, err := processWriteError(err)
+	if rr&rrOne == 0 && rr.isAcknowledged() {
+		return nil, err
+	}
+
+	return &InsertOneResult{
+		InsertedID:   res[0],
+		Acknowledged: rr.isAcknowledged(),
+	}, err
 }
 
 // InsertMany executes an insert command to insert multiple documents into the collection. If write errors occur
@@ -374,20 +417,35 @@ func (coll *Collection) InsertOne(ctx context.Context, document interface{},
 // The opts parameter can be used to specify options for the operation (see the options.InsertManyOptions documentation.)
 //
 // For more information about the command, see https://www.mongodb.com/docs/manual/reference/command/insert/.
-func (coll *Collection) InsertMany(ctx context.Context, documents []interface{},
-	opts ...*options.InsertManyOptions) (*InsertManyResult, error) {
+func (coll *Collection) InsertMany(
+	ctx context.Context,
+	documents any,
+	opts ...options.Lister[options.InsertManyOptions],
+) (*InsertManyResult, error) {
 
-	if len(documents) == 0 {
-		return nil, ErrEmptySlice
+	dv := reflect.ValueOf(documents)
+	if dv.Kind() != reflect.Slice {
+		return nil, fmt.Errorf("invalid documents: %w", ErrNotSlice)
+	}
+	if dv.Len() == 0 {
+		return nil, fmt.Errorf("invalid documents: %w", ErrEmptySlice)
 	}
 
-	result, err := coll.insert(ctx, documents, opts...)
+	docSlice := make([]any, 0, dv.Len())
+	for i := 0; i < dv.Len(); i++ {
+		docSlice = append(docSlice, dv.Index(i).Interface())
+	}
+
+	result, err := coll.insert(ctx, docSlice, opts...)
 	rr, err := processWriteError(err)
 	if rr&rrMany == 0 {
 		return nil, err
 	}
 
-	imResult := &InsertManyResult{InsertedIDs: result}
+	imResult := &InsertManyResult{
+		InsertedIDs:  result,
+		Acknowledged: rr.isAcknowledged(),
+	}
 	var writeException WriteException
 	if !errors.As(err, &writeException) {
 		return imResult, err
@@ -409,8 +467,13 @@ func (coll *Collection) InsertMany(ctx context.Context, documents []interface{},
 	}
 }
 
-func (coll *Collection) delete(ctx context.Context, filter interface{}, deleteOne bool, expectedRr returnResult,
-	opts ...*options.DeleteOptions) (*DeleteResult, error) {
+func (coll *Collection) delete(
+	ctx context.Context,
+	filter any,
+	deleteOne bool,
+	expectedRr returnResult,
+	args *options.DeleteManyOptions,
+) (*DeleteResult, error) {
 
 	if ctx == nil {
 		ctx = context.Background()
@@ -436,7 +499,7 @@ func (coll *Collection) delete(ctx context.Context, filter interface{}, deleteOn
 	if sess.TransactionRunning() {
 		wc = nil
 	}
-	if !writeconcern.AckWrite(wc) {
+	if !wc.Acknowledged() {
 		sess = nil
 	}
 
@@ -446,18 +509,18 @@ func (coll *Collection) delete(ctx context.Context, filter interface{}, deleteOn
 	if deleteOne {
 		limit = 1
 	}
-	do := options.MergeDeleteOptions(opts...)
+
 	didx, doc := bsoncore.AppendDocumentStart(nil)
 	doc = bsoncore.AppendDocumentElement(doc, "q", f)
 	doc = bsoncore.AppendInt32Element(doc, "limit", limit)
-	if do.Collation != nil {
-		doc = bsoncore.AppendDocumentElement(doc, "collation", do.Collation.ToDocument())
+	if args.Collation != nil {
+		doc = bsoncore.AppendDocumentElement(doc, "collation", toDocument(args.Collation))
 	}
-	if do.Hint != nil {
-		if isUnorderedMap(do.Hint) {
+	if args.Hint != nil {
+		if isUnorderedMap(args.Hint) {
 			return nil, ErrMapForOrderedArgument{"hint"}
 		}
-		hint, err := marshalValue(do.Hint, coll.bsonOpts, coll.registry)
+		hint, err := marshalValue(args.Hint, coll.bsonOpts, coll.registry)
 		if err != nil {
 			return nil, err
 		}
@@ -471,23 +534,28 @@ func (coll *Collection) delete(ctx context.Context, filter interface{}, deleteOn
 		ServerSelector(selector).ClusterClock(coll.client.clock).
 		Database(coll.db.name).Collection(coll.name).
 		Deployment(coll.client.deployment).Crypt(coll.client.cryptFLE).Ordered(true).
-		ServerAPI(coll.client.serverAPI).Timeout(coll.client.timeout).Logger(coll.client.logger)
-	if do.Comment != nil {
-		comment, err := marshalValue(do.Comment, coll.bsonOpts, coll.registry)
+		ServerAPI(coll.client.serverAPI).Timeout(coll.client.timeout).Logger(coll.client.logger).Authenticator(coll.client.authenticator)
+	if args.Comment != nil {
+		comment, err := marshalValue(args.Comment, coll.bsonOpts, coll.registry)
 		if err != nil {
 			return nil, err
 		}
 		op = op.Comment(comment)
 	}
-	if do.Hint != nil {
+	if args.Hint != nil {
 		op = op.Hint(true)
 	}
-	if do.Let != nil {
-		let, err := marshal(do.Let, coll.bsonOpts, coll.registry)
+	if args.Let != nil {
+		let, err := marshal(args.Let, coll.bsonOpts, coll.registry)
 		if err != nil {
 			return nil, err
 		}
 		op = op.Let(let)
+	}
+	if rawDataOpt := optionsutil.Value(args.Internal, "rawData"); rawDataOpt != nil {
+		if rawData, ok := rawDataOpt.(bool); ok {
+			op = op.RawData(rawData)
+		}
 	}
 
 	// deleteMany cannot be retried
@@ -500,7 +568,10 @@ func (coll *Collection) delete(ctx context.Context, filter interface{}, deleteOn
 	if rr&expectedRr == 0 {
 		return nil, err
 	}
-	return &DeleteResult{DeletedCount: op.Result().N}, err
+	return &DeleteResult{
+		DeletedCount: op.Result().N,
+		Acknowledged: rr.isAcknowledged(),
+	}, err
 }
 
 // DeleteOne executes a delete command to delete at most one document from the collection.
@@ -513,10 +584,24 @@ func (coll *Collection) delete(ctx context.Context, filter interface{}, deleteOn
 // The opts parameter can be used to specify options for the operation (see the options.DeleteOptions documentation).
 //
 // For more information about the command, see https://www.mongodb.com/docs/manual/reference/command/delete/.
-func (coll *Collection) DeleteOne(ctx context.Context, filter interface{},
-	opts ...*options.DeleteOptions) (*DeleteResult, error) {
+func (coll *Collection) DeleteOne(
+	ctx context.Context,
+	filter any,
+	opts ...options.Lister[options.DeleteOneOptions],
+) (*DeleteResult, error) {
+	args, err := mongoutil.NewOptions[options.DeleteOneOptions](opts...)
+	if err != nil {
+		return nil, fmt.Errorf("failed to construct options from builder: %w", err)
+	}
+	deleteOptions := &options.DeleteManyOptions{
+		Collation: args.Collation,
+		Comment:   args.Comment,
+		Hint:      args.Hint,
+		Let:       args.Let,
+		Internal:  args.Internal,
+	}
 
-	return coll.delete(ctx, filter, true, rrOne, opts...)
+	return coll.delete(ctx, filter, true, rrOne, deleteOptions)
 }
 
 // DeleteMany executes a delete command to delete documents from the collection.
@@ -529,34 +614,47 @@ func (coll *Collection) DeleteOne(ctx context.Context, filter interface{},
 // The opts parameter can be used to specify options for the operation (see the options.DeleteOptions documentation).
 //
 // For more information about the command, see https://www.mongodb.com/docs/manual/reference/command/delete/.
-func (coll *Collection) DeleteMany(ctx context.Context, filter interface{},
-	opts ...*options.DeleteOptions) (*DeleteResult, error) {
+func (coll *Collection) DeleteMany(
+	ctx context.Context,
+	filter any,
+	opts ...options.Lister[options.DeleteManyOptions],
+) (*DeleteResult, error) {
+	args, err := mongoutil.NewOptions[options.DeleteManyOptions](opts...)
+	if err != nil {
+		return nil, fmt.Errorf("failed to construct options from builder: %w", err)
+	}
 
-	return coll.delete(ctx, filter, false, rrMany, opts...)
+	return coll.delete(ctx, filter, false, rrMany, args)
 }
 
-func (coll *Collection) updateOrReplace(ctx context.Context, filter bsoncore.Document, update interface{}, multi bool,
-	expectedRr returnResult, checkDollarKey bool, opts ...*options.UpdateOptions) (*UpdateResult, error) {
+func (coll *Collection) updateOrReplace(
+	ctx context.Context,
+	filter bsoncore.Document,
+	update any,
+	multi bool,
+	expectedRr returnResult,
+	checkDollarKey bool,
+	sort any,
+	args *options.UpdateManyOptions,
+) (*UpdateResult, error) {
 
 	if ctx == nil {
 		ctx = context.Background()
 	}
 
-	uo := options.MergeUpdateOptions(opts...)
-
 	// collation, arrayFilters, upsert, and hint are included on the individual update documents rather than as part of the
 	// command
-	updateDoc, err := createUpdateDoc(
-		filter,
-		update,
-		uo.Hint,
-		uo.ArrayFilters,
-		uo.Collation,
-		uo.Upsert,
-		multi,
-		checkDollarKey,
-		coll.bsonOpts,
-		coll.registry)
+	updateDoc, err := updateDoc{
+		filter:         filter,
+		update:         update,
+		hint:           args.Hint,
+		sort:           sort,
+		arrayFilters:   args.ArrayFilters,
+		collation:      args.Collation,
+		upsert:         args.Upsert,
+		multi:          multi,
+		checkDollarKey: checkDollarKey,
+	}.marshal(coll.bsonOpts, coll.registry)
 	if err != nil {
 		return nil, err
 	}
@@ -576,7 +674,7 @@ func (coll *Collection) updateOrReplace(ctx context.Context, filter bsoncore.Doc
 	if sess.TransactionRunning() {
 		wc = nil
 	}
-	if !writeconcern.AckWrite(wc) {
+	if !wc.Acknowledged() {
 		sess = nil
 	}
 
@@ -586,26 +684,31 @@ func (coll *Collection) updateOrReplace(ctx context.Context, filter bsoncore.Doc
 		Session(sess).WriteConcern(wc).CommandMonitor(coll.client.monitor).
 		ServerSelector(selector).ClusterClock(coll.client.clock).
 		Database(coll.db.name).Collection(coll.name).
-		Deployment(coll.client.deployment).Crypt(coll.client.cryptFLE).Hint(uo.Hint != nil).
-		ArrayFilters(uo.ArrayFilters != nil).Ordered(true).ServerAPI(coll.client.serverAPI).
-		Timeout(coll.client.timeout).Logger(coll.client.logger)
-	if uo.Let != nil {
-		let, err := marshal(uo.Let, coll.bsonOpts, coll.registry)
+		Deployment(coll.client.deployment).Crypt(coll.client.cryptFLE).Hint(args.Hint != nil).
+		ArrayFilters(args.ArrayFilters != nil).Ordered(true).ServerAPI(coll.client.serverAPI).
+		Timeout(coll.client.timeout).Logger(coll.client.logger).Authenticator(coll.client.authenticator)
+	if args.Let != nil {
+		let, err := marshal(args.Let, coll.bsonOpts, coll.registry)
 		if err != nil {
 			return nil, err
 		}
 		op = op.Let(let)
 	}
 
-	if uo.BypassDocumentValidation != nil && *uo.BypassDocumentValidation {
-		op = op.BypassDocumentValidation(*uo.BypassDocumentValidation)
+	if args.BypassDocumentValidation != nil && *args.BypassDocumentValidation {
+		op = op.BypassDocumentValidation(*args.BypassDocumentValidation)
 	}
-	if uo.Comment != nil {
-		comment, err := marshalValue(uo.Comment, coll.bsonOpts, coll.registry)
+	if args.Comment != nil {
+		comment, err := marshalValue(args.Comment, coll.bsonOpts, coll.registry)
 		if err != nil {
 			return nil, err
 		}
 		op = op.Comment(comment)
+	}
+	if rawDataOpt := optionsutil.Value(args.Internal, "rawData"); rawDataOpt != nil {
+		if rawData, ok := rawDataOpt.(bool); ok {
+			op = op.RawData(rawData)
+		}
 	}
 	retry := driver.RetryNone
 	// retryable writes are only enabled updateOne/replaceOne operations
@@ -625,6 +728,7 @@ func (coll *Collection) updateOrReplace(ctx context.Context, filter bsoncore.Doc
 		MatchedCount:  opRes.N,
 		ModifiedCount: opRes.NModified,
 		UpsertedCount: int64(len(opRes.Upserted)),
+		Acknowledged:  rr.isAcknowledged(),
 	}
 	if len(opRes.Upserted) > 0 {
 		res.UpsertedID = opRes.Upserted[0].ID
@@ -647,10 +751,14 @@ func (coll *Collection) updateOrReplace(ctx context.Context, filter bsoncore.Doc
 // The opts parameter can be used to specify options for the operation (see the options.UpdateOptions documentation).
 //
 // For more information about the command, see https://www.mongodb.com/docs/manual/reference/command/update/.
-func (coll *Collection) UpdateByID(ctx context.Context, id interface{}, update interface{},
-	opts ...*options.UpdateOptions) (*UpdateResult, error) {
+func (coll *Collection) UpdateByID(
+	ctx context.Context,
+	id any,
+	update any,
+	opts ...options.Lister[options.UpdateOneOptions],
+) (*UpdateResult, error) {
 	if id == nil {
-		return nil, ErrNilValue
+		return nil, fmt.Errorf("invalid id: %w", ErrNilValue)
 	}
 	return coll.UpdateOne(ctx, bson.D{{"_id", id}}, update, opts...)
 }
@@ -669,9 +777,12 @@ func (coll *Collection) UpdateByID(ctx context.Context, id interface{}, update i
 // The opts parameter can be used to specify options for the operation (see the options.UpdateOptions documentation).
 //
 // For more information about the command, see https://www.mongodb.com/docs/manual/reference/command/update/.
-func (coll *Collection) UpdateOne(ctx context.Context, filter interface{}, update interface{},
-	opts ...*options.UpdateOptions) (*UpdateResult, error) {
-
+func (coll *Collection) UpdateOne(
+	ctx context.Context,
+	filter any,
+	update any,
+	opts ...options.Lister[options.UpdateOneOptions],
+) (*UpdateResult, error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -681,7 +792,22 @@ func (coll *Collection) UpdateOne(ctx context.Context, filter interface{}, updat
 		return nil, err
 	}
 
-	return coll.updateOrReplace(ctx, f, update, false, rrOne, true, opts...)
+	args, err := mongoutil.NewOptions[options.UpdateOneOptions](opts...)
+	if err != nil {
+		return nil, fmt.Errorf("failed to construct options from builder: %w", err)
+	}
+	updateOptions := &options.UpdateManyOptions{
+		ArrayFilters:             args.ArrayFilters,
+		BypassDocumentValidation: args.BypassDocumentValidation,
+		Collation:                args.Collation,
+		Comment:                  args.Comment,
+		Hint:                     args.Hint,
+		Upsert:                   args.Upsert,
+		Let:                      args.Let,
+		Internal:                 args.Internal,
+	}
+
+	return coll.updateOrReplace(ctx, f, update, false, rrOne, true, args.Sort, updateOptions)
 }
 
 // UpdateMany executes an update command to update documents in the collection.
@@ -697,9 +823,12 @@ func (coll *Collection) UpdateOne(ctx context.Context, filter interface{}, updat
 // The opts parameter can be used to specify options for the operation (see the options.UpdateOptions documentation).
 //
 // For more information about the command, see https://www.mongodb.com/docs/manual/reference/command/update/.
-func (coll *Collection) UpdateMany(ctx context.Context, filter interface{}, update interface{},
-	opts ...*options.UpdateOptions) (*UpdateResult, error) {
-
+func (coll *Collection) UpdateMany(
+	ctx context.Context,
+	filter any,
+	update any,
+	opts ...options.Lister[options.UpdateManyOptions],
+) (*UpdateResult, error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -709,7 +838,12 @@ func (coll *Collection) UpdateMany(ctx context.Context, filter interface{}, upda
 		return nil, err
 	}
 
-	return coll.updateOrReplace(ctx, f, update, true, rrMany, true, opts...)
+	args, err := mongoutil.NewOptions[options.UpdateManyOptions](opts...)
+	if err != nil {
+		return nil, fmt.Errorf("failed to construct options from builder: %w", err)
+	}
+
+	return coll.updateOrReplace(ctx, f, update, true, rrMany, true, nil, args)
 }
 
 // ReplaceOne executes an update command to replace at most one document in the collection.
@@ -725,11 +859,19 @@ func (coll *Collection) UpdateMany(ctx context.Context, filter interface{}, upda
 // The opts parameter can be used to specify options for the operation (see the options.ReplaceOptions documentation).
 //
 // For more information about the command, see https://www.mongodb.com/docs/manual/reference/command/update/.
-func (coll *Collection) ReplaceOne(ctx context.Context, filter interface{},
-	replacement interface{}, opts ...*options.ReplaceOptions) (*UpdateResult, error) {
-
+func (coll *Collection) ReplaceOne(
+	ctx context.Context,
+	filter any,
+	replacement any,
+	opts ...options.Lister[options.ReplaceOptions],
+) (*UpdateResult, error) {
 	if ctx == nil {
 		ctx = context.Background()
+	}
+
+	args, err := mongoutil.NewOptions[options.ReplaceOptions](opts...)
+	if err != nil {
+		return nil, fmt.Errorf("failed to construct options from builder: %w", err)
 	}
 
 	f, err := marshal(filter, coll.bsonOpts, coll.registry)
@@ -746,22 +888,17 @@ func (coll *Collection) ReplaceOne(ctx context.Context, filter interface{},
 		return nil, err
 	}
 
-	updateOptions := make([]*options.UpdateOptions, 0, len(opts))
-	for _, opt := range opts {
-		if opt == nil {
-			continue
-		}
-		uOpts := options.Update()
-		uOpts.BypassDocumentValidation = opt.BypassDocumentValidation
-		uOpts.Collation = opt.Collation
-		uOpts.Upsert = opt.Upsert
-		uOpts.Hint = opt.Hint
-		uOpts.Let = opt.Let
-		uOpts.Comment = opt.Comment
-		updateOptions = append(updateOptions, uOpts)
+	updateOptions := &options.UpdateManyOptions{
+		BypassDocumentValidation: args.BypassDocumentValidation,
+		Collation:                args.Collation,
+		Upsert:                   args.Upsert,
+		Hint:                     args.Hint,
+		Let:                      args.Let,
+		Comment:                  args.Comment,
+		Internal:                 args.Internal,
 	}
 
-	return coll.updateOrReplace(ctx, f, r, false, rrOne, false, updateOptions...)
+	return coll.updateOrReplace(ctx, f, r, false, rrOne, false, args.Sort, updateOptions)
 }
 
 // Aggregate executes an aggregate command against the collection and returns a cursor over the resulting documents.
@@ -775,8 +912,11 @@ func (coll *Collection) ReplaceOne(ctx context.Context, filter interface{},
 // The opts parameter can be used to specify options for the operation (see the options.AggregateOptions documentation.)
 //
 // For more information about the command, see https://www.mongodb.com/docs/manual/reference/command/aggregate/.
-func (coll *Collection) Aggregate(ctx context.Context, pipeline interface{},
-	opts ...*options.AggregateOptions) (*Cursor, error) {
+func (coll *Collection) Aggregate(
+	ctx context.Context,
+	pipeline any,
+	opts ...options.Lister[options.AggregateOptions],
+) (*Cursor, error) {
 	a := aggregateParams{
 		ctx:            ctx,
 		pipeline:       pipeline,
@@ -791,13 +931,13 @@ func (coll *Collection) Aggregate(ctx context.Context, pipeline interface{},
 		readSelector:   coll.readSelector,
 		writeSelector:  coll.writeSelector,
 		readPreference: coll.readPreference,
-		opts:           opts,
 	}
-	return aggregate(a)
+
+	return aggregate(a, opts...)
 }
 
 // aggregate is the helper method for Aggregate
-func aggregate(a aggregateParams) (cur *Cursor, err error) {
+func aggregate(a aggregateParams, opts ...options.Lister[options.AggregateOptions]) (cur *Cursor, err error) {
 	if a.ctx == nil {
 		a.ctx = context.Background()
 	}
@@ -830,7 +970,7 @@ func aggregate(a aggregateParams) (cur *Cursor, err error) {
 		wc = nil
 		rc = nil
 	}
-	if !writeconcern.AckWrite(wc) {
+	if !wc.Acknowledged() {
 		closeImplicitSession(sess)
 		sess = nil
 	}
@@ -840,7 +980,10 @@ func aggregate(a aggregateParams) (cur *Cursor, err error) {
 		selector = makeOutputAggregateSelector(sess, a.readPreference, a.client.localThreshold)
 	}
 
-	ao := options.MergeAggregateOptions(a.opts...)
+	args, err := mongoutil.NewOptions(opts...)
+	if err != nil {
+		return nil, err
+	}
 
 	cursorOpts := a.client.createBaseCursorOptions()
 
@@ -861,73 +1004,73 @@ func aggregate(a aggregateParams) (cur *Cursor, err error) {
 		ServerAPI(a.client.serverAPI).
 		HasOutputStage(hasOutputStage).
 		Timeout(a.client.timeout).
-		MaxTime(ao.MaxTime)
+		Authenticator(a.client.authenticator).
+		// Omit "maxTimeMS" from operations that return a user-managed cursor to
+		// prevent confusing "cursor not found" errors.
+		//
+		// See DRIVERS-2722 for more detail.
+		OmitMaxTimeMS(true)
 
-	// Omit "maxTimeMS" from operations that return a user-managed cursor to
-	// prevent confusing "cursor not found" errors. To maintain existing
-	// behavior for users who set "timeoutMS" with no context deadline, only
-	// omit "maxTimeMS" when a context deadline is set.
-	//
-	// See DRIVERS-2722 for more detail.
-	_, deadlineSet := a.ctx.Deadline()
-	op.OmitCSOTMaxTimeMS(deadlineSet)
-
-	if ao.AllowDiskUse != nil {
-		op.AllowDiskUse(*ao.AllowDiskUse)
+	if args.AllowDiskUse != nil {
+		op.AllowDiskUse(*args.AllowDiskUse)
 	}
 	// ignore batchSize of 0 with $out
-	if ao.BatchSize != nil && !(*ao.BatchSize == 0 && hasOutputStage) {
-		op.BatchSize(*ao.BatchSize)
-		cursorOpts.BatchSize = *ao.BatchSize
+	if args.BatchSize != nil && !(*args.BatchSize == 0 && hasOutputStage) {
+		op.BatchSize(*args.BatchSize)
+		cursorOpts.BatchSize = *args.BatchSize
 	}
-	if ao.BypassDocumentValidation != nil && *ao.BypassDocumentValidation {
-		op.BypassDocumentValidation(*ao.BypassDocumentValidation)
+	if args.BypassDocumentValidation != nil && *args.BypassDocumentValidation {
+		op.BypassDocumentValidation(*args.BypassDocumentValidation)
 	}
-	if ao.Collation != nil {
-		op.Collation(bsoncore.Document(ao.Collation.ToDocument()))
+	if args.Collation != nil {
+		op.Collation(bsoncore.Document(toDocument(args.Collation)))
 	}
-	if ao.MaxAwaitTime != nil {
-		cursorOpts.MaxTimeMS = int64(*ao.MaxAwaitTime / time.Millisecond)
+	if args.MaxAwaitTime != nil {
+		cursorOpts.SetMaxAwaitTime(*args.MaxAwaitTime)
 	}
-	if ao.Comment != nil {
-		op.Comment(*ao.Comment)
-
-		commentVal, err := marshalValue(ao.Comment, a.bsonOpts, a.registry)
+	if args.Comment != nil {
+		comment, err := marshalValue(args.Comment, a.bsonOpts, a.registry)
 		if err != nil {
 			return nil, err
 		}
-		cursorOpts.Comment = commentVal
+
+		op.Comment(comment)
+		cursorOpts.Comment = comment
 	}
-	if ao.Hint != nil {
-		if isUnorderedMap(ao.Hint) {
+	if args.Hint != nil {
+		if isUnorderedMap(args.Hint) {
 			return nil, ErrMapForOrderedArgument{"hint"}
 		}
-		hintVal, err := marshalValue(ao.Hint, a.bsonOpts, a.registry)
+		hintVal, err := marshalValue(args.Hint, a.bsonOpts, a.registry)
 		if err != nil {
 			return nil, err
 		}
 		op.Hint(hintVal)
 	}
-	if ao.Let != nil {
-		let, err := marshal(ao.Let, a.bsonOpts, a.registry)
+	if args.Let != nil {
+		let, err := marshal(args.Let, a.bsonOpts, a.registry)
 		if err != nil {
 			return nil, err
 		}
 		op.Let(let)
 	}
-	if ao.Custom != nil {
+	if args.Custom != nil {
 		// Marshal all custom options before passing to the aggregate operation. Return
 		// any errors from Marshaling.
 		customOptions := make(map[string]bsoncore.Value)
-		for optionName, optionValue := range ao.Custom {
-			bsonType, bsonData, err := bson.MarshalValueWithRegistry(a.registry, optionValue)
+		for optionName, optionValue := range args.Custom {
+			optionValueBSON, err := marshalValue(optionValue, nil, a.registry)
 			if err != nil {
 				return nil, err
 			}
-			optionValueBSON := bsoncore.Value{Type: bsonType, Data: bsonData}
 			customOptions[optionName] = optionValueBSON
 		}
 		op.CustomOptions(customOptions)
+	}
+	if rawDataOpt := optionsutil.Value(args.Internal, "rawData"); rawDataOpt != nil {
+		if rawData, ok := rawDataOpt.(bool); ok {
+			op = op.RawData(rawData)
+		}
 	}
 
 	retry := driver.RetryNone
@@ -938,18 +1081,19 @@ func aggregate(a aggregateParams) (cur *Cursor, err error) {
 
 	err = op.Execute(a.ctx)
 	if err != nil {
-		if wce, ok := err.(driver.WriteCommandError); ok && wce.WriteConcernError != nil {
+		var wce driver.WriteCommandError
+		if errors.As(err, &wce) && wce.WriteConcernError != nil {
 			return nil, *convertDriverWriteConcernError(wce.WriteConcernError)
 		}
-		return nil, replaceErrors(err)
+		return nil, wrapErrors(err)
 	}
 
 	bc, err := op.Result(cursorOpts)
 	if err != nil {
-		return nil, replaceErrors(err)
+		return nil, wrapErrors(err)
 	}
 	cursor, err := newCursorWithSession(bc, a.client.bsonOpts, a.registry, sess)
-	return cursor, replaceErrors(err)
+	return cursor, wrapErrors(err)
 }
 
 // CountDocuments returns the number of documents in the collection. For a fast count of the documents in the
@@ -960,16 +1104,18 @@ func aggregate(a aggregateParams) (cur *Cursor, err error) {
 // result in a full collection scan.
 //
 // The opts parameter can be used to specify options for the operation (see the options.CountOptions documentation).
-func (coll *Collection) CountDocuments(ctx context.Context, filter interface{},
-	opts ...*options.CountOptions) (int64, error) {
-
+func (coll *Collection) CountDocuments(ctx context.Context, filter any,
+	opts ...options.Lister[options.CountOptions]) (int64, error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
 
-	countOpts := options.MergeCountOptions(opts...)
+	args, err := mongoutil.NewOptions[options.CountOptions](opts...)
+	if err != nil {
+		return 0, err
+	}
 
-	pipelineArr, err := countDocumentsAggregatePipeline(filter, coll.bsonOpts, coll.registry, countOpts)
+	pipelineArr, err := countDocumentsAggregatePipeline(filter, coll.bsonOpts, coll.registry, args)
 	if err != nil {
 		return 0, err
 	}
@@ -992,22 +1138,32 @@ func (coll *Collection) CountDocuments(ctx context.Context, filter interface{},
 	op := operation.NewAggregate(pipelineArr).Session(sess).ReadConcern(rc).ReadPreference(coll.readPreference).
 		CommandMonitor(coll.client.monitor).ServerSelector(selector).ClusterClock(coll.client.clock).Database(coll.db.name).
 		Collection(coll.name).Deployment(coll.client.deployment).Crypt(coll.client.cryptFLE).ServerAPI(coll.client.serverAPI).
-		Timeout(coll.client.timeout).MaxTime(countOpts.MaxTime)
-	if countOpts.Collation != nil {
-		op.Collation(bsoncore.Document(countOpts.Collation.ToDocument()))
+		Timeout(coll.client.timeout).Authenticator(coll.client.authenticator)
+	if args.Collation != nil {
+		op.Collation(bsoncore.Document(toDocument(args.Collation)))
 	}
-	if countOpts.Comment != nil {
-		op.Comment(*countOpts.Comment)
+	if args.Comment != nil {
+		comment, err := marshalValue(args.Comment, coll.bsonOpts, coll.registry)
+		if err != nil {
+			return 0, err
+		}
+
+		op.Comment(comment)
 	}
-	if countOpts.Hint != nil {
-		if isUnorderedMap(countOpts.Hint) {
+	if args.Hint != nil {
+		if isUnorderedMap(args.Hint) {
 			return 0, ErrMapForOrderedArgument{"hint"}
 		}
-		hintVal, err := marshalValue(countOpts.Hint, coll.bsonOpts, coll.registry)
+		hintVal, err := marshalValue(args.Hint, coll.bsonOpts, coll.registry)
 		if err != nil {
 			return 0, err
 		}
 		op.Hint(hintVal)
+	}
+	if rawDataOpt := optionsutil.Value(args.Internal, "rawData"); rawDataOpt != nil {
+		if rawData, ok := rawDataOpt.(bool); ok {
+			op = op.RawData(rawData)
+		}
 	}
 	retry := driver.RetryNone
 	if coll.client.retryReads {
@@ -1017,7 +1173,7 @@ func (coll *Collection) CountDocuments(ctx context.Context, filter interface{},
 
 	err = op.Execute(ctx)
 	if err != nil {
-		return 0, replaceErrors(err)
+		return 0, wrapErrors(err)
 	}
 
 	batch := op.ResultCursorResponse().FirstBatch
@@ -1045,9 +1201,10 @@ func (coll *Collection) CountDocuments(ctx context.Context, filter interface{},
 // documentation).
 //
 // For more information about the command, see https://www.mongodb.com/docs/manual/reference/command/count/.
-func (coll *Collection) EstimatedDocumentCount(ctx context.Context,
-	opts ...*options.EstimatedDocumentCountOptions) (int64, error) {
-
+func (coll *Collection) EstimatedDocumentCount(
+	ctx context.Context,
+	opts ...options.Lister[options.EstimatedDocumentCountOptions],
+) (int64, error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -1070,21 +1227,29 @@ func (coll *Collection) EstimatedDocumentCount(ctx context.Context,
 		rc = nil
 	}
 
-	co := options.MergeEstimatedDocumentCountOptions(opts...)
+	args, err := mongoutil.NewOptions[options.EstimatedDocumentCountOptions](opts...)
+	if err != nil {
+		return 0, fmt.Errorf("failed to construct options from builder: %w", err)
+	}
 
 	selector := makeReadPrefSelector(sess, coll.readSelector, coll.client.localThreshold)
 	op := operation.NewCount().Session(sess).ClusterClock(coll.client.clock).
 		Database(coll.db.name).Collection(coll.name).CommandMonitor(coll.client.monitor).
 		Deployment(coll.client.deployment).ReadConcern(rc).ReadPreference(coll.readPreference).
 		ServerSelector(selector).Crypt(coll.client.cryptFLE).ServerAPI(coll.client.serverAPI).
-		Timeout(coll.client.timeout).MaxTime(co.MaxTime)
+		Timeout(coll.client.timeout).Authenticator(coll.client.authenticator)
 
-	if co.Comment != nil {
-		comment, err := marshalValue(co.Comment, coll.bsonOpts, coll.registry)
+	if args.Comment != nil {
+		comment, err := marshalValue(args.Comment, coll.bsonOpts, coll.registry)
 		if err != nil {
 			return 0, err
 		}
 		op = op.Comment(comment)
+	}
+	if rawDataOpt := optionsutil.Value(args.Internal, "rawData"); rawDataOpt != nil {
+		if rawData, ok := rawDataOpt.(bool); ok {
+			op = op.RawData(rawData)
+		}
 	}
 
 	retry := driver.RetryNone
@@ -1094,7 +1259,7 @@ func (coll *Collection) EstimatedDocumentCount(ctx context.Context,
 	op.Retry(retry)
 
 	err = op.Execute(ctx)
-	return op.Result().N, replaceErrors(err)
+	return op.Result().N, wrapErrors(err)
 }
 
 // Distinct executes a distinct command to find the unique values for a specified field in the collection.
@@ -1107,16 +1272,19 @@ func (coll *Collection) EstimatedDocumentCount(ctx context.Context,
 // The opts parameter can be used to specify options for the operation (see the options.DistinctOptions documentation).
 //
 // For more information about the command, see https://www.mongodb.com/docs/manual/reference/command/distinct/.
-func (coll *Collection) Distinct(ctx context.Context, fieldName string, filter interface{},
-	opts ...*options.DistinctOptions) ([]interface{}, error) {
-
+func (coll *Collection) Distinct(
+	ctx context.Context,
+	fieldName string,
+	filter any,
+	opts ...options.Lister[options.DistinctOptions],
+) *DistinctResult {
 	if ctx == nil {
 		ctx = context.Background()
 	}
 
 	f, err := marshal(filter, coll.bsonOpts, coll.registry)
 	if err != nil {
-		return nil, err
+		return &DistinctResult{err: err}
 	}
 
 	sess := sessionFromContext(ctx)
@@ -1128,7 +1296,7 @@ func (coll *Collection) Distinct(ctx context.Context, fieldName string, filter i
 
 	err = coll.client.validSession(sess)
 	if err != nil {
-		return nil, err
+		return &DistinctResult{err: err}
 	}
 
 	rc := coll.readConcern
@@ -1137,24 +1305,45 @@ func (coll *Collection) Distinct(ctx context.Context, fieldName string, filter i
 	}
 
 	selector := makeReadPrefSelector(sess, coll.readSelector, coll.client.localThreshold)
-	option := options.MergeDistinctOptions(opts...)
+
+	args, err := mongoutil.NewOptions[options.DistinctOptions](opts...)
+	if err != nil {
+		err = fmt.Errorf("failed to construct options from builder: %w", err)
+
+		return &DistinctResult{err: err}
+	}
 
 	op := operation.NewDistinct(fieldName, f).
 		Session(sess).ClusterClock(coll.client.clock).
 		Database(coll.db.name).Collection(coll.name).CommandMonitor(coll.client.monitor).
 		Deployment(coll.client.deployment).ReadConcern(rc).ReadPreference(coll.readPreference).
 		ServerSelector(selector).Crypt(coll.client.cryptFLE).ServerAPI(coll.client.serverAPI).
-		Timeout(coll.client.timeout).MaxTime(option.MaxTime)
+		Timeout(coll.client.timeout).Authenticator(coll.client.authenticator)
 
-	if option.Collation != nil {
-		op.Collation(bsoncore.Document(option.Collation.ToDocument()))
+	if args.Collation != nil {
+		op.Collation(bsoncore.Document(toDocument(args.Collation)))
 	}
-	if option.Comment != nil {
-		comment, err := marshalValue(option.Comment, coll.bsonOpts, coll.registry)
+	if args.Comment != nil {
+		comment, err := marshalValue(args.Comment, coll.bsonOpts, coll.registry)
 		if err != nil {
-			return nil, err
+			return &DistinctResult{err: err}
 		}
 		op.Comment(comment)
+	}
+	if args.Hint != nil {
+		if isUnorderedMap(args.Hint) {
+			return &DistinctResult{err: ErrMapForOrderedArgument{"hint"}}
+		}
+		hint, err := marshalValue(args.Hint, coll.bsonOpts, coll.registry)
+		if err != nil {
+			return &DistinctResult{err: err}
+		}
+		op.Hint(hint)
+	}
+	if rawDataOpt := optionsutil.Value(args.Internal, "rawData"); rawDataOpt != nil {
+		if rawData, ok := rawDataOpt.(bool); ok {
+			op = op.RawData(rawData)
+		}
 	}
 	retry := driver.RetryNone
 	if coll.client.retryReads {
@@ -1164,30 +1353,21 @@ func (coll *Collection) Distinct(ctx context.Context, fieldName string, filter i
 
 	err = op.Execute(ctx)
 	if err != nil {
-		return nil, replaceErrors(err)
+		return &DistinctResult{err: wrapErrors(err)}
 	}
 
 	arr, ok := op.Result().Values.ArrayOK()
 	if !ok {
-		return nil, fmt.Errorf("response field 'values' is type array, but received BSON type %s", op.Result().Values.Type)
+		err := fmt.Errorf("response field 'values' is type array, but received BSON type %s", op.Result().Values.Type)
+
+		return &DistinctResult{err: err}
 	}
 
-	values, err := arr.Values()
-	if err != nil {
-		return nil, err
+	return &DistinctResult{
+		reg:      coll.registry,
+		arr:      bson.RawArray(arr),
+		bsonOpts: coll.bsonOpts,
 	}
-
-	retArray := make([]interface{}, len(values))
-
-	for i, val := range values {
-		raw := bson.RawValue{Type: val.Type, Value: val.Data}
-		err = raw.Unmarshal(&retArray[i])
-		if err != nil {
-			return nil, err
-		}
-	}
-
-	return retArray, replaceErrors(err)
 }
 
 // Find executes a find command and returns a Cursor over the matching documents in the collection.
@@ -1198,29 +1378,30 @@ func (coll *Collection) Distinct(ctx context.Context, fieldName string, filter i
 // The opts parameter can be used to specify options for the operation (see the options.FindOptions documentation).
 //
 // For more information about the command, see https://www.mongodb.com/docs/manual/reference/command/find/.
-func (coll *Collection) Find(ctx context.Context, filter interface{},
-	opts ...*options.FindOptions) (cur *Cursor, err error) {
-
-	if ctx == nil {
-		ctx = context.Background()
+func (coll *Collection) Find(ctx context.Context, filter any,
+	opts ...options.Lister[options.FindOptions]) (*Cursor, error) {
+	args, err := mongoutil.NewOptions(opts...)
+	if err != nil {
+		return nil, err
 	}
 
 	// Omit "maxTimeMS" from operations that return a user-managed cursor to
-	// prevent confusing "cursor not found" errors. To maintain existing
-	// behavior for users who set "timeoutMS" with no context deadline, only
-	// omit "maxTimeMS" when a context deadline is set.
+	// prevent confusing "cursor not found" errors.
 	//
 	// See DRIVERS-2722 for more detail.
-	_, deadlineSet := ctx.Deadline()
-	return coll.find(ctx, filter, deadlineSet, opts...)
+	return coll.find(ctx, filter, true, args)
 }
 
 func (coll *Collection) find(
 	ctx context.Context,
-	filter interface{},
-	omitCSOTMaxTimeMS bool,
-	opts ...*options.FindOptions,
+	filter any,
+	omitMaxTimeMS bool,
+	args *options.FindOptions,
 ) (cur *Cursor, err error) {
+
+	if ctx == nil {
+		ctx = context.Background()
+	}
 
 	f, err := marshal(filter, coll.bsonOpts, coll.registry)
 	if err != nil {
@@ -1248,45 +1429,43 @@ func (coll *Collection) find(
 		rc = nil
 	}
 
-	fo := options.MergeFindOptions(opts...)
-
 	selector := makeReadPrefSelector(sess, coll.readSelector, coll.client.localThreshold)
 	op := operation.NewFind(f).
 		Session(sess).ReadConcern(rc).ReadPreference(coll.readPreference).
 		CommandMonitor(coll.client.monitor).ServerSelector(selector).
 		ClusterClock(coll.client.clock).Database(coll.db.name).Collection(coll.name).
 		Deployment(coll.client.deployment).Crypt(coll.client.cryptFLE).ServerAPI(coll.client.serverAPI).
-		Timeout(coll.client.timeout).MaxTime(fo.MaxTime).Logger(coll.client.logger).
-		OmitCSOTMaxTimeMS(omitCSOTMaxTimeMS)
+		Timeout(coll.client.timeout).Logger(coll.client.logger).Authenticator(coll.client.authenticator).
+		OmitMaxTimeMS(omitMaxTimeMS)
 
 	cursorOpts := coll.client.createBaseCursorOptions()
 
 	cursorOpts.MarshalValueEncoderFn = newEncoderFn(coll.bsonOpts, coll.registry)
 
-	if fo.AllowDiskUse != nil {
-		op.AllowDiskUse(*fo.AllowDiskUse)
+	if args.AllowDiskUse != nil {
+		op.AllowDiskUse(*args.AllowDiskUse)
 	}
-	if fo.AllowPartialResults != nil {
-		op.AllowPartialResults(*fo.AllowPartialResults)
+	if args.AllowPartialResults != nil {
+		op.AllowPartialResults(*args.AllowPartialResults)
 	}
-	if fo.BatchSize != nil {
-		cursorOpts.BatchSize = *fo.BatchSize
-		op.BatchSize(*fo.BatchSize)
+	if args.BatchSize != nil {
+		cursorOpts.BatchSize = *args.BatchSize
+		op.BatchSize(*args.BatchSize)
 	}
-	if fo.Collation != nil {
-		op.Collation(bsoncore.Document(fo.Collation.ToDocument()))
+	if args.Collation != nil {
+		op.Collation(bsoncore.Document(toDocument(args.Collation)))
 	}
-	if fo.Comment != nil {
-		op.Comment(*fo.Comment)
-
-		commentVal, err := marshalValue(fo.Comment, coll.bsonOpts, coll.registry)
+	if args.Comment != nil {
+		comment, err := marshalValue(args.Comment, coll.bsonOpts, coll.registry)
 		if err != nil {
 			return nil, err
 		}
-		cursorOpts.Comment = commentVal
+
+		op.Comment(comment)
+		cursorOpts.Comment = comment
 	}
-	if fo.CursorType != nil {
-		switch *fo.CursorType {
+	if args.CursorType != nil {
+		switch *args.CursorType {
 		case options.Tailable:
 			op.Tailable(true)
 		case options.TailableAwait:
@@ -1294,25 +1473,25 @@ func (coll *Collection) find(
 			op.AwaitData(true)
 		}
 	}
-	if fo.Hint != nil {
-		if isUnorderedMap(fo.Hint) {
+	if args.Hint != nil {
+		if isUnorderedMap(args.Hint) {
 			return nil, ErrMapForOrderedArgument{"hint"}
 		}
-		hint, err := marshalValue(fo.Hint, coll.bsonOpts, coll.registry)
+		hint, err := marshalValue(args.Hint, coll.bsonOpts, coll.registry)
 		if err != nil {
 			return nil, err
 		}
 		op.Hint(hint)
 	}
-	if fo.Let != nil {
-		let, err := marshal(fo.Let, coll.bsonOpts, coll.registry)
+	if args.Let != nil {
+		let, err := marshal(args.Let, coll.bsonOpts, coll.registry)
 		if err != nil {
 			return nil, err
 		}
 		op.Let(let)
 	}
-	if fo.Limit != nil {
-		limit := *fo.Limit
+	if args.Limit != nil {
+		limit := *args.Limit
 		if limit < 0 {
 			limit = -1 * limit
 			op.SingleBatch(true)
@@ -1320,57 +1499,59 @@ func (coll *Collection) find(
 		cursorOpts.Limit = int32(limit)
 		op.Limit(limit)
 	}
-	if fo.Max != nil {
-		max, err := marshal(fo.Max, coll.bsonOpts, coll.registry)
+	if args.Max != nil {
+		max, err := marshal(args.Max, coll.bsonOpts, coll.registry)
 		if err != nil {
 			return nil, err
 		}
 		op.Max(max)
 	}
-	if fo.MaxAwaitTime != nil {
-		cursorOpts.MaxTimeMS = int64(*fo.MaxAwaitTime / time.Millisecond)
+	if args.MaxAwaitTime != nil {
+		cursorOpts.SetMaxAwaitTime(*args.MaxAwaitTime)
 	}
-	if fo.Min != nil {
-		min, err := marshal(fo.Min, coll.bsonOpts, coll.registry)
+	if args.Min != nil {
+		min, err := marshal(args.Min, coll.bsonOpts, coll.registry)
 		if err != nil {
 			return nil, err
 		}
 		op.Min(min)
 	}
-	if fo.NoCursorTimeout != nil {
-		op.NoCursorTimeout(*fo.NoCursorTimeout)
+	if args.NoCursorTimeout != nil {
+		op.NoCursorTimeout(*args.NoCursorTimeout)
 	}
-	if fo.OplogReplay != nil {
-		op.OplogReplay(*fo.OplogReplay)
+	if args.OplogReplay != nil {
+		op.OplogReplay(*args.OplogReplay)
 	}
-	if fo.Projection != nil {
-		proj, err := marshal(fo.Projection, coll.bsonOpts, coll.registry)
+	if args.Projection != nil {
+		proj, err := marshal(args.Projection, coll.bsonOpts, coll.registry)
 		if err != nil {
 			return nil, err
 		}
 		op.Projection(proj)
 	}
-	if fo.ReturnKey != nil {
-		op.ReturnKey(*fo.ReturnKey)
+	if args.ReturnKey != nil {
+		op.ReturnKey(*args.ReturnKey)
 	}
-	if fo.ShowRecordID != nil {
-		op.ShowRecordID(*fo.ShowRecordID)
+	if args.ShowRecordID != nil {
+		op.ShowRecordID(*args.ShowRecordID)
 	}
-	if fo.Skip != nil {
-		op.Skip(*fo.Skip)
+	if args.Skip != nil {
+		op.Skip(*args.Skip)
 	}
-	if fo.Snapshot != nil {
-		op.Snapshot(*fo.Snapshot)
-	}
-	if fo.Sort != nil {
-		if isUnorderedMap(fo.Sort) {
+	if args.Sort != nil {
+		if isUnorderedMap(args.Sort) {
 			return nil, ErrMapForOrderedArgument{"sort"}
 		}
-		sort, err := marshal(fo.Sort, coll.bsonOpts, coll.registry)
+		sort, err := marshal(args.Sort, coll.bsonOpts, coll.registry)
 		if err != nil {
 			return nil, err
 		}
 		op.Sort(sort)
+	}
+	if rawDataOpt := optionsutil.Value(args.Internal, "rawData"); rawDataOpt != nil {
+		if rawData, ok := rawDataOpt.(bool); ok {
+			op = op.RawData(rawData)
+		}
 	}
 	retry := driver.RetryNone
 	if coll.client.retryReads {
@@ -1379,14 +1560,35 @@ func (coll *Collection) find(
 	op = op.Retry(retry)
 
 	if err = op.Execute(ctx); err != nil {
-		return nil, replaceErrors(err)
+		return nil, wrapErrors(err)
 	}
 
 	bc, err := op.Result(cursorOpts)
 	if err != nil {
-		return nil, replaceErrors(err)
+		return nil, wrapErrors(err)
 	}
 	return newCursorWithSession(bc, coll.bsonOpts, coll.registry, sess)
+}
+
+func newFindArgsFromFindOneArgs(args *options.FindOneOptions) *options.FindOptions {
+	var limit int64 = -1
+	v := &options.FindOptions{Limit: &limit}
+	if args != nil {
+		v.AllowPartialResults = args.AllowPartialResults
+		v.Collation = args.Collation
+		v.Comment = args.Comment
+		v.Hint = args.Hint
+		v.Max = args.Max
+		v.Min = args.Min
+		v.OplogReplay = args.OplogReplay
+		v.Projection = args.Projection
+		v.ReturnKey = args.ReturnKey
+		v.ShowRecordID = args.ShowRecordID
+		v.Skip = args.Skip
+		v.Sort = args.Sort
+		v.Internal = args.Internal
+	}
+	return v
 }
 
 // FindOne executes a find command and returns a SingleResult for one document in the collection.
@@ -1398,50 +1600,24 @@ func (coll *Collection) find(
 // The opts parameter can be used to specify options for this operation (see the options.FindOneOptions documentation).
 //
 // For more information about the command, see https://www.mongodb.com/docs/manual/reference/command/find/.
-func (coll *Collection) FindOne(ctx context.Context, filter interface{},
-	opts ...*options.FindOneOptions) *SingleResult {
+func (coll *Collection) FindOne(ctx context.Context, filter any,
+	opts ...options.Lister[options.FindOneOptions]) *SingleResult {
 
 	if ctx == nil {
 		ctx = context.Background()
 	}
 
-	findOpts := make([]*options.FindOptions, 0, len(opts))
-	for _, opt := range opts {
-		if opt == nil {
-			continue
-		}
-		findOpts = append(findOpts, &options.FindOptions{
-			AllowPartialResults: opt.AllowPartialResults,
-			BatchSize:           opt.BatchSize,
-			Collation:           opt.Collation,
-			Comment:             opt.Comment,
-			CursorType:          opt.CursorType,
-			Hint:                opt.Hint,
-			Max:                 opt.Max,
-			MaxAwaitTime:        opt.MaxAwaitTime,
-			MaxTime:             opt.MaxTime,
-			Min:                 opt.Min,
-			NoCursorTimeout:     opt.NoCursorTimeout,
-			OplogReplay:         opt.OplogReplay,
-			Projection:          opt.Projection,
-			ReturnKey:           opt.ReturnKey,
-			ShowRecordID:        opt.ShowRecordID,
-			Skip:                opt.Skip,
-			Snapshot:            opt.Snapshot,
-			Sort:                opt.Sort,
-		})
+	args, err := mongoutil.NewOptions(opts...)
+	if err != nil {
+		return &SingleResult{err: err}
 	}
-	// Unconditionally send a limit to make sure only one document is returned and the cursor is not kept open
-	// by the server.
-	findOpts = append(findOpts, options.Find().SetLimit(-1))
-
-	cursor, err := coll.find(ctx, filter, false, findOpts...)
+	cursor, err := coll.find(ctx, filter, false, newFindArgsFromFindOneArgs(args))
 	return &SingleResult{
 		ctx:      ctx,
 		cur:      cursor,
 		bsonOpts: coll.bsonOpts,
 		reg:      coll.registry,
-		err:      replaceErrors(err),
+		err:      wrapErrors(err),
 	}
 }
 
@@ -1466,7 +1642,7 @@ func (coll *Collection) findAndModify(ctx context.Context, op *operation.FindAnd
 	if sess.TransactionRunning() {
 		wc = nil
 	}
-	if !writeconcern.AckWrite(wc) {
+	if !wc.Acknowledged() {
 		sess = nil
 	}
 
@@ -1488,16 +1664,17 @@ func (coll *Collection) findAndModify(ctx context.Context, op *operation.FindAnd
 		Retry(retry).
 		Crypt(coll.client.cryptFLE)
 
-	_, err = processWriteError(op.Execute(ctx))
+	rr, err := processWriteError(op.Execute(ctx))
 	if err != nil {
 		return &SingleResult{err: err}
 	}
 
 	return &SingleResult{
-		ctx:      ctx,
-		rdr:      bson.Raw(op.Result().Value),
-		bsonOpts: coll.bsonOpts,
-		reg:      coll.registry,
+		ctx:          ctx,
+		rdr:          bson.Raw(op.Result().Value),
+		bsonOpts:     coll.bsonOpts,
+		reg:          coll.registry,
+		Acknowledged: rr.isAcknowledged(),
 	}
 }
 
@@ -1512,59 +1689,70 @@ func (coll *Collection) findAndModify(ctx context.Context, op *operation.FindAnd
 // documentation).
 //
 // For more information about the command, see https://www.mongodb.com/docs/manual/reference/command/findAndModify/.
-func (coll *Collection) FindOneAndDelete(ctx context.Context, filter interface{},
-	opts ...*options.FindOneAndDeleteOptions) *SingleResult {
+func (coll *Collection) FindOneAndDelete(
+	ctx context.Context,
+	filter any,
+	opts ...options.Lister[options.FindOneAndDeleteOptions]) *SingleResult {
 
 	f, err := marshal(filter, coll.bsonOpts, coll.registry)
 	if err != nil {
 		return &SingleResult{err: err}
 	}
-	fod := options.MergeFindOneAndDeleteOptions(opts...)
-	op := operation.NewFindAndModify(f).Remove(true).ServerAPI(coll.client.serverAPI).Timeout(coll.client.timeout).
-		MaxTime(fod.MaxTime)
-	if fod.Collation != nil {
-		op = op.Collation(bsoncore.Document(fod.Collation.ToDocument()))
+
+	args, err := mongoutil.NewOptions[options.FindOneAndDeleteOptions](opts...)
+	if err != nil {
+		return &SingleResult{err: fmt.Errorf("failed to construct options from builder: %w", err)}
 	}
-	if fod.Comment != nil {
-		comment, err := marshalValue(fod.Comment, coll.bsonOpts, coll.registry)
+
+	op := operation.NewFindAndModify(f).Remove(true).ServerAPI(coll.client.serverAPI).Timeout(coll.client.timeout).Authenticator(coll.client.authenticator)
+	if args.Collation != nil {
+		op = op.Collation(bsoncore.Document(toDocument(args.Collation)))
+	}
+	if args.Comment != nil {
+		comment, err := marshalValue(args.Comment, coll.bsonOpts, coll.registry)
 		if err != nil {
 			return &SingleResult{err: err}
 		}
 		op = op.Comment(comment)
 	}
-	if fod.Projection != nil {
-		proj, err := marshal(fod.Projection, coll.bsonOpts, coll.registry)
+	if args.Projection != nil {
+		proj, err := marshal(args.Projection, coll.bsonOpts, coll.registry)
 		if err != nil {
 			return &SingleResult{err: err}
 		}
 		op = op.Fields(proj)
 	}
-	if fod.Sort != nil {
-		if isUnorderedMap(fod.Sort) {
+	if args.Sort != nil {
+		if isUnorderedMap(args.Sort) {
 			return &SingleResult{err: ErrMapForOrderedArgument{"sort"}}
 		}
-		sort, err := marshal(fod.Sort, coll.bsonOpts, coll.registry)
+		sort, err := marshal(args.Sort, coll.bsonOpts, coll.registry)
 		if err != nil {
 			return &SingleResult{err: err}
 		}
 		op = op.Sort(sort)
 	}
-	if fod.Hint != nil {
-		if isUnorderedMap(fod.Hint) {
+	if args.Hint != nil {
+		if isUnorderedMap(args.Hint) {
 			return &SingleResult{err: ErrMapForOrderedArgument{"hint"}}
 		}
-		hint, err := marshalValue(fod.Hint, coll.bsonOpts, coll.registry)
+		hint, err := marshalValue(args.Hint, coll.bsonOpts, coll.registry)
 		if err != nil {
 			return &SingleResult{err: err}
 		}
 		op = op.Hint(hint)
 	}
-	if fod.Let != nil {
-		let, err := marshal(fod.Let, coll.bsonOpts, coll.registry)
+	if args.Let != nil {
+		let, err := marshal(args.Let, coll.bsonOpts, coll.registry)
 		if err != nil {
 			return &SingleResult{err: err}
 		}
 		op = op.Let(let)
+	}
+	if rawDataOpt := optionsutil.Value(args.Internal, "rawData"); rawDataOpt != nil {
+		if rawData, ok := rawDataOpt.(bool); ok {
+			op = op.RawData(rawData)
+		}
 	}
 
 	return coll.findAndModify(ctx, op)
@@ -1584,8 +1772,12 @@ func (coll *Collection) FindOneAndDelete(ctx context.Context, filter interface{}
 // documentation).
 //
 // For more information about the command, see https://www.mongodb.com/docs/manual/reference/command/findAndModify/.
-func (coll *Collection) FindOneAndReplace(ctx context.Context, filter interface{},
-	replacement interface{}, opts ...*options.FindOneAndReplaceOptions) *SingleResult {
+func (coll *Collection) FindOneAndReplace(
+	ctx context.Context,
+	filter any,
+	replacement any,
+	opts ...options.Lister[options.FindOneAndReplaceOptions],
+) *SingleResult {
 
 	f, err := marshal(filter, coll.bsonOpts, coll.registry)
 	if err != nil {
@@ -1599,61 +1791,70 @@ func (coll *Collection) FindOneAndReplace(ctx context.Context, filter interface{
 		return &SingleResult{err: errors.New("replacement document cannot contain keys beginning with '$'")}
 	}
 
-	fo := options.MergeFindOneAndReplaceOptions(opts...)
-	op := operation.NewFindAndModify(f).Update(bsoncore.Value{Type: bsontype.EmbeddedDocument, Data: r}).
-		ServerAPI(coll.client.serverAPI).Timeout(coll.client.timeout).MaxTime(fo.MaxTime)
-	if fo.BypassDocumentValidation != nil && *fo.BypassDocumentValidation {
-		op = op.BypassDocumentValidation(*fo.BypassDocumentValidation)
+	args, err := mongoutil.NewOptions[options.FindOneAndReplaceOptions](opts...)
+	if err != nil {
+		return &SingleResult{err: fmt.Errorf("failed to construct options from builder: %w", err)}
 	}
-	if fo.Collation != nil {
-		op = op.Collation(bsoncore.Document(fo.Collation.ToDocument()))
+
+	op := operation.NewFindAndModify(f).Update(bsoncore.Value{Type: bsoncore.TypeEmbeddedDocument, Data: r}).
+		ServerAPI(coll.client.serverAPI).Timeout(coll.client.timeout).Authenticator(coll.client.authenticator)
+	if args.BypassDocumentValidation != nil && *args.BypassDocumentValidation {
+		op = op.BypassDocumentValidation(*args.BypassDocumentValidation)
 	}
-	if fo.Comment != nil {
-		comment, err := marshalValue(fo.Comment, coll.bsonOpts, coll.registry)
+	if args.Collation != nil {
+		op = op.Collation(bsoncore.Document(toDocument(args.Collation)))
+	}
+	if args.Comment != nil {
+		comment, err := marshalValue(args.Comment, coll.bsonOpts, coll.registry)
 		if err != nil {
 			return &SingleResult{err: err}
 		}
 		op = op.Comment(comment)
 	}
-	if fo.Projection != nil {
-		proj, err := marshal(fo.Projection, coll.bsonOpts, coll.registry)
+	if args.Projection != nil {
+		proj, err := marshal(args.Projection, coll.bsonOpts, coll.registry)
 		if err != nil {
 			return &SingleResult{err: err}
 		}
 		op = op.Fields(proj)
 	}
-	if fo.ReturnDocument != nil {
-		op = op.NewDocument(*fo.ReturnDocument == options.After)
+	if args.ReturnDocument != nil {
+		op = op.NewDocument(*args.ReturnDocument == options.After)
 	}
-	if fo.Sort != nil {
-		if isUnorderedMap(fo.Sort) {
+	if args.Sort != nil {
+		if isUnorderedMap(args.Sort) {
 			return &SingleResult{err: ErrMapForOrderedArgument{"sort"}}
 		}
-		sort, err := marshal(fo.Sort, coll.bsonOpts, coll.registry)
+		sort, err := marshal(args.Sort, coll.bsonOpts, coll.registry)
 		if err != nil {
 			return &SingleResult{err: err}
 		}
 		op = op.Sort(sort)
 	}
-	if fo.Upsert != nil {
-		op = op.Upsert(*fo.Upsert)
+	if args.Upsert != nil {
+		op = op.Upsert(*args.Upsert)
 	}
-	if fo.Hint != nil {
-		if isUnorderedMap(fo.Hint) {
+	if args.Hint != nil {
+		if isUnorderedMap(args.Hint) {
 			return &SingleResult{err: ErrMapForOrderedArgument{"hint"}}
 		}
-		hint, err := marshalValue(fo.Hint, coll.bsonOpts, coll.registry)
+		hint, err := marshalValue(args.Hint, coll.bsonOpts, coll.registry)
 		if err != nil {
 			return &SingleResult{err: err}
 		}
 		op = op.Hint(hint)
 	}
-	if fo.Let != nil {
-		let, err := marshal(fo.Let, coll.bsonOpts, coll.registry)
+	if args.Let != nil {
+		let, err := marshal(args.Let, coll.bsonOpts, coll.registry)
 		if err != nil {
 			return &SingleResult{err: err}
 		}
 		op = op.Let(let)
+	}
+	if rawDataOpt := optionsutil.Value(args.Internal, "rawData"); rawDataOpt != nil {
+		if rawData, ok := rawDataOpt.(bool); ok {
+			op = op.RawData(rawData)
+		}
 	}
 
 	return coll.findAndModify(ctx, op)
@@ -1674,8 +1875,11 @@ func (coll *Collection) FindOneAndReplace(ctx context.Context, filter interface{
 // documentation).
 //
 // For more information about the command, see https://www.mongodb.com/docs/manual/reference/command/findAndModify/.
-func (coll *Collection) FindOneAndUpdate(ctx context.Context, filter interface{},
-	update interface{}, opts ...*options.FindOneAndUpdateOptions) *SingleResult {
+func (coll *Collection) FindOneAndUpdate(
+	ctx context.Context,
+	filter any,
+	update any,
+	opts ...options.Lister[options.FindOneAndUpdateOptions]) *SingleResult {
 
 	if ctx == nil {
 		ctx = context.Background()
@@ -1686,9 +1890,12 @@ func (coll *Collection) FindOneAndUpdate(ctx context.Context, filter interface{}
 		return &SingleResult{err: err}
 	}
 
-	fo := options.MergeFindOneAndUpdateOptions(opts...)
-	op := operation.NewFindAndModify(f).ServerAPI(coll.client.serverAPI).Timeout(coll.client.timeout).
-		MaxTime(fo.MaxTime)
+	args, err := mongoutil.NewOptions[options.FindOneAndUpdateOptions](opts...)
+	if err != nil {
+		return &SingleResult{err: fmt.Errorf("failed to construct options from builder: %w", err)}
+	}
+
+	op := operation.NewFindAndModify(f).ServerAPI(coll.client.serverAPI).Timeout(coll.client.timeout).Authenticator(coll.client.authenticator)
 
 	u, err := marshalUpdateValue(update, coll.bsonOpts, coll.registry, true)
 	if err != nil {
@@ -1696,70 +1903,72 @@ func (coll *Collection) FindOneAndUpdate(ctx context.Context, filter interface{}
 	}
 	op = op.Update(u)
 
-	if fo.ArrayFilters != nil {
-		af := fo.ArrayFilters
+	if args.ArrayFilters != nil {
+		af := args.ArrayFilters
 		reg := coll.registry
-		if af.Registry != nil {
-			reg = af.Registry
-		}
-		filtersDoc, err := marshalValue(af.Filters, coll.bsonOpts, reg)
+		filtersDoc, err := marshalValue(af, coll.bsonOpts, reg)
 		if err != nil {
 			return &SingleResult{err: err}
 		}
 		op = op.ArrayFilters(filtersDoc.Data)
 	}
-	if fo.BypassDocumentValidation != nil && *fo.BypassDocumentValidation {
-		op = op.BypassDocumentValidation(*fo.BypassDocumentValidation)
+	if args.BypassDocumentValidation != nil && *args.BypassDocumentValidation {
+		op = op.BypassDocumentValidation(*args.BypassDocumentValidation)
 	}
-	if fo.Collation != nil {
-		op = op.Collation(bsoncore.Document(fo.Collation.ToDocument()))
+	if args.Collation != nil {
+		op = op.Collation(bsoncore.Document(toDocument(args.Collation)))
 	}
-	if fo.Comment != nil {
-		comment, err := marshalValue(fo.Comment, coll.bsonOpts, coll.registry)
+	if args.Comment != nil {
+		comment, err := marshalValue(args.Comment, coll.bsonOpts, coll.registry)
 		if err != nil {
 			return &SingleResult{err: err}
 		}
 		op = op.Comment(comment)
 	}
-	if fo.Projection != nil {
-		proj, err := marshal(fo.Projection, coll.bsonOpts, coll.registry)
+	if args.Projection != nil {
+		proj, err := marshal(args.Projection, coll.bsonOpts, coll.registry)
 		if err != nil {
 			return &SingleResult{err: err}
 		}
 		op = op.Fields(proj)
 	}
-	if fo.ReturnDocument != nil {
-		op = op.NewDocument(*fo.ReturnDocument == options.After)
+	if args.ReturnDocument != nil {
+		op = op.NewDocument(*args.ReturnDocument == options.After)
 	}
-	if fo.Sort != nil {
-		if isUnorderedMap(fo.Sort) {
+	if args.Sort != nil {
+		if isUnorderedMap(args.Sort) {
 			return &SingleResult{err: ErrMapForOrderedArgument{"sort"}}
 		}
-		sort, err := marshal(fo.Sort, coll.bsonOpts, coll.registry)
+		sort, err := marshal(args.Sort, coll.bsonOpts, coll.registry)
 		if err != nil {
 			return &SingleResult{err: err}
 		}
 		op = op.Sort(sort)
 	}
-	if fo.Upsert != nil {
-		op = op.Upsert(*fo.Upsert)
+	if args.Upsert != nil {
+		op = op.Upsert(*args.Upsert)
 	}
-	if fo.Hint != nil {
-		if isUnorderedMap(fo.Hint) {
+	if args.Hint != nil {
+		if isUnorderedMap(args.Hint) {
 			return &SingleResult{err: ErrMapForOrderedArgument{"hint"}}
 		}
-		hint, err := marshalValue(fo.Hint, coll.bsonOpts, coll.registry)
+		hint, err := marshalValue(args.Hint, coll.bsonOpts, coll.registry)
 		if err != nil {
 			return &SingleResult{err: err}
 		}
 		op = op.Hint(hint)
 	}
-	if fo.Let != nil {
-		let, err := marshal(fo.Let, coll.bsonOpts, coll.registry)
+	if args.Let != nil {
+		let, err := marshal(args.Let, coll.bsonOpts, coll.registry)
 		if err != nil {
 			return &SingleResult{err: err}
 		}
 		op = op.Let(let)
+	}
+	if rawDataOpt := optionsutil.Value(args.Internal, "rawData"); rawDataOpt != nil {
+		if rawData, ok := rawDataOpt.(bool); ok {
+			op = op.RawData(rawData)
+		}
 	}
 
 	return coll.findAndModify(ctx, op)
@@ -1778,8 +1987,8 @@ func (coll *Collection) FindOneAndUpdate(ctx context.Context, filter interface{}
 //
 // The opts parameter can be used to specify options for change stream creation (see the options.ChangeStreamOptions
 // documentation).
-func (coll *Collection) Watch(ctx context.Context, pipeline interface{},
-	opts ...*options.ChangeStreamOptions) (*ChangeStream, error) {
+func (coll *Collection) Watch(ctx context.Context, pipeline any,
+	opts ...options.Lister[options.ChangeStreamOptions]) (*ChangeStream, error) {
 
 	csConfig := changeStreamConfig{
 		readConcern:    coll.readConcern,
@@ -1802,7 +2011,7 @@ func (coll *Collection) Indexes() IndexView {
 
 // SearchIndexes returns a SearchIndexView instance that can be used to perform operations on the search indexes for the collection.
 func (coll *Collection) SearchIndexes() SearchIndexView {
-	c, _ := coll.Clone() // Clone() always return a nil error.
+	c := coll.Clone()
 	c.readConcern = nil
 	c.writeConcern = nil
 	return SearchIndexView{
@@ -1812,12 +2021,18 @@ func (coll *Collection) SearchIndexes() SearchIndexView {
 
 // Drop drops the collection on the server. This method ignores "namespace not found" errors so it is safe to drop
 // a collection that does not exist on the server.
-func (coll *Collection) Drop(ctx context.Context) error {
-	// Follow Client-Side Encryption specification to check for encryptedFields.
-	// Drop does not have an encryptedFields option. See: GODRIVER-2413.
-	// Check for encryptedFields from the client EncryptedFieldsMap.
-	// Check for encryptedFields from the server if EncryptedFieldsMap is set.
-	ef := coll.db.getEncryptedFieldsFromMap(coll.name)
+func (coll *Collection) Drop(ctx context.Context, opts ...options.Lister[options.DropCollectionOptions]) error {
+	args, err := mongoutil.NewOptions[options.DropCollectionOptions](opts...)
+	if err != nil {
+		return fmt.Errorf("failed to construct options from builder: %w", err)
+	}
+
+	ef := args.EncryptedFields
+
+	if ef == nil {
+		ef = coll.db.getEncryptedFieldsFromMap(coll.name)
+	}
+
 	if ef == nil && coll.db.client.encryptedFieldsMap != nil {
 		var err error
 		if ef, err = coll.db.getEncryptedFieldsFromServer(ctx, coll.name); err != nil {
@@ -1833,7 +2048,7 @@ func (coll *Collection) Drop(ctx context.Context) error {
 }
 
 // dropEncryptedCollection drops a collection with EncryptedFields.
-func (coll *Collection) dropEncryptedCollection(ctx context.Context, ef interface{}) error {
+func (coll *Collection) dropEncryptedCollection(ctx context.Context, ef any) error {
 	efBSON, err := marshal(ef, coll.bsonOpts, coll.registry)
 	if err != nil {
 		return fmt.Errorf("error transforming document: %w", err)
@@ -1883,7 +2098,7 @@ func (coll *Collection) drop(ctx context.Context) error {
 	if sess.TransactionRunning() {
 		wc = nil
 	}
-	if !writeconcern.AckWrite(wc) {
+	if !wc.Acknowledged() {
 		sess = nil
 	}
 
@@ -1894,15 +2109,49 @@ func (coll *Collection) drop(ctx context.Context) error {
 		ServerSelector(selector).ClusterClock(coll.client.clock).
 		Database(coll.db.name).Collection(coll.name).
 		Deployment(coll.client.deployment).Crypt(coll.client.cryptFLE).
-		ServerAPI(coll.client.serverAPI).Timeout(coll.client.timeout)
+		ServerAPI(coll.client.serverAPI).Timeout(coll.client.timeout).
+		Authenticator(coll.client.authenticator)
 	err = op.Execute(ctx)
 
 	// ignore namespace not found errors
-	driverErr, ok := err.(driver.Error)
-	if !ok || (ok && !driverErr.NamespaceNotFound()) {
-		return replaceErrors(err)
+	var driverErr driver.Error
+	if !errors.As(err, &driverErr) || !driverErr.NamespaceNotFound() {
+		return wrapErrors(err)
 	}
 	return nil
+}
+
+func toDocument(co *options.Collation) bson.Raw {
+	idx, doc := bsoncore.AppendDocumentStart(nil)
+	if co.Locale != "" {
+		doc = bsoncore.AppendStringElement(doc, "locale", co.Locale)
+	}
+	if co.CaseLevel {
+		doc = bsoncore.AppendBooleanElement(doc, "caseLevel", true)
+	}
+	if co.CaseFirst != "" {
+		doc = bsoncore.AppendStringElement(doc, "caseFirst", co.CaseFirst)
+	}
+	if co.Strength != 0 {
+		doc = bsoncore.AppendInt32Element(doc, "strength", int32(co.Strength))
+	}
+	if co.NumericOrdering {
+		doc = bsoncore.AppendBooleanElement(doc, "numericOrdering", true)
+	}
+	if co.Alternate != "" {
+		doc = bsoncore.AppendStringElement(doc, "alternate", co.Alternate)
+	}
+	if co.MaxVariable != "" {
+		doc = bsoncore.AppendStringElement(doc, "maxVariable", co.MaxVariable)
+	}
+	if co.Normalization {
+		doc = bsoncore.AppendBooleanElement(doc, "normalization", true)
+	}
+	if co.Backwards {
+		doc = bsoncore.AppendBooleanElement(doc, "backwards", true)
+	}
+	doc, _ = bsoncore.AppendDocumentEnd(doc, idx)
+	return doc
 }
 
 type pinnedServerSelector struct {
@@ -1910,6 +2159,8 @@ type pinnedServerSelector struct {
 	fallback description.ServerSelector
 	session  *session.Client
 }
+
+var _ description.ServerSelector = pinnedServerSelector{}
 
 func (pss pinnedServerSelector) String() string {
 	if pss.stringer == nil {
@@ -1923,10 +2174,10 @@ func (pss pinnedServerSelector) SelectServer(
 	t description.Topology,
 	svrs []description.Server,
 ) ([]description.Server, error) {
-	if pss.session != nil && pss.session.PinnedServer != nil {
+	if pss.session != nil && pss.session.PinnedServerAddr != nil {
 		// If there is a pinned server, try to find it in the list of candidates.
 		for _, candidate := range svrs {
-			if candidate.Addr == pss.session.PinnedServer.Addr {
+			if candidate.Addr == *pss.session.PinnedServerAddr {
 				return []description.Server{candidate}, nil
 			}
 		}
@@ -1937,7 +2188,7 @@ func (pss pinnedServerSelector) SelectServer(
 	return pss.fallback.SelectServer(t, svrs)
 }
 
-func makePinnedSelector(sess *session.Client, fallback description.ServerSelector) description.ServerSelector {
+func makePinnedSelector(sess *session.Client, fallback description.ServerSelector) pinnedServerSelector {
 	pss := pinnedServerSelector{
 		session:  sess,
 		fallback: fallback,
@@ -1950,34 +2201,47 @@ func makePinnedSelector(sess *session.Client, fallback description.ServerSelecto
 	return pss
 }
 
-func makeReadPrefSelector(sess *session.Client, selector description.ServerSelector, localThreshold time.Duration) description.ServerSelector {
+func makeReadPrefSelector(
+	sess *session.Client,
+	selector description.ServerSelector,
+	localThreshold time.Duration,
+) pinnedServerSelector {
 	if sess != nil && sess.TransactionRunning() {
-		selector = description.CompositeSelector([]description.ServerSelector{
-			description.ReadPrefSelector(sess.CurrentRp),
-			description.LatencySelector(localThreshold),
-		})
+		selector = &serverselector.Composite{
+			Selectors: []description.ServerSelector{
+				&serverselector.ReadPref{ReadPref: sess.CurrentRp},
+				&serverselector.Latency{Latency: localThreshold},
+			},
+		}
 	}
 
 	return makePinnedSelector(sess, selector)
 }
 
-func makeOutputAggregateSelector(sess *session.Client, rp *readpref.ReadPref, localThreshold time.Duration) description.ServerSelector {
+func makeOutputAggregateSelector(
+	sess *session.Client,
+	rp *readpref.ReadPref,
+	localThreshold time.Duration,
+) pinnedServerSelector {
 	if sess != nil && sess.TransactionRunning() {
 		// Use current transaction's read preference if available
 		rp = sess.CurrentRp
 	}
 
-	selector := description.CompositeSelector([]description.ServerSelector{
-		description.OutputAggregateSelector(rp),
-		description.LatencySelector(localThreshold),
-	})
+	selector := &serverselector.Composite{
+		Selectors: []description.ServerSelector{
+			&serverselector.ReadPref{ReadPref: rp, IsOutputAggregate: true},
+			&serverselector.Latency{Latency: localThreshold},
+		},
+	}
+
 	return makePinnedSelector(sess, selector)
 }
 
 // isUnorderedMap returns true if val is a map with more than 1 element. It is typically used to
 // check for unordered Go values that are used in nested command documents where different field
 // orders mean different things. Examples are the "sort" and "hint" fields.
-func isUnorderedMap(val interface{}) bool {
+func isUnorderedMap(val any) bool {
 	refValue := reflect.ValueOf(val)
 	return refValue.Kind() == reflect.Map && refValue.Len() > 1
 }

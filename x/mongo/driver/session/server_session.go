@@ -9,9 +9,9 @@ package session
 import (
 	"time"
 
-	"github.com/pritunl/mongo-go-driver/internal/uuid"
-	"github.com/pritunl/mongo-go-driver/mongo/description"
-	"github.com/pritunl/mongo-go-driver/x/bsonx/bsoncore"
+	"github.com/pritunl/mongo-go-driver/v2/internal/uuid"
+	"github.com/pritunl/mongo-go-driver/v2/x/bsonx/bsoncore"
+	"github.com/pritunl/mongo-go-driver/v2/x/mongo/driver/description"
 )
 
 // Server is an open session with the server.
@@ -27,7 +27,7 @@ type Server struct {
 func (ss *Server) expired(topoDesc topologyDescription) bool {
 	// There is no server monitoring in LB mode, so we do not track session timeout minutes from server hello responses
 	// and never consider sessions to be expired.
-	if topoDesc.kind == description.LoadBalanced {
+	if topoDesc.kind == description.TopologyKindLoadBalanced {
 		return false
 	}
 

@@ -10,25 +10,26 @@ import (
 	"context"
 	"errors"
 
-	"github.com/pritunl/mongo-go-driver/event"
-	"github.com/pritunl/mongo-go-driver/internal/driverutil"
-	"github.com/pritunl/mongo-go-driver/mongo/description"
-	"github.com/pritunl/mongo-go-driver/x/bsonx/bsoncore"
-	"github.com/pritunl/mongo-go-driver/x/mongo/driver"
-	"github.com/pritunl/mongo-go-driver/x/mongo/driver/session"
+	"github.com/pritunl/mongo-go-driver/v2/event"
+	"github.com/pritunl/mongo-go-driver/v2/internal/driverutil"
+	"github.com/pritunl/mongo-go-driver/v2/x/bsonx/bsoncore"
+	"github.com/pritunl/mongo-go-driver/v2/x/mongo/driver"
+	"github.com/pritunl/mongo-go-driver/v2/x/mongo/driver/description"
+	"github.com/pritunl/mongo-go-driver/v2/x/mongo/driver/session"
 )
 
 // EndSessions performs an endSessions operation.
 type EndSessions struct {
-	sessionIDs bsoncore.Document
-	session    *session.Client
-	clock      *session.ClusterClock
-	monitor    *event.CommandMonitor
-	crypt      driver.Crypt
-	database   string
-	deployment driver.Deployment
-	selector   description.ServerSelector
-	serverAPI  *driver.ServerAPIOptions
+	authenticator driver.Authenticator
+	sessionIDs    bsoncore.Document
+	session       *session.Client
+	clock         *session.ClusterClock
+	monitor       *event.CommandMonitor
+	crypt         driver.Crypt
+	database      string
+	deployment    driver.Deployment
+	selector      description.ServerSelector
+	serverAPI     *driver.ServerAPIOptions
 }
 
 // NewEndSessions constructs and returns a new EndSessions.
@@ -38,9 +39,8 @@ func NewEndSessions(sessionIDs bsoncore.Document) *EndSessions {
 	}
 }
 
-func (es *EndSessions) processResponse(driver.ResponseInfo) error {
-	var err error
-	return err
+func (es *EndSessions) processResponse(context.Context, bsoncore.Document, driver.ResponseInfo) error {
+	return nil
 }
 
 // Execute runs this operations and returns an error if the operation did not execute successfully.
@@ -61,6 +61,7 @@ func (es *EndSessions) Execute(ctx context.Context) error {
 		Selector:          es.selector,
 		ServerAPI:         es.serverAPI,
 		Name:              driverutil.EndSessionsOp,
+		Authenticator:     es.authenticator,
 	}.Execute(ctx)
 
 }
@@ -159,5 +160,15 @@ func (es *EndSessions) ServerAPI(serverAPI *driver.ServerAPIOptions) *EndSession
 	}
 
 	es.serverAPI = serverAPI
+	return es
+}
+
+// Authenticator sets the authenticator to use for this operation.
+func (es *EndSessions) Authenticator(authenticator driver.Authenticator) *EndSessions {
+	if es == nil {
+		es = new(EndSessions)
+	}
+
+	es.authenticator = authenticator
 	return es
 }

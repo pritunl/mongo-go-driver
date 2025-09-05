@@ -9,31 +9,29 @@ package mongo
 import (
 	"errors"
 	"fmt"
+	"reflect"
 	"testing"
 
-	"github.com/pritunl/mongo-go-driver/bson"
-	"github.com/pritunl/mongo-go-driver/bson/bsoncodec"
-	"github.com/pritunl/mongo-go-driver/bson/bsontype"
-	"github.com/pritunl/mongo-go-driver/bson/primitive"
-	"github.com/pritunl/mongo-go-driver/internal/assert"
-	"github.com/pritunl/mongo-go-driver/internal/codecutil"
-	"github.com/pritunl/mongo-go-driver/internal/require"
-	"github.com/pritunl/mongo-go-driver/mongo/options"
-	"github.com/pritunl/mongo-go-driver/x/bsonx/bsoncore"
+	"github.com/pritunl/mongo-go-driver/v2/bson"
+	"github.com/pritunl/mongo-go-driver/v2/internal/assert"
+	"github.com/pritunl/mongo-go-driver/v2/internal/codecutil"
+	"github.com/pritunl/mongo-go-driver/v2/internal/require"
+	"github.com/pritunl/mongo-go-driver/v2/mongo/options"
+	"github.com/pritunl/mongo-go-driver/v2/x/bsonx/bsoncore"
 )
 
 func TestEnsureID(t *testing.T) {
 	t.Parallel()
 
-	oid := primitive.NewObjectID()
+	oid := bson.NewObjectID()
 
 	testCases := []struct {
 		description string
 		// TODO: Registry? DecodeOptions?
 		doc    bsoncore.Document
-		oid    primitive.ObjectID
+		oid    bson.ObjectID
 		want   bsoncore.Document
-		wantID interface{}
+		wantID any
 	}{
 		{
 			description: "missing _id should be first element",
@@ -125,9 +123,9 @@ func TestEnsureID(t *testing.T) {
 			assert.Equal(t, tc.wantID, gotID, "expected and actual IDs are different")
 
 			// Ensure that if the unmarshaled "_id" value is a
-			// primitive.ObjectID that it is a deep copy and does not share any
+			// bson.ObjectID that it is a deep copy and does not share any
 			// memory with the document byte slice.
-			if oid, ok := gotID.(primitive.ObjectID); ok {
+			if oid, ok := gotID.(bson.ObjectID); ok {
 				assert.DifferentAddressRanges(t, tc.doc, oid[:])
 			}
 		})
@@ -141,13 +139,13 @@ func TestEnsureID_NilObjectID(t *testing.T) {
 		AppendString("foo", "bar").
 		Build()
 
-	got, gotIDI, err := ensureID(doc, primitive.NilObjectID, nil, nil)
+	got, gotIDI, err := ensureID(doc, bson.NilObjectID, nil, nil)
 	assert.NoError(t, err)
 
-	gotID, ok := gotIDI.(primitive.ObjectID)
+	gotID, ok := gotIDI.(bson.ObjectID)
 
 	assert.True(t, ok)
-	assert.NotEqual(t, primitive.NilObjectID, gotID)
+	assert.NotEqual(t, bson.NilObjectID, gotID)
 
 	want := bsoncore.NewDocumentBuilder().
 		AppendObjectID("_id", gotID).
@@ -197,7 +195,7 @@ func TestMarshalAggregatePipeline(t *testing.T) {
 
 	testCases := []struct {
 		name           string
-		pipeline       interface{}
+		pipeline       any
 		arr            bson.A
 		hasOutputStage bool
 		err            error
@@ -207,7 +205,7 @@ func TestMarshalAggregatePipeline(t *testing.T) {
 			Pipeline{{{"hello", func() {}}}},
 			nil,
 			false,
-			MarshalError{Value: primitive.D{}, Err: errors.New("no encoder found for func()")},
+			MarshalError{Value: bson.D{}, Err: errors.New("no encoder found for func()")},
 		},
 		{
 			"Pipeline/success",
@@ -240,15 +238,15 @@ func TestMarshalAggregatePipeline(t *testing.T) {
 			nil,
 		},
 		{
-			"primitive.A/error",
-			primitive.A{"5"},
+			"bson.A/error",
+			bson.A{"5"},
 			nil,
 			false,
 			MarshalError{Value: "", Err: errors.New("WriteString can only write while positioned on a Element or Value but is positioned on a TopLevel")},
 		},
 		{
-			"primitive.A/success",
-			primitive.A{bson.D{{"$limit", int32(12345)}}, map[string]interface{}{"$count": "foobar"}},
+			"bson.A/success",
+			bson.A{bson.D{{"$limit", int32(12345)}}, map[string]any{"$count": "foobar"}},
 			bson.A{
 				bson.D{{"$limit", int(12345)}},
 				bson.D{{"$count", "foobar"}},
@@ -265,7 +263,7 @@ func TestMarshalAggregatePipeline(t *testing.T) {
 		},
 		{
 			"bson.A/success",
-			bson.A{bson.D{{"$limit", int32(12345)}}, map[string]interface{}{"$count": "foobar"}},
+			bson.A{bson.D{{"$limit", int32(12345)}}, map[string]any{"$count": "foobar"}},
 			bson.A{
 				bson.D{{"$limit", int32(12345)}},
 				bson.D{{"$count", "foobar"}},
@@ -274,15 +272,15 @@ func TestMarshalAggregatePipeline(t *testing.T) {
 			nil,
 		},
 		{
-			"[]interface{}/error",
-			[]interface{}{"5"},
+			"[]any/error",
+			[]any{"5"},
 			nil,
 			false,
 			MarshalError{Value: "", Err: errors.New("WriteString can only write while positioned on a Element or Value but is positioned on a TopLevel")},
 		},
 		{
-			"[]interface{}/success",
-			[]interface{}{bson.D{{"$limit", int32(12345)}}, map[string]interface{}{"$count": "foobar"}},
+			"[]any/success",
+			[]any{bson.D{{"$limit", int32(12345)}}, map[string]any{"$count": "foobar"}},
 			bson.A{
 				bson.D{{"$limit", int32(12345)}},
 				bson.D{{"$count", "foobar"}},
@@ -291,29 +289,29 @@ func TestMarshalAggregatePipeline(t *testing.T) {
 			nil,
 		},
 		{
-			"bsoncodec.ValueMarshaler/MarshalBSONValue error",
+			"bson.ValueMarshaler/MarshalBSONValue error",
 			bvMarsh{err: errors.New("MarshalBSONValue error")},
 			nil,
 			false,
 			errors.New("MarshalBSONValue error"),
 		},
 		{
-			"bsoncodec.ValueMarshaler/not array",
-			bvMarsh{t: bsontype.String},
+			"bson.ValueMarshaler/not array",
+			bvMarsh{t: bson.TypeString},
 			nil,
 			false,
-			fmt.Errorf("ValueMarshaler returned a %v, but was expecting %v", bsontype.String, bsontype.Array),
+			fmt.Errorf("ValueMarshaler returned a %v, but was expecting %v", bson.TypeString, bson.TypeArray),
 		},
 		{
-			"bsoncodec.ValueMarshaler/UnmarshalBSONValue error",
+			"bson.ValueMarshaler/UnmarshalBSONValue error",
 			bvMarsh{err: errors.New("UnmarshalBSONValue error")},
 			nil,
 			false,
 			errors.New("UnmarshalBSONValue error"),
 		},
 		{
-			"bsoncodec.ValueMarshaler/success",
-			bvMarsh{t: bsontype.Array, data: arr},
+			"bson.ValueMarshaler/success",
+			bvMarsh{t: bson.TypeArray, data: arr},
 			bson.A{
 				bson.D{{"$limit", int32(12345)}},
 			},
@@ -321,8 +319,8 @@ func TestMarshalAggregatePipeline(t *testing.T) {
 			nil,
 		},
 		{
-			"bsoncodec.ValueMarshaler/success nil",
-			bvMarsh{t: bsontype.Array},
+			"bson.ValueMarshaler/success nil",
+			bvMarsh{t: bson.TypeArray},
 			nil,
 			false,
 			nil,
@@ -343,14 +341,14 @@ func TestMarshalAggregatePipeline(t *testing.T) {
 		},
 		{
 			"array/error",
-			[1]interface{}{int64(42)},
+			[1]any{int64(42)},
 			nil,
 			false,
 			MarshalError{Value: int64(0), Err: errors.New("WriteInt64 can only write while positioned on a Element or Value but is positioned on a TopLevel")},
 		},
 		{
 			"array/success",
-			[1]interface{}{primitive.D{{"$limit", int64(12345)}}},
+			[1]any{bson.D{{"$limit", int64(12345)}}},
 			bson.A{
 				bson.D{{"$limit", int64(12345)}},
 			},
@@ -359,14 +357,14 @@ func TestMarshalAggregatePipeline(t *testing.T) {
 		},
 		{
 			"slice/error",
-			[]interface{}{int64(42)},
+			[]any{int64(42)},
 			nil,
 			false,
 			MarshalError{Value: int64(0), Err: errors.New("WriteInt64 can only write while positioned on a Element or Value but is positioned on a TopLevel")},
 		},
 		{
 			"slice/success",
-			[]interface{}{primitive.D{{"$limit", int64(12345)}}},
+			[]any{bson.D{{"$limit", int64(12345)}}},
 			bson.A{
 				bson.D{{"$limit", int64(12345)}},
 			},
@@ -416,7 +414,7 @@ func TestMarshalAggregatePipeline(t *testing.T) {
 			bson.D{{"x", 1}},
 			nil,
 			false,
-			errors.New("primitive.D is not an allowed pipeline type as it represents a single document. Use bson.A or mongo.Pipeline instead"),
+			errors.New("bson.D is not an allowed pipeline type as it represents a single document. Use bson.A or mongo.Pipeline instead"),
 		},
 		{
 			"semantic single document/bson.Raw",
@@ -528,9 +526,9 @@ func TestMarshalValue(t *testing.T) {
 
 	testCases := []struct {
 		name     string
-		value    interface{}
+		value    any
 		bsonOpts *options.BSONOptions
-		registry *bsoncodec.Registry
+		registry *bson.Registry
 		want     bsoncore.Value
 		wantErr  error
 	}{
@@ -543,7 +541,7 @@ func TestMarshalValue(t *testing.T) {
 			name:  "value marshaler",
 			value: valueMarshaler,
 			want: bsoncore.Value{
-				Type: valueMarshaler.t,
+				Type: bsoncore.Type(valueMarshaler.t),
 				Data: valueMarshaler.data,
 			},
 		},
@@ -551,7 +549,7 @@ func TestMarshalValue(t *testing.T) {
 			name:  "document",
 			value: bson.D{{Key: "x", Value: int64(1)}},
 			want: bsoncore.Value{
-				Type: bson.TypeEmbeddedDocument,
+				Type: bsoncore.TypeEmbeddedDocument,
 				Data: bsoncore.NewDocumentBuilder().
 					AppendInt64("x", 1).
 					Build(),
@@ -562,7 +560,7 @@ func TestMarshalValue(t *testing.T) {
 			value: struct {
 				Int         int64
 				NilBytes    []byte
-				NilMap      map[string]interface{}
+				NilMap      map[string]any
 				NilStrings  []string
 				ZeroStruct  struct{ X int } `bson:"_,omitempty"`
 				StringerMap map[*bson.RawValue]bool
@@ -584,7 +582,7 @@ func TestMarshalValue(t *testing.T) {
 				UseJSONStructTags:       true,
 			},
 			want: bsoncore.Value{
-				Type: bson.TypeEmbeddedDocument,
+				Type: bsoncore.TypeEmbeddedDocument,
 				Data: bsoncore.NewDocumentBuilder().
 					AppendInt32("int", 1).
 					AppendBinary("nilbytes", 0, []byte{}).
@@ -611,14 +609,46 @@ func TestMarshalValue(t *testing.T) {
 	}
 }
 
-var _ bsoncodec.ValueMarshaler = bvMarsh{}
+func TestGetEncoder(t *testing.T) {
+	t.Parallel()
+
+	encT := reflect.TypeOf((*bson.Encoder)(nil))
+	ctxT := reflect.TypeOf(bson.EncodeContext{})
+	for i := 0; i < encT.NumMethod(); i++ {
+		m := encT.Method(i)
+		// Test methods with no input/output parameter.
+		if m.Type.NumIn() != 1 || m.Type.NumOut() != 0 {
+			continue
+		}
+		t.Run(m.Name, func(t *testing.T) {
+			var opts options.BSONOptions
+			optsV := reflect.ValueOf(&opts).Elem()
+			f, ok := optsV.Type().FieldByName(m.Name)
+			require.True(t, ok, "expected %s field in %s", m.Name, optsV.Type())
+
+			wantEnc := reflect.ValueOf(bson.NewEncoder(nil))
+			_ = wantEnc.Method(i).Call(nil)
+			wantCtx := wantEnc.Elem().Field(0)
+			require.Equal(t, ctxT, wantCtx.Type())
+
+			optsV.FieldByIndex(f.Index).SetBool(true)
+			gotEnc := getEncoder(nil, &opts, nil)
+			gotCtx := reflect.ValueOf(gotEnc).Elem().Field(0)
+			require.Equal(t, ctxT, gotCtx.Type())
+
+			assert.True(t, gotCtx.Equal(wantCtx), "expected %v: %v, got: %v", ctxT, wantCtx, gotCtx)
+		})
+	}
+}
+
+var _ bson.ValueMarshaler = bvMarsh{}
 
 type bvMarsh struct {
-	t    bsontype.Type
+	t    bson.Type
 	data []byte
 	err  error
 }
 
-func (b bvMarsh) MarshalBSONValue() (bsontype.Type, []byte, error) {
-	return b.t, b.data, b.err
+func (b bvMarsh) MarshalBSONValue() (byte, []byte, error) {
+	return byte(b.t), b.data, b.err
 }

@@ -9,7 +9,7 @@ package bsonutil
 import (
 	"fmt"
 
-	"github.com/pritunl/mongo-go-driver/bson"
+	"github.com/pritunl/mongo-go-driver/v2/bson"
 )
 
 // StringSliceFromRawValue decodes the provided BSON value into a []string. This function returns an error if the value
@@ -37,9 +37,9 @@ func StringSliceFromRawValue(name string, val bson.RawValue) ([]string, error) {
 	return strs, nil
 }
 
-// RawToDocuments converts a bson.Raw that is internally an array of documents to []bson.Raw.
-func RawToDocuments(doc bson.Raw) []bson.Raw {
-	values, err := doc.Values()
+// RawArrayToDocuments converts an array of documents to []bson.Raw.
+func RawArrayToDocuments(arr bson.RawArray) []bson.Raw {
+	values, err := arr.Values()
 	if err != nil {
 		panic(fmt.Sprintf("error converting BSON document to values: %v", err))
 	}
@@ -52,9 +52,9 @@ func RawToDocuments(doc bson.Raw) []bson.Raw {
 	return out
 }
 
-// RawToInterfaces takes one or many bson.Raw documents and returns them as a []interface{}.
-func RawToInterfaces(docs ...bson.Raw) []interface{} {
-	out := make([]interface{}, len(docs))
+// RawToInterfaces takes one or many bson.Raw documents and returns them as a []any.
+func RawToInterfaces(docs ...bson.Raw) []any {
+	out := make([]any, len(docs))
 	for i := range docs {
 		out[i] = docs[i]
 	}

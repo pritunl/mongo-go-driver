@@ -12,8 +12,6 @@ import (
 	"math"
 	"reflect"
 	"testing"
-
-	"github.com/pritunl/mongo-go-driver/bson/primitive"
 )
 
 func TestArrayBuilder(t *testing.T) {
@@ -23,139 +21,139 @@ func TestArrayBuilder(t *testing.T) {
 
 	testCases := []struct {
 		name     string
-		fn       interface{}
-		params   []interface{}
+		fn       any
+		params   []any
 		expected []byte
 	}{
 		{
 			"AppendInt32",
 			NewArrayBuilder().AppendInt32,
-			[]interface{}{int32(256)},
+			[]any{int32(256)},
 			BuildDocumentFromElements(nil, AppendInt32Element(nil, "0", int32(256))),
 		},
 		{
 			"AppendDouble",
 			NewArrayBuilder().AppendDouble,
-			[]interface{}{float64(3.14159)},
+			[]any{float64(3.14159)},
 			BuildDocumentFromElements(nil, AppendDoubleElement(nil, "0", float64(3.14159))),
 		},
 		{
 			"AppendString",
 			NewArrayBuilder().AppendString,
-			[]interface{}{"x"},
+			[]any{"x"},
 			BuildDocumentFromElements(nil, AppendStringElement(nil, "0", "x")),
 		},
 		{
 			"AppendDocument",
 			NewArrayBuilder().AppendDocument,
-			[]interface{}{[]byte{0x05, 0x00, 0x00, 0x00, 0x00}},
+			[]any{[]byte{0x05, 0x00, 0x00, 0x00, 0x00}},
 			BuildDocumentFromElements(nil, AppendDocumentElement(nil, "0", []byte{0x05, 0x00, 0x00, 0x00, 0x00})),
 		},
 		{
 			"AppendArray",
 			NewArrayBuilder().AppendArray,
-			[]interface{}{[]byte{0x05, 0x00, 0x00, 0x00, 0x00}},
+			[]any{[]byte{0x05, 0x00, 0x00, 0x00, 0x00}},
 			BuildDocumentFromElements(nil, AppendArrayElement(nil, "0", []byte{0x05, 0x00, 0x00, 0x00, 0x00})),
 		},
 		{
 			"AppendBinary",
 			NewArrayBuilder().AppendBinary,
-			[]interface{}{byte(0x02), []byte{0x01, 0x02, 0x03}},
+			[]any{byte(0x02), []byte{0x01, 0x02, 0x03}},
 			BuildDocumentFromElements(nil, AppendBinaryElement(nil, "0", byte(0x02), []byte{0x01, 0x02, 0x03})),
 		},
 		{
 			"AppendObjectID",
 			NewArrayBuilder().AppendObjectID,
-			[]interface{}{
-				primitive.ObjectID{0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0A, 0x0B, 0x0C},
+			[]any{
+				[12]byte{0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0A, 0x0B, 0x0C},
 			},
 			BuildDocumentFromElements(nil, AppendObjectIDElement(nil, "0",
-				primitive.ObjectID{0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0A, 0x0B, 0x0C})),
+				[12]byte{0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0A, 0x0B, 0x0C})),
 		},
 		{
 			"AppendBoolean",
 			NewArrayBuilder().AppendBoolean,
-			[]interface{}{true},
+			[]any{true},
 			BuildDocumentFromElements(nil, AppendBooleanElement(nil, "0", true)),
 		},
 		{
 			"AppendDateTime",
 			NewArrayBuilder().AppendDateTime,
-			[]interface{}{int64(256)},
+			[]any{int64(256)},
 			BuildDocumentFromElements(nil, AppendDateTimeElement(nil, "0", int64(256))),
 		},
 		{
 			"AppendNull",
 			NewArrayBuilder().AppendNull,
-			[]interface{}{},
+			[]any{},
 			BuildDocumentFromElements(nil, AppendNullElement(nil, "0")),
 		},
 		{
 			"AppendRegex",
 			NewArrayBuilder().AppendRegex,
-			[]interface{}{"bar", "baz"},
+			[]any{"bar", "baz"},
 			BuildDocumentFromElements(nil, AppendRegexElement(nil, "0", "bar", "baz")),
 		},
 		{
 			"AppendJavaScript",
 			NewArrayBuilder().AppendJavaScript,
-			[]interface{}{"barbaz"},
+			[]any{"barbaz"},
 			BuildDocumentFromElements(nil, AppendJavaScriptElement(nil, "0", "barbaz")),
 		},
 		{
 			"AppendCodeWithScope",
 			NewArrayBuilder().AppendCodeWithScope,
-			[]interface{}{"barbaz", Document([]byte{0x05, 0x00, 0x00, 0x00, 0x00})},
+			[]any{"barbaz", Document([]byte{0x05, 0x00, 0x00, 0x00, 0x00})},
 			BuildDocumentFromElements(nil, AppendCodeWithScopeElement(nil, "0", "barbaz", Document([]byte{0x05, 0x00, 0x00, 0x00, 0x00}))),
 		},
 		{
 			"AppendTimestamp",
 			NewArrayBuilder().AppendTimestamp,
-			[]interface{}{uint32(65536), uint32(256)},
+			[]any{uint32(65536), uint32(256)},
 			BuildDocumentFromElements(nil, AppendTimestampElement(nil, "0", uint32(65536), uint32(256))),
 		},
 		{
 			"AppendInt64",
 			NewArrayBuilder().AppendInt64,
-			[]interface{}{int64(4294967296)},
+			[]any{int64(4294967296)},
 			BuildDocumentFromElements(nil, AppendInt64Element(nil, "0", int64(4294967296))),
 		},
 		{
 			"AppendDecimal128",
 			NewArrayBuilder().AppendDecimal128,
-			[]interface{}{primitive.NewDecimal128(4294967296, 65536)},
-			BuildDocumentFromElements(nil, AppendDecimal128Element(nil, "0", primitive.NewDecimal128(4294967296, 65536))),
+			[]any{uint64(4294967296), uint64(65536)},
+			BuildDocumentFromElements(nil, AppendDecimal128Element(nil, "0", 4294967296, 65536)),
 		},
 		{
 			"AppendMaxKey",
 			NewArrayBuilder().AppendMaxKey,
-			[]interface{}{},
+			[]any{},
 			BuildDocumentFromElements(nil, AppendMaxKeyElement(nil, "0")),
 		},
 		{
 			"AppendMinKey",
 			NewArrayBuilder().AppendMinKey,
-			[]interface{}{},
+			[]any{},
 			BuildDocumentFromElements(nil, AppendMinKeyElement(nil, "0")),
 		},
 		{
 			"AppendSymbol",
 			NewArrayBuilder().AppendSymbol,
-			[]interface{}{"barbaz"},
+			[]any{"barbaz"},
 			BuildDocumentFromElements(nil, AppendSymbolElement(nil, "0", "barbaz")),
 		},
 		{
 			"AppendDBPointer",
 			NewArrayBuilder().AppendDBPointer,
-			[]interface{}{"barbaz",
-				primitive.ObjectID{0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0A, 0x0B, 0x0C}},
+			[]any{"barbaz",
+				[12]byte{0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0A, 0x0B, 0x0C}},
 			BuildDocumentFromElements(nil, AppendDBPointerElement(nil, "0", "barbaz",
-				primitive.ObjectID{0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0A, 0x0B, 0x0C})),
+				[12]byte{0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0A, 0x0B, 0x0C})),
 		},
 		{
 			"AppendUndefined",
 			NewArrayBuilder().AppendUndefined,
-			[]interface{}{},
+			[]any{},
 			BuildDocumentFromElements(nil, AppendUndefinedElement(nil, "0")),
 		},
 	}

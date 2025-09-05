@@ -10,7 +10,7 @@
 package mongocrypt
 
 import (
-	"github.com/pritunl/mongo-go-driver/x/bsonx/bsoncore"
+	"github.com/pritunl/mongo-go-driver/v2/x/bsonx/bsoncore"
 )
 
 // Context represents a mongocrypt_ctx_t handle

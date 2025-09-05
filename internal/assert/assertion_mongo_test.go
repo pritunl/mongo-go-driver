@@ -9,7 +9,7 @@ package assert
 import (
 	"testing"
 
-	"github.com/pritunl/mongo-go-driver/bson"
+	"github.com/pritunl/mongo-go-driver/v2/bson"
 )
 
 func TestDifferentAddressRanges(t *testing.T) {

@@ -14,15 +14,17 @@ import (
 	"context"
 	"fmt"
 	"net"
+	"net/http"
 
-	"github.com/pritunl/mongo-go-driver/x/mongo/driver/auth/internal/gssapi"
+	"github.com/pritunl/mongo-go-driver/v2/x/mongo/driver"
+	"github.com/pritunl/mongo-go-driver/v2/x/mongo/driver/auth/internal/gssapi"
 )
 
 // GSSAPI is the mechanism name for GSSAPI.
 const GSSAPI = "GSSAPI"
 
-func newGSSAPIAuthenticator(cred *Cred) (Authenticator, error) {
-	if cred.Source != "" && cred.Source != "$external" {
+func newGSSAPIAuthenticator(cred *Cred, _ *http.Client) (Authenticator, error) {
+	if cred.Source != "" && cred.Source != sourceExternal {
 		return nil, newAuthError("GSSAPI source must be empty or $external", nil)
 	}
 
@@ -43,8 +45,8 @@ type GSSAPIAuthenticator struct {
 }
 
 // Auth authenticates the connection.
-func (a *GSSAPIAuthenticator) Auth(ctx context.Context, cfg *Config) error {
-	target := cfg.Description.Addr.String()
+func (a *GSSAPIAuthenticator) Auth(ctx context.Context, cfg *driver.AuthConfig) error {
+	target := cfg.Connection.Description().Addr.String()
 	hostname, _, err := net.SplitHostPort(target)
 	if err != nil {
 		return newAuthError(fmt.Sprintf("invalid endpoint (%s) specified: %s", target, err), nil)
@@ -55,5 +57,10 @@ func (a *GSSAPIAuthenticator) Auth(ctx context.Context, cfg *Config) error {
 	if err != nil {
 		return newAuthError("error creating gssapi", err)
 	}
-	return ConductSaslConversation(ctx, cfg, "$external", client)
+	return ConductSaslConversation(ctx, cfg, sourceExternal, client)
+}
+
+// Reauth reauthenticates the connection.
+func (a *GSSAPIAuthenticator) Reauth(_ context.Context, _ *driver.AuthConfig) error {
+	return newAuthError("GSSAPI does not support reauthentication", nil)
 }

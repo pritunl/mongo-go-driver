@@ -11,9 +11,9 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/pritunl/mongo-go-driver/internal/aws/credentials"
-	"github.com/pritunl/mongo-go-driver/internal/credproviders"
-	"github.com/pritunl/mongo-go-driver/x/bsonx/bsoncore"
+	"github.com/pritunl/mongo-go-driver/v2/internal/aws/credentials"
+	"github.com/pritunl/mongo-go-driver/v2/internal/credproviders"
+	"github.com/pritunl/mongo-go-driver/v2/x/bsonx/bsoncore"
 )
 
 // AzureCredentialProvider provides Azure credentials.

@@ -10,8 +10,8 @@ import (
 	"sync"
 	"sync/atomic"
 
-	"github.com/pritunl/mongo-go-driver/mongo/description"
-	"github.com/pritunl/mongo-go-driver/x/bsonx/bsoncore"
+	"github.com/pritunl/mongo-go-driver/v2/x/bsonx/bsoncore"
+	"github.com/pritunl/mongo-go-driver/v2/x/mongo/driver/description"
 )
 
 // Node represents a server session in a linked list
@@ -65,7 +65,7 @@ func (p *Pool) updateTimeout() {
 	case newDesc := <-p.descChan:
 		p.latestTopology = topologyDescription{
 			kind:           newDesc.Kind,
-			timeoutMinutes: newDesc.SessionTimeoutMinutesPtr,
+			timeoutMinutes: newDesc.SessionTimeoutMinutes,
 		}
 	default:
 		// no new description waiting

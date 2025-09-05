@@ -15,7 +15,7 @@ import (
 	"testing"
 
 	"github.com/google/go-cmp/cmp"
-	"github.com/pritunl/mongo-go-driver/bson/bsontype"
+	"github.com/pritunl/mongo-go-driver/v2/internal/assert"
 )
 
 func ExampleDocument_Validate() {
@@ -151,7 +151,7 @@ func TestDocument(t *testing.T) {
 		t.Run("invalid-traversal", func(t *testing.T) {
 			rdr := Document{'\x08', '\x00', '\x00', '\x00', '\x0A', 'x', '\x00', '\x00'}
 			_, got := rdr.LookupErr("x", "y")
-			want := InvalidDepthTraversalError{Key: "x", Type: bsontype.Null}
+			want := InvalidDepthTraversalError{Key: "x", Type: TypeNull}
 			if !compareErrors(got, want) {
 				t.Errorf("Empty key lookup did not return expected result. got %v; want %v", got, want)
 			}
@@ -168,7 +168,7 @@ func TestDocument(t *testing.T) {
 					'\x08', '\x00', '\x00', '\x00', '\x0A', 'x', '\x00', '\x00',
 				},
 				[]string{"x"},
-				Value{Type: bsontype.Null, Data: []byte{}},
+				Value{Type: TypeNull, Data: []byte{}},
 				nil,
 			},
 			{"first-second",
@@ -180,7 +180,7 @@ func TestDocument(t *testing.T) {
 					'\x0A', 'b', '\x00', '\x00', '\x00',
 				},
 				[]string{"foo", "b"},
-				Value{Type: bsontype.Null, Data: []byte{}},
+				Value{Type: TypeNull, Data: []byte{}},
 				nil,
 			},
 			{"first-second-array",
@@ -192,7 +192,7 @@ func TestDocument(t *testing.T) {
 					'\x0A', '2', '\x00', '\x00', '\x00',
 				},
 				[]string{"foo", "2"},
-				Value{Type: bsontype.Null, Data: []byte{}},
+				Value{Type: TypeNull, Data: []byte{}},
 				nil,
 			},
 		}
@@ -364,11 +364,11 @@ func TestDocument(t *testing.T) {
 		}
 	})
 	t.Run("Elements", func(t *testing.T) {
-		invalidElem := BuildDocument(nil, AppendHeader(nil, bsontype.Double, "foo"))
+		invalidElem := BuildDocument(nil, AppendHeader(nil, TypeDouble, "foo"))
 		invalidTwoElem := BuildDocument(nil,
 			AppendHeader(
 				AppendDoubleElement(nil, "pi", 3.14159),
-				bsontype.Double, "foo",
+				TypeDouble, "foo",
 			),
 		)
 		oneElem := BuildDocument(nil, AppendDoubleElement(nil, "pi", 3.14159))
@@ -410,4 +410,105 @@ func TestDocument(t *testing.T) {
 			})
 		}
 	})
+}
+
+var documentStringTestCases = []struct {
+	description string
+	doc         Document
+	want        string
+}{
+	{
+		description: "empty document",
+		doc:         BuildDocument(nil),
+		want:        `{}`,
+	},
+	{
+		description: "document with 1 field",
+		doc: BuildDocument(nil,
+			AppendInt32Element(nil, "number", 123),
+		),
+		want: `{"number": {"$numberInt":"123"}}`,
+	},
+	{
+		description: "nested documents",
+		doc: BuildDocument(nil,
+			AppendDocumentElement(nil, "key", BuildDocument(nil,
+				AppendStringElement(nil, "nestedKey", "abc"),
+			)),
+		),
+		want: `{"key": {"nestedKey": "abc"}}`,
+	},
+	{
+		description: "document with mixed types",
+		doc: BuildDocument(nil,
+			AppendStringElement(nil, "key", "abc"),
+			AppendInt32Element(nil, "number", 123),
+			AppendBooleanElement(nil, "flag", true),
+		),
+		want: `{"key": "abc","number": {"$numberInt":"123"},"flag": true}`,
+	},
+}
+
+func TestDocument_String(t *testing.T) {
+	for _, tc := range documentStringTestCases {
+		t.Run(tc.description, func(t *testing.T) {
+			got := tc.doc.String()
+			assert.Equal(t, tc.want, got, "expected string %s, got %s", tc.want, got)
+		})
+	}
+}
+
+func TestDocument_StringN(t *testing.T) {
+	for _, tc := range documentStringTestCases {
+		for n := -1; n <= len(tc.want)+1; n++ {
+			t.Run(fmt.Sprintf("%s n==%d", tc.description, n), func(t *testing.T) {
+				got, truncated := tc.doc.StringN(n)
+				l := n
+				toBeTruncated := true
+				if l >= len(tc.want) || l < 0 {
+					l = len(tc.want)
+					toBeTruncated = false
+				}
+				want := tc.want[:l]
+				assert.Equal(t, want, got, "expected truncated string %s, got %s", want, got)
+				assert.Equal(t, toBeTruncated, truncated, "expected truncated to be %t, got %t", toBeTruncated, truncated)
+			})
+		}
+	}
+}
+
+func TestDocument_StringN_Multibyte(t *testing.T) {
+	multiByteString := Document(BuildDocument(nil,
+		AppendStringElement(nil, "𨉟呐㗂越", "abc"),
+	))
+	for i, tc := range []struct {
+		n    int
+		want string
+	}{
+		{-1, `{"𨉟呐㗂越": "abc"}`},
+		{0, ``},
+		{1, `{`},
+		{2, `{"`},
+		{3, `{"`},
+		{4, `{"`},
+		{5, `{"`},
+		{6, `{"`},
+		{7, `{"𨉟`},
+		{8, `{"𨉟`},
+		{9, `{"𨉟`},
+		{10, `{"𨉟呐`},
+		{14, `{"𨉟呐㗂`},
+		{15, `{"𨉟呐㗂越`},
+		{16, `{"𨉟呐㗂越"`},
+		{17, `{"𨉟呐㗂越":`},
+		{18, `{"𨉟呐㗂越": `},
+		{19, `{"𨉟呐㗂越": "`},
+		{20, `{"𨉟呐㗂越": "a`},
+	} {
+		t.Run(fmt.Sprintf("case %d", i), func(t *testing.T) {
+			got, truncated := multiByteString.StringN(tc.n)
+			assert.Equal(t, tc.want, got, "expected truncated string %s, got %s", tc.want, got)
+			assert.Equal(t, tc.n != -1, truncated, "expected truncated to be %t, got %t", tc.n != -1, truncated)
+		})
+	}
 }

@@ -10,24 +10,16 @@ import (
 	"io"
 	"testing"
 
-	"github.com/pritunl/mongo-go-driver/bson"
-	"github.com/pritunl/mongo-go-driver/bson/bsoncodec"
-	"github.com/pritunl/mongo-go-driver/bson/bsonrw"
-	"github.com/pritunl/mongo-go-driver/internal/assert"
-	"github.com/pritunl/mongo-go-driver/internal/require"
+	"github.com/pritunl/mongo-go-driver/v2/bson"
+	"github.com/pritunl/mongo-go-driver/v2/internal/assert"
 )
 
 func testEncFn(t *testing.T) EncoderFn {
 	t.Helper()
 
-	return func(w io.Writer) (*bson.Encoder, error) {
-		rw, err := bsonrw.NewBSONValueWriter(w)
-		require.NoError(t, err, "failed to construct BSONValue writer")
-
-		enc, err := bson.NewEncoder(rw)
-		require.NoError(t, err, "failed to construct encoder")
-
-		return enc, nil
+	return func(w io.Writer) *bson.Encoder {
+		rw := bson.NewDocumentWriter(w)
+		return bson.NewEncoder(rw)
 	}
 }
 
@@ -36,8 +28,8 @@ func TestMarshalValue(t *testing.T) {
 
 	tests := []struct {
 		name     string
-		val      interface{}
-		registry *bsoncodec.Registry
+		val      any
+		registry *bson.Registry
 		encFn    EncoderFn
 		want     string
 		wantErr  error
@@ -57,7 +49,7 @@ func TestMarshalValue(t *testing.T) {
 		},
 		{
 			name:  "map",
-			val:   map[string]interface{}{"foo": "bar"},
+			val:   map[string]any{"foo": "bar"},
 			want:  `{"foo": "bar"}`,
 			encFn: testEncFn(t),
 		},

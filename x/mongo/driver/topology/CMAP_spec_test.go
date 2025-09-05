@@ -19,11 +19,12 @@ import (
 	"testing"
 	"time"
 
-	"github.com/pritunl/mongo-go-driver/bson/primitive"
-	"github.com/pritunl/mongo-go-driver/event"
-	"github.com/pritunl/mongo-go-driver/internal/require"
-	"github.com/pritunl/mongo-go-driver/internal/spectest"
-	"github.com/pritunl/mongo-go-driver/x/mongo/driver/operation"
+	"github.com/pritunl/mongo-go-driver/v2/bson"
+	"github.com/pritunl/mongo-go-driver/v2/event"
+	"github.com/pritunl/mongo-go-driver/v2/internal/require"
+	"github.com/pritunl/mongo-go-driver/v2/internal/spectest"
+	"github.com/pritunl/mongo-go-driver/v2/x/mongo/driver/mnet"
+	"github.com/pritunl/mongo-go-driver/v2/x/mongo/driver/operation"
 )
 
 // skippedTestDescriptions is a collection of test descriptions that the test runner will skip. The
@@ -62,11 +63,11 @@ var skippedTestDescriptions = map[string]string{
 }
 
 type cmapEvent struct {
-	EventType    string      `json:"type"`
-	Address      interface{} `json:"address"`
-	ConnectionID uint64      `json:"connectionId"`
-	Options      interface{} `json:"options"`
-	Reason       string      `json:"reason"`
+	EventType    string `json:"type"`
+	Address      any    `json:"address"`
+	ConnectionID int64  `json:"connectionId"`
+	Options      any    `json:"options"`
+	Reason       string `json:"reason"`
 }
 
 type poolOptions struct {
@@ -79,16 +80,16 @@ type poolOptions struct {
 }
 
 type cmapTestFile struct {
-	Version     uint64                   `json:"version"`
-	Style       string                   `json:"style"`
-	Description string                   `json:"description"`
-	SkipReason  string                   `json:"skipReason"`
-	FailPoint   map[string]interface{}   `json:"failPoint"`
-	PoolOptions poolOptions              `json:"poolOptions"`
-	Operations  []map[string]interface{} `json:"operations"`
-	Error       *cmapTestError           `json:"error"`
-	Events      []cmapEvent              `json:"events"`
-	Ignore      []string                 `json:"ignore"`
+	Version     uint64           `json:"version"`
+	Style       string           `json:"style"`
+	Description string           `json:"description"`
+	SkipReason  string           `json:"skipReason"`
+	FailPoint   map[string]any   `json:"failPoint"`
+	PoolOptions poolOptions      `json:"poolOptions"`
+	Operations  []map[string]any `json:"operations"`
+	Error       *cmapTestError   `json:"error"`
+	Events      []cmapEvent      `json:"events"`
+	Ignore      []string         `json:"ignore"`
 }
 
 type cmapTestError struct {
@@ -104,7 +105,7 @@ type simThread struct {
 }
 
 type testInfo struct {
-	objects                map[string]interface{}
+	objects                map[string]any
 	originalEventChan      chan *event.PoolEvent
 	finalEventChan         chan *event.PoolEvent
 	threads                map[string]*simThread
@@ -113,7 +114,7 @@ type testInfo struct {
 	sync.Mutex
 }
 
-const cmapTestDir = "../../../../testdata/connection-monitoring-and-pooling/"
+var cmapTestDir = spectest.Path("connection-monitoring-and-pooling/tests/cmap-format")
 
 func TestCMAPSpec(t *testing.T) {
 	for _, testFileName := range spectest.FindJSONFilesInDir(t, cmapTestDir) {
@@ -139,7 +140,7 @@ func runCMAPTest(t *testing.T, testFileName string) {
 	}
 
 	testInfo := &testInfo{
-		objects:                make(map[string]interface{}),
+		objects:                make(map[string]any),
 		originalEventChan:      make(chan *event.PoolEvent, 200),
 		finalEventChan:         make(chan *event.PoolEvent, 200),
 		threads:                make(map[string]*simThread),
@@ -174,7 +175,7 @@ func runCMAPTest(t *testing.T, testFileName string) {
 	var closeConnection bool
 
 	if test.FailPoint != nil {
-		data, ok := test.FailPoint["data"].(map[string]interface{})
+		data, ok := test.FailPoint["data"].(map[string]any)
 		if !ok {
 			t.Fatalf("expected to find \"data\" map in failPoint (%v)", test.FailPoint)
 		}
@@ -201,13 +202,13 @@ func runCMAPTest(t *testing.T, testFileName string) {
 					return msc, nil
 				})
 			}),
-			WithHandshaker(func(h Handshaker) Handshaker {
+			WithHandshaker(func(Handshaker) Handshaker {
 				return operation.NewHello()
 			}),
 		}
 	}))
 
-	s := NewServer("mongodb://fake", primitive.NewObjectID(), sOpts...)
+	s := NewServer("mongodb://fake", bson.NewObjectID(), defaultConnectionTimeout, sOpts...)
 	s.state = serverConnected
 	require.NoError(t, err, "error connecting connection pool")
 	defer s.pool.close(context.Background())
@@ -273,7 +274,6 @@ func runCMAPTest(t *testing.T, testFileName string) {
 	}
 
 	checkEvents(t, test.Events, testInfo.finalEventChan, test.Ignore)
-
 }
 
 func checkEvents(t *testing.T, expectedEvents []cmapEvent, actualEvents chan *event.PoolEvent, ignoreEvents []string) {
@@ -289,7 +289,6 @@ func checkEvents(t *testing.T, expectedEvents []cmapEvent, actualEvents chan *ev
 		}
 
 		if expectedEvent.Address != nil {
-
 			if expectedEvent.Address == float64(42) { // can be any address
 				if validEvent.Address == "" {
 					t.Errorf("expected address in event, instead received none in %v", expectedEvent.EventType)
@@ -325,7 +324,7 @@ func checkEvents(t *testing.T, expectedEvents []cmapEvent, actualEvents chan *ev
 					t.Errorf("expected poolevent options but found none")
 				}
 			} else {
-				opts, ok := expectedEvent.Options.(map[string]interface{})
+				opts, ok := expectedEvent.Options.(map[string]any)
 				if !ok {
 					t.Errorf("event options were unexpected type: %T for %v", expectedEvent.Options, expectedEvent.EventType)
 				}
@@ -364,7 +363,7 @@ NextEvent:
 	}
 }
 
-func runOperation(t *testing.T, operation map[string]interface{}, testInfo *testInfo, s *Server, checkOutTimeout int32) error {
+func runOperation(t *testing.T, operation map[string]any, testInfo *testInfo, s *Server, checkOutTimeout int32) error {
 	threadName, ok := operation["thread"]
 	if ok { // to be run in background thread
 		testInfo.Lock()
@@ -399,7 +398,7 @@ func runOperation(t *testing.T, operation map[string]interface{}, testInfo *test
 	return runOperationInThread(t, operation, testInfo, s, checkOutTimeout)
 }
 
-func runOperationInThread(t *testing.T, operation map[string]interface{}, testInfo *testInfo, s *Server, checkOutTimeout int32) error {
+func runOperationInThread(t *testing.T, operation map[string]any, testInfo *testInfo, s *Server, checkOutTimeout int32) error {
 	name, ok := operation["name"]
 	if !ok {
 		t.Fatalf("unable to find name in operation")
@@ -508,7 +507,7 @@ func runOperationInThread(t *testing.T, operation map[string]interface{}, testIn
 			t.Fatalf("unable to find connection to checkin")
 		}
 
-		var cEmptyInterface interface{}
+		var cEmptyInterface any
 		testInfo.Lock()
 		cEmptyInterface, ok = testInfo.objects[cName.(string)]
 		delete(testInfo.objects, cName.(string))
@@ -517,7 +516,7 @@ func runOperationInThread(t *testing.T, operation map[string]interface{}, testIn
 			t.Fatalf("was unable to find %v in objects when expected", cName)
 		}
 
-		c, ok := cEmptyInterface.(*Connection)
+		c, ok := cEmptyInterface.(*mnet.Connection)
 		if !ok {
 			t.Fatalf("object in objects was expected to be a connection, but was instead a %T", cEmptyInterface)
 		}

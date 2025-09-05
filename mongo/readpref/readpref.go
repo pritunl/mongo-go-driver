@@ -5,7 +5,7 @@
 // a copy of the License at http://www.apache.org/licenses/LICENSE-2.0
 
 // Package readpref defines read preferences for MongoDB queries.
-package readpref // import "github.com/pritunl/mongo-go-driver/mongo/readpref"
+package readpref
 
 import (
 	"bytes"
@@ -13,7 +13,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/pritunl/mongo-go-driver/tag"
+	"github.com/pritunl/mongo-go-driver/v2/tag"
 )
 
 var (
@@ -103,8 +103,12 @@ func (r *ReadPref) TagSets() []tag.Set {
 	return r.tagSets
 }
 
-// HedgeEnabled returns whether or not hedged reads are enabled for this read preference. If this option was not
-// specified during read preference construction, nil is returned.
+// HedgeEnabled returns whether or not hedged reads are enabled for this read
+// preference. If this option was not specified during read preference
+// construction, nil is returned.
+//
+// Deprecated: Hedged reads are deprecated in MongoDB 8.0 and may be removed in
+// a future MongoDB version.
 func (r *ReadPref) HedgeEnabled() *bool {
 	return r.hedgeEnabled
 }

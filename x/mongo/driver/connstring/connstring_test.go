@@ -11,9 +11,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/pritunl/mongo-go-driver/internal/assert"
-	"github.com/pritunl/mongo-go-driver/internal/require"
-	"github.com/pritunl/mongo-go-driver/x/mongo/driver/connstring"
+	"github.com/pritunl/mongo-go-driver/v2/internal/assert"
+	"github.com/pritunl/mongo-go-driver/v2/internal/require"
+	"github.com/pritunl/mongo-go-driver/v2/x/mongo/driver/connstring"
 )
 
 func TestAppName(t *testing.T) {
@@ -49,7 +49,6 @@ func TestAuthMechanism(t *testing.T) {
 	}{
 		{s: "authMechanism=scram-sha-1", expected: "scram-sha-1"},
 		{s: "authMechanism=scram-sha-256", expected: "scram-sha-256"},
-		{s: "authMechanism=mongodb-CR", expected: "mongodb-CR"},
 		{s: "authMechanism=plain", expected: "plain"},
 	}
 
@@ -90,6 +89,28 @@ func TestAuthSource(t *testing.T) {
 			}
 		})
 	}
+
+	tests = []struct {
+		s        string
+		expected string
+		err      bool
+	}{
+		{s: "authMechanismProperties=ENVIRONMENT:gcp,TOKEN_RESOURCE:mongodb://test-cluster", expected: "$external"},
+	}
+
+	for _, test := range tests {
+		s := fmt.Sprintf("mongodb://test.mongodb.net/?authMechanism=MONGODB-OIDC&/%s", test.s)
+		t.Run(s, func(t *testing.T) {
+			cs, err := connstring.ParseAndValidate(s)
+			if test.err {
+				require.Error(t, err)
+			} else {
+				require.NoError(t, err)
+				require.Equal(t, test.expected, cs.AuthSource)
+			}
+		})
+	}
+
 }
 
 func TestConnect(t *testing.T) {
@@ -559,33 +580,6 @@ func TestSocketTimeout(t *testing.T) {
 				require.NoError(t, err)
 				require.Equal(t, test.expected, cs.SocketTimeout)
 				require.True(t, cs.SocketTimeoutSet)
-			}
-		})
-	}
-}
-
-func TestWTimeout(t *testing.T) {
-	tests := []struct {
-		s        string
-		expected time.Duration
-		err      bool
-	}{
-		{s: "wtimeoutMS=10", expected: time.Duration(10) * time.Millisecond},
-		{s: "wtimeoutMS=100", expected: time.Duration(100) * time.Millisecond},
-		{s: "wtimeoutMS=-2", err: true},
-		{s: "wtimeoutMS=gsdge", err: true},
-	}
-
-	for _, test := range tests {
-		s := fmt.Sprintf("mongodb://localhost/?%s", test.s)
-		t.Run(s, func(t *testing.T) {
-			cs, err := connstring.ParseAndValidate(s)
-			if test.err {
-				require.Error(t, err)
-			} else {
-				require.NoError(t, err)
-				require.Equal(t, test.expected, cs.WTimeout)
-				require.True(t, cs.WTimeoutSet)
 			}
 		})
 	}

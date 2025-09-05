@@ -13,6 +13,10 @@ import (
 	"os"
 	"strconv"
 	"strings"
+
+	"github.com/pritunl/mongo-go-driver/v2/bson"
+	"github.com/pritunl/mongo-go-driver/v2/internal/bsoncoreutil"
+	"github.com/pritunl/mongo-go-driver/v2/x/bsonx/bsoncore"
 )
 
 // DefaultMaxDocumentLength is the default maximum number of bytes that can be
@@ -32,10 +36,10 @@ const maxDocumentLengthEnvVar = "MONGODB_LOG_MAX_DOCUMENT_LENGTH"
 type LogSink interface {
 	// Info logs a non-error message with the given key/value pairs. The
 	// level argument is provided for optional logging.
-	Info(level int, msg string, keysAndValues ...interface{})
+	Info(level int, msg string, keysAndValues ...any)
 
 	// Error logs an error, with the given message and key/value pairs.
-	Error(err error, msg string, keysAndValues ...interface{})
+	Error(err error, msg string, keysAndValues ...any)
 }
 
 // Logger represents the configuration for the internal logger.
@@ -108,7 +112,7 @@ func (logger *Logger) LevelComponentEnabled(level Level, component Component) bo
 // this function is implemented based on the go-logr/logr LogSink interface,
 // which is why "Print" has a message parameter. Any duplication in code is
 // intentional to adhere to the logr pattern.
-func (logger *Logger) Print(level Level, component Component, msg string, keysAndValues ...interface{}) {
+func (logger *Logger) Print(level Level, component Component, msg string, keysAndValues ...any) {
 	// If the level is not enabled for the component, then
 	// skip the message.
 	if !logger.LevelComponentEnabled(level, component) {
@@ -126,7 +130,7 @@ func (logger *Logger) Print(level Level, component Component, msg string, keysAn
 // Error logs an error, with the given message and key/value pairs.
 // It functions similarly to Print, but may have unique behavior, and should be
 // preferred for logging errors.
-func (logger *Logger) Error(err error, msg string, keysAndValues ...interface{}) {
+func (logger *Logger) Error(err error, msg string, keysAndValues ...any) {
 	if logger.Sink == nil {
 		return
 	}
@@ -230,46 +234,31 @@ func selectComponentLevels(componentLevels map[Component]Level) map[Component]Le
 	return selected
 }
 
-// truncate will truncate a string to the given width, appending "..." to the
-// end of the string if it is truncated. This routine is safe for multi-byte
-// characters.
-func truncate(str string, width uint) string {
-	if width == 0 {
-		return ""
-	}
-
-	if len(str) <= int(width) {
-		return str
-	}
-
-	// Truncate the byte slice of the string to the given width.
-	newStr := str[:width]
-
-	// Check if the last byte is at the beginning of a multi-byte character.
-	// If it is, then remove the last byte.
-	if newStr[len(newStr)-1]&0xC0 == 0xC0 {
-		return newStr[:len(newStr)-1] + TruncationSuffix
-	}
-
-	// Check if the last byte is in the middle of a multi-byte character. If
-	// it is, then step back until we find the beginning of the character.
-	if newStr[len(newStr)-1]&0xC0 == 0x80 {
-		for i := len(newStr) - 1; i >= 0; i-- {
-			if newStr[i]&0xC0 == 0xC0 {
-				return newStr[:i] + TruncationSuffix
-			}
-		}
-	}
-
-	return newStr + TruncationSuffix
-}
-
-// FormatMessage formats a BSON document for logging. The document is truncated
+// FormatDocument formats a BSON document or RawValue for logging. The document is truncated
 // to the given width.
-func FormatMessage(msg string, width uint) string {
+func FormatDocument(msg bson.Raw, width uint) string {
 	if len(msg) == 0 {
 		return "{}"
 	}
 
-	return truncate(msg, width)
+	str, truncated := bsoncore.Document(msg).StringN(int(width))
+
+	if truncated {
+		str += TruncationSuffix
+	}
+
+	return str
+}
+
+// FormatString formats a String for logging. The string is truncated
+// to the given width.
+func FormatString(str string, width uint) string {
+	strTrunc := bsoncoreutil.Truncate(str, int(width))
+
+	// Checks if the string was truncating by comparing the lengths of the two strings.
+	if len(strTrunc) < len(str) {
+		strTrunc += TruncationSuffix
+	}
+
+	return strTrunc
 }

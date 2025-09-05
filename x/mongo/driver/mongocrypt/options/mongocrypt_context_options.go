@@ -7,8 +7,8 @@
 package options
 
 import (
-	"github.com/pritunl/mongo-go-driver/bson/primitive"
-	"github.com/pritunl/mongo-go-driver/x/bsonx/bsoncore"
+	"github.com/pritunl/mongo-go-driver/v2/bson"
+	"github.com/pritunl/mongo-go-driver/v2/x/bsonx/bsoncore"
 )
 
 // DataKeyOptions specifies options for creating a new data key.
@@ -51,7 +51,7 @@ const (
 
 // ExplicitEncryptionOptions specifies options for configuring an explicit encryption context.
 type ExplicitEncryptionOptions struct {
-	KeyID            *primitive.Binary
+	KeyID            *bson.Binary
 	KeyAltName       *string
 	Algorithm        string
 	QueryType        string
@@ -61,10 +61,11 @@ type ExplicitEncryptionOptions struct {
 
 // ExplicitRangeOptions specifies options for the range index.
 type ExplicitRangeOptions struct {
-	Min       *bsoncore.Value
-	Max       *bsoncore.Value
-	Sparsity  int64
-	Precision *int32
+	Min        *bsoncore.Value
+	Max        *bsoncore.Value
+	Sparsity   *int64
+	TrimFactor *int32
+	Precision  *int32
 }
 
 // ExplicitEncryption creates a new ExplicitEncryptionOptions instance.
@@ -73,7 +74,7 @@ func ExplicitEncryption() *ExplicitEncryptionOptions {
 }
 
 // SetKeyID sets the key identifier.
-func (eeo *ExplicitEncryptionOptions) SetKeyID(keyID primitive.Binary) *ExplicitEncryptionOptions {
+func (eeo *ExplicitEncryptionOptions) SetKeyID(keyID bson.Binary) *ExplicitEncryptionOptions {
 	eeo.KeyID = &keyID
 	return eeo
 }
@@ -133,25 +134,4 @@ func (rmdko *RewrapManyDataKeyOptions) SetProvider(provider string) *RewrapManyD
 func (rmdko *RewrapManyDataKeyOptions) SetMasterKey(masterKey bsoncore.Document) *RewrapManyDataKeyOptions {
 	rmdko.MasterKey = masterKey
 	return rmdko
-}
-
-// MergeRewrapManyDataKeyOptions combines the given RewrapManyDataKeyOptions instances into a single
-// RewrapManyDataKeyOptions in a last one wins fashion.
-//
-// Deprecated: Merging options structs will not be supported in Go Driver 2.0. Users should create a
-// single options struct instead.
-func MergeRewrapManyDataKeyOptions(opts ...*RewrapManyDataKeyOptions) *RewrapManyDataKeyOptions {
-	rmdkOpts := RewrapManyDataKey()
-	for _, rmdko := range opts {
-		if rmdko == nil {
-			continue
-		}
-		if provider := rmdko.Provider; provider != nil {
-			rmdkOpts.Provider = provider
-		}
-		if masterKey := rmdko.MasterKey; masterKey != nil {
-			rmdkOpts.MasterKey = masterKey
-		}
-	}
-	return rmdkOpts
 }

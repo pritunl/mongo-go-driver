@@ -12,19 +12,19 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/pritunl/mongo-go-driver/bson/bsontype"
-	"github.com/pritunl/mongo-go-driver/event"
-	"github.com/pritunl/mongo-go-driver/internal/driverutil"
-	"github.com/pritunl/mongo-go-driver/internal/logger"
-	"github.com/pritunl/mongo-go-driver/mongo/description"
-	"github.com/pritunl/mongo-go-driver/mongo/writeconcern"
-	"github.com/pritunl/mongo-go-driver/x/bsonx/bsoncore"
-	"github.com/pritunl/mongo-go-driver/x/mongo/driver"
-	"github.com/pritunl/mongo-go-driver/x/mongo/driver/session"
+	"github.com/pritunl/mongo-go-driver/v2/event"
+	"github.com/pritunl/mongo-go-driver/v2/internal/driverutil"
+	"github.com/pritunl/mongo-go-driver/v2/internal/logger"
+	"github.com/pritunl/mongo-go-driver/v2/mongo/writeconcern"
+	"github.com/pritunl/mongo-go-driver/v2/x/bsonx/bsoncore"
+	"github.com/pritunl/mongo-go-driver/v2/x/mongo/driver"
+	"github.com/pritunl/mongo-go-driver/v2/x/mongo/driver/description"
+	"github.com/pritunl/mongo-go-driver/v2/x/mongo/driver/session"
 )
 
 // Insert performs an insert operation.
 type Insert struct {
+	authenticator            driver.Authenticator
 	bypassDocumentValidation *bool
 	comment                  bsoncore.Value
 	documents                []bsoncore.Document
@@ -42,6 +42,7 @@ type Insert struct {
 	result                   InsertResult
 	serverAPI                *driver.ServerAPIOptions
 	timeout                  *time.Duration
+	rawData                  *bool
 	logger                   *logger.Logger
 }
 
@@ -58,8 +59,7 @@ func buildInsertResult(response bsoncore.Document) (InsertResult, error) {
 	}
 	ir := InsertResult{}
 	for _, element := range elements {
-		switch element.Key() {
-		case "n":
+		if element.Key() == "n" {
 			var ok bool
 			ir.N, ok = element.Value().AsInt64OK()
 			if !ok {
@@ -80,8 +80,8 @@ func NewInsert(documents ...bsoncore.Document) *Insert {
 // Result returns the result of executing this operation.
 func (i *Insert) Result() InsertResult { return i.result }
 
-func (i *Insert) processResponse(info driver.ResponseInfo) error {
-	ir, err := buildInsertResult(info.ServerResponse)
+func (i *Insert) processResponse(_ context.Context, resp bsoncore.Document, _ driver.ResponseInfo) error {
+	ir, err := buildInsertResult(resp)
 	i.result.N += ir.N
 	return err
 }
@@ -115,20 +115,27 @@ func (i *Insert) Execute(ctx context.Context) error {
 		Timeout:           i.timeout,
 		Logger:            i.logger,
 		Name:              driverutil.InsertOp,
+		Authenticator:     i.authenticator,
 	}.Execute(ctx)
 
 }
 
 func (i *Insert) command(dst []byte, desc description.SelectedServer) ([]byte, error) {
 	dst = bsoncore.AppendStringElement(dst, "insert", i.collection)
-	if i.bypassDocumentValidation != nil && (desc.WireVersion != nil && desc.WireVersion.Includes(4)) {
+	if i.bypassDocumentValidation != nil && (desc.WireVersion != nil &&
+		driverutil.VersionRangeIncludes(*desc.WireVersion, 4)) {
+
 		dst = bsoncore.AppendBooleanElement(dst, "bypassDocumentValidation", *i.bypassDocumentValidation)
 	}
-	if i.comment.Type != bsontype.Type(0) {
+	if i.comment.Type != bsoncore.Type(0) {
 		dst = bsoncore.AppendValueElement(dst, "comment", i.comment)
 	}
 	if i.ordered != nil {
 		dst = bsoncore.AppendBooleanElement(dst, "ordered", *i.ordered)
+	}
+	// Set rawData for 8.2+ servers.
+	if i.rawData != nil && desc.WireVersion != nil && driverutil.VersionRangeIncludes(*desc.WireVersion, 27) {
+		dst = bsoncore.AppendBooleanElement(dst, "rawData", *i.rawData)
 	}
 	return dst, nil
 }
@@ -304,5 +311,25 @@ func (i *Insert) Logger(logger *logger.Logger) *Insert {
 	}
 
 	i.logger = logger
+	return i
+}
+
+// Authenticator sets the authenticator to use for this operation.
+func (i *Insert) Authenticator(authenticator driver.Authenticator) *Insert {
+	if i == nil {
+		i = new(Insert)
+	}
+
+	i.authenticator = authenticator
+	return i
+}
+
+// RawData sets the rawData to access timeseries data in the compressed format.
+func (i *Insert) RawData(rawData bool) *Insert {
+	if i == nil {
+		i = new(Insert)
+	}
+
+	i.rawData = &rawData
 	return i
 }

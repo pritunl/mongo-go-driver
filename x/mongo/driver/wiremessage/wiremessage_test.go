@@ -10,8 +10,8 @@ import (
 	"math"
 	"testing"
 
-	"github.com/pritunl/mongo-go-driver/internal/assert"
-	"github.com/pritunl/mongo-go-driver/x/bsonx/bsoncore"
+	"github.com/pritunl/mongo-go-driver/v2/internal/assert"
+	"github.com/pritunl/mongo-go-driver/v2/x/bsonx/bsoncore"
 )
 
 func TestAppendHeaderStart(t *testing.T) {
@@ -173,6 +173,22 @@ func TestReadMsgSectionDocumentSequence(t *testing.T) {
 			wantIdentifier: "",
 			wantDocs:       nil,
 			wantRem:        []byte{0, 1},
+			wantOK:         false,
+		},
+		{
+			desc:           "incorrect size",
+			src:            []byte{3, 0, 0},
+			wantIdentifier: "",
+			wantDocs:       nil,
+			wantRem:        []byte{3, 0, 0},
+			wantOK:         false,
+		},
+		{
+			desc:           "insufficient size",
+			src:            []byte{4, 0, 0},
+			wantIdentifier: "",
+			wantDocs:       nil,
+			wantRem:        []byte{4, 0, 0},
 			wantOK:         false,
 		},
 		{

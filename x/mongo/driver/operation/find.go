@@ -11,32 +11,31 @@ import (
 	"errors"
 	"time"
 
-	"github.com/pritunl/mongo-go-driver/bson/bsontype"
-	"github.com/pritunl/mongo-go-driver/event"
-	"github.com/pritunl/mongo-go-driver/internal/driverutil"
-	"github.com/pritunl/mongo-go-driver/internal/logger"
-	"github.com/pritunl/mongo-go-driver/mongo/description"
-	"github.com/pritunl/mongo-go-driver/mongo/readconcern"
-	"github.com/pritunl/mongo-go-driver/mongo/readpref"
-	"github.com/pritunl/mongo-go-driver/x/bsonx/bsoncore"
-	"github.com/pritunl/mongo-go-driver/x/mongo/driver"
-	"github.com/pritunl/mongo-go-driver/x/mongo/driver/session"
+	"github.com/pritunl/mongo-go-driver/v2/event"
+	"github.com/pritunl/mongo-go-driver/v2/internal/driverutil"
+	"github.com/pritunl/mongo-go-driver/v2/internal/logger"
+	"github.com/pritunl/mongo-go-driver/v2/mongo/readconcern"
+	"github.com/pritunl/mongo-go-driver/v2/mongo/readpref"
+	"github.com/pritunl/mongo-go-driver/v2/x/bsonx/bsoncore"
+	"github.com/pritunl/mongo-go-driver/v2/x/mongo/driver"
+	"github.com/pritunl/mongo-go-driver/v2/x/mongo/driver/description"
+	"github.com/pritunl/mongo-go-driver/v2/x/mongo/driver/session"
 )
 
 // Find performs a find operation.
 type Find struct {
+	authenticator       driver.Authenticator
 	allowDiskUse        *bool
 	allowPartialResults *bool
 	awaitData           *bool
 	batchSize           *int32
 	collation           bsoncore.Document
-	comment             *string
+	comment             bsoncore.Value
 	filter              bsoncore.Document
 	hint                bsoncore.Value
 	let                 bsoncore.Document
 	limit               *int64
 	max                 bsoncore.Document
-	maxTime             *time.Duration
 	min                 bsoncore.Document
 	noCursorTimeout     *bool
 	oplogReplay         *bool
@@ -62,8 +61,9 @@ type Find struct {
 	result              driver.CursorResponse
 	serverAPI           *driver.ServerAPIOptions
 	timeout             *time.Duration
-	omitCSOTMaxTimeMS   bool
+	rawData             *bool
 	logger              *logger.Logger
+	omitMaxTimeMS       bool
 }
 
 // NewFind constructs and returns a new Find.
@@ -79,9 +79,12 @@ func (f *Find) Result(opts driver.CursorOptions) (*driver.BatchCursor, error) {
 	return driver.NewBatchCursor(f.result, f.session, f.clock, opts)
 }
 
-func (f *Find) processResponse(info driver.ResponseInfo) error {
-	var err error
-	f.result, err = driver.NewCursorResponse(info)
+func (f *Find) processResponse(_ context.Context, resp bsoncore.Document, info driver.ResponseInfo) error {
+	curDoc, err := driver.ExtractCursorDocument(resp)
+	if err != nil {
+		return err
+	}
+	f.result, err = driver.NewCursorResponse(curDoc, info)
 	return err
 }
 
@@ -102,7 +105,6 @@ func (f *Find) Execute(ctx context.Context) error {
 		Crypt:             f.crypt,
 		Database:          f.database,
 		Deployment:        f.deployment,
-		MaxTime:           f.maxTime,
 		ReadConcern:       f.readConcern,
 		ReadPreference:    f.readPreference,
 		Selector:          f.selector,
@@ -111,15 +113,15 @@ func (f *Find) Execute(ctx context.Context) error {
 		Timeout:           f.timeout,
 		Logger:            f.logger,
 		Name:              driverutil.FindOp,
-		OmitCSOTMaxTimeMS: f.omitCSOTMaxTimeMS,
+		Authenticator:     f.authenticator,
+		OmitMaxTimeMS:     f.omitMaxTimeMS,
 	}.Execute(ctx)
-
 }
 
 func (f *Find) command(dst []byte, desc description.SelectedServer) ([]byte, error) {
 	dst = bsoncore.AppendStringElement(dst, "find", f.collection)
 	if f.allowDiskUse != nil {
-		if desc.WireVersion == nil || !desc.WireVersion.Includes(4) {
+		if desc.WireVersion == nil || !driverutil.VersionRangeIncludes(*desc.WireVersion, 4) {
 			return nil, errors.New("the 'allowDiskUse' command parameter requires a minimum server wire version of 4")
 		}
 		dst = bsoncore.AppendBooleanElement(dst, "allowDiskUse", *f.allowDiskUse)
@@ -134,18 +136,18 @@ func (f *Find) command(dst []byte, desc description.SelectedServer) ([]byte, err
 		dst = bsoncore.AppendInt32Element(dst, "batchSize", *f.batchSize)
 	}
 	if f.collation != nil {
-		if desc.WireVersion == nil || !desc.WireVersion.Includes(5) {
+		if desc.WireVersion == nil || !driverutil.VersionRangeIncludes(*desc.WireVersion, 5) {
 			return nil, errors.New("the 'collation' command parameter requires a minimum server wire version of 5")
 		}
 		dst = bsoncore.AppendDocumentElement(dst, "collation", f.collation)
 	}
-	if f.comment != nil {
-		dst = bsoncore.AppendStringElement(dst, "comment", *f.comment)
+	if f.comment.Type != bsoncore.Type(0) {
+		dst = bsoncore.AppendValueElement(dst, "comment", f.comment)
 	}
 	if f.filter != nil {
 		dst = bsoncore.AppendDocumentElement(dst, "filter", f.filter)
 	}
-	if f.hint.Type != bsontype.Type(0) {
+	if f.hint.Type != bsoncore.Type(0) {
 		dst = bsoncore.AppendValueElement(dst, "hint", f.hint)
 	}
 	if f.let != nil {
@@ -189,6 +191,10 @@ func (f *Find) command(dst []byte, desc description.SelectedServer) ([]byte, err
 	}
 	if f.tailable != nil {
 		dst = bsoncore.AppendBooleanElement(dst, "tailable", *f.tailable)
+	}
+	// Set rawData for 8.2+ servers.
+	if f.rawData != nil && desc.WireVersion != nil && driverutil.VersionRangeIncludes(*desc.WireVersion, 27) {
+		dst = bsoncore.AppendBooleanElement(dst, "rawData", *f.rawData)
 	}
 	return dst, nil
 }
@@ -243,13 +249,13 @@ func (f *Find) Collation(collation bsoncore.Document) *Find {
 	return f
 }
 
-// Comment sets a string to help trace an operation.
-func (f *Find) Comment(comment string) *Find {
+// Comment sets a value to help trace an operation.
+func (f *Find) Comment(comment bsoncore.Value) *Find {
 	if f == nil {
 		f = new(Find)
 	}
 
-	f.comment = &comment
+	f.comment = comment
 	return f
 }
 
@@ -300,16 +306,6 @@ func (f *Find) Max(max bsoncore.Document) *Find {
 	}
 
 	f.max = max
-	return f
-}
-
-// MaxTime specifies the maximum amount of time to allow the query to run on the server.
-func (f *Find) MaxTime(maxTime *time.Duration) *Find {
-	if f == nil {
-		f = new(Find)
-	}
-
-	f.maxTime = maxTime
 	return f
 }
 
@@ -554,18 +550,6 @@ func (f *Find) Timeout(timeout *time.Duration) *Find {
 	return f
 }
 
-// OmitCSOTMaxTimeMS omits the automatically-calculated "maxTimeMS" from the
-// command when CSOT is enabled. It does not effect "maxTimeMS" set by
-// [Find.MaxTime].
-func (f *Find) OmitCSOTMaxTimeMS(omit bool) *Find {
-	if f == nil {
-		f = new(Find)
-	}
-
-	f.omitCSOTMaxTimeMS = omit
-	return f
-}
-
 // Logger sets the logger for this operation.
 func (f *Find) Logger(logger *logger.Logger) *Find {
 	if f == nil {
@@ -573,5 +557,36 @@ func (f *Find) Logger(logger *logger.Logger) *Find {
 	}
 
 	f.logger = logger
+	return f
+}
+
+// Authenticator sets the authenticator to use for this operation.
+func (f *Find) Authenticator(authenticator driver.Authenticator) *Find {
+	if f == nil {
+		f = new(Find)
+	}
+
+	f.authenticator = authenticator
+	return f
+}
+
+// RawData sets the rawData to access timeseries data in the compressed format.
+func (f *Find) RawData(rawData bool) *Find {
+	if f == nil {
+		f = new(Find)
+	}
+
+	f.rawData = &rawData
+	return f
+}
+
+// OmitMaxTimeMS omits the automatically-calculated "maxTimeMS" from the
+// command.
+func (f *Find) OmitMaxTimeMS(omit bool) *Find {
+	if f == nil {
+		f = new(Find)
+	}
+
+	f.omitMaxTimeMS = omit
 	return f
 }

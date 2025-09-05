@@ -12,8 +12,6 @@ import (
 	"io"
 	"strconv"
 	"strings"
-
-	"github.com/pritunl/mongo-go-driver/bson/bsontype"
 )
 
 // ValidationError is an error type returned when attempting to validate a document or array.
@@ -63,13 +61,13 @@ func (ibe InsufficientBytesError) Equal(err2 error) bool {
 // the path is neither an embedded document nor an array.
 type InvalidDepthTraversalError struct {
 	Key  string
-	Type bsontype.Type
+	Type Type
 }
 
 func (idte InvalidDepthTraversalError) Error() string {
 	return fmt.Sprintf(
 		"attempt to traverse into %s, but it's type is %s, not %s nor %s",
-		idte.Key, idte.Type, bsontype.EmbeddedDocument, bsontype.Array,
+		idte.Key, idte.Type, TypeEmbeddedDocument, TypeArray,
 	)
 }
 
@@ -167,15 +165,15 @@ func (d Document) LookupErr(key ...string) (Value, error) {
 			continue
 		}
 		if len(key) > 1 {
-			tt := bsontype.Type(elem[0])
+			tt := Type(elem[0])
 			switch tt {
-			case bsontype.EmbeddedDocument:
+			case TypeEmbeddedDocument:
 				val, err := elem.Value().Document().LookupErr(key[1:]...)
 				if err != nil {
 					return Value{}, err
 				}
 				return val, nil
-			case bsontype.Array:
+			case TypeArray:
 				// Convert to Document to continue Lookup recursion.
 				val, err := Document(elem.Value().Array()).LookupErr(key[1:]...)
 				if err != nil {
@@ -263,34 +261,79 @@ func (d Document) DebugString() string {
 // String outputs an ExtendedJSON version of Document. If the document is not valid, this method
 // returns an empty string.
 func (d Document) String() string {
-	if len(d) < 5 {
-		return ""
+	str, _ := d.StringN(-1)
+	return str
+}
+
+// StringN stringifies a document. If N is non-negative, it will truncate the string to N bytes.
+// Otherwise, it will return the full string representation. The second return value indicates
+// whether the string was truncated or not.
+func (d Document) StringN(n int) (string, bool) {
+	length, rem, ok := ReadLength(d)
+	if !ok || length < 5 {
+		return "", false
 	}
+	length -= 4 // length bytes
+	length--    // final null byte
+
+	if n == 0 {
+		return "", true
+	}
+
 	var buf strings.Builder
 	buf.WriteByte('{')
 
-	length, rem, _ := ReadLength(d) // We know we have enough bytes to read the length
-
-	length -= 4
-
+	var truncated bool
 	var elem Element
-	var ok bool
+	var str string
 	first := true
-	for length > 1 {
+	for length > 0 && !truncated {
+		needStrLen := -1
+		// Set needStrLen if n is positive, meaning we want to limit the string length.
+		if n > 0 {
+			// Stop stringifying if we reach the limit, that also ensures needStrLen is
+			// greater than 0 if we need to limit the length.
+			if buf.Len() >= n {
+				truncated = true
+				break
+			}
+			needStrLen = n - buf.Len()
+		}
+
+		// Append a comma if this is not the first element.
 		if !first {
 			buf.WriteByte(',')
+			// If we are truncating, we need to account for the comma in the length.
+			if needStrLen > 0 {
+				needStrLen--
+				if needStrLen == 0 {
+					truncated = true
+					break
+				}
+			}
 		}
+
 		elem, rem, ok = ReadElement(rem)
 		length -= int32(len(elem))
-		if !ok {
-			return ""
+		// Exit on malformed element.
+		if !ok || length < 0 {
+			return "", false
 		}
-		buf.WriteString(elem.String())
+
+		// Delegate to StringN() on the element.
+		str, truncated = elem.StringN(needStrLen)
+		buf.WriteString(str)
+
 		first = false
 	}
-	buf.WriteByte('}')
 
-	return buf.String()
+	if n <= 0 || (buf.Len() < n && !truncated) {
+		buf.WriteByte('}')
+	} else {
+		truncated = true
+	}
+
+	return buf.String(), truncated
 }
 
 // Elements returns this document as a slice of elements. The returned slice will contain valid

@@ -9,20 +9,19 @@ package operation
 import (
 	"context"
 	"errors"
-	"time"
 
-	"github.com/pritunl/mongo-go-driver/event"
-	"github.com/pritunl/mongo-go-driver/internal/driverutil"
-	"github.com/pritunl/mongo-go-driver/mongo/description"
-	"github.com/pritunl/mongo-go-driver/mongo/writeconcern"
-	"github.com/pritunl/mongo-go-driver/x/bsonx/bsoncore"
-	"github.com/pritunl/mongo-go-driver/x/mongo/driver"
-	"github.com/pritunl/mongo-go-driver/x/mongo/driver/session"
+	"github.com/pritunl/mongo-go-driver/v2/event"
+	"github.com/pritunl/mongo-go-driver/v2/internal/driverutil"
+	"github.com/pritunl/mongo-go-driver/v2/mongo/writeconcern"
+	"github.com/pritunl/mongo-go-driver/v2/x/bsonx/bsoncore"
+	"github.com/pritunl/mongo-go-driver/v2/x/mongo/driver"
+	"github.com/pritunl/mongo-go-driver/v2/x/mongo/driver/description"
+	"github.com/pritunl/mongo-go-driver/v2/x/mongo/driver/session"
 )
 
 // CommitTransaction attempts to commit a transaction.
 type CommitTransaction struct {
-	maxTime       *time.Duration
+	authenticator driver.Authenticator
 	recoveryToken bsoncore.Document
 	session       *session.Client
 	clock         *session.ClusterClock
@@ -41,9 +40,8 @@ func NewCommitTransaction() *CommitTransaction {
 	return &CommitTransaction{}
 }
 
-func (ct *CommitTransaction) processResponse(driver.ResponseInfo) error {
-	var err error
-	return err
+func (ct *CommitTransaction) processResponse(context.Context, bsoncore.Document, driver.ResponseInfo) error {
+	return nil
 }
 
 // Execute runs this operations and returns an error if the operation did not execute successfully.
@@ -63,11 +61,11 @@ func (ct *CommitTransaction) Execute(ctx context.Context) error {
 		Crypt:             ct.crypt,
 		Database:          ct.database,
 		Deployment:        ct.deployment,
-		MaxTime:           ct.maxTime,
 		Selector:          ct.selector,
 		WriteConcern:      ct.writeConcern,
 		ServerAPI:         ct.serverAPI,
 		Name:              driverutil.CommitTransactionOp,
+		Authenticator:     ct.authenticator,
 	}.Execute(ctx)
 
 }
@@ -79,16 +77,6 @@ func (ct *CommitTransaction) command(dst []byte, _ description.SelectedServer) (
 		dst = bsoncore.AppendDocumentElement(dst, "recoveryToken", ct.recoveryToken)
 	}
 	return dst, nil
-}
-
-// MaxTime specifies the maximum amount of time to allow the query to run on the server.
-func (ct *CommitTransaction) MaxTime(maxTime *time.Duration) *CommitTransaction {
-	if ct == nil {
-		ct = new(CommitTransaction)
-	}
-
-	ct.maxTime = maxTime
-	return ct
 }
 
 // RecoveryToken sets the recovery token to use when committing or aborting a sharded transaction.
@@ -199,5 +187,15 @@ func (ct *CommitTransaction) ServerAPI(serverAPI *driver.ServerAPIOptions) *Comm
 	}
 
 	ct.serverAPI = serverAPI
+	return ct
+}
+
+// Authenticator sets the authenticator to use for this operation.
+func (ct *CommitTransaction) Authenticator(authenticator driver.Authenticator) *CommitTransaction {
+	if ct == nil {
+		ct = new(CommitTransaction)
+	}
+
+	ct.authenticator = authenticator
 	return ct
 }

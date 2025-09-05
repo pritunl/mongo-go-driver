@@ -9,8 +9,8 @@ package logger
 import (
 	"testing"
 
-	"github.com/pritunl/mongo-go-driver/bson/primitive"
-	"github.com/pritunl/mongo-go-driver/internal/assert"
+	"github.com/pritunl/mongo-go-driver/v2/bson"
+	"github.com/pritunl/mongo-go-driver/v2/internal/assert"
 )
 
 func verifySerialization(t *testing.T, got, want KeyValues) {
@@ -26,12 +26,12 @@ func TestSerializeCommand(t *testing.T) {
 	t.Parallel()
 
 	serverConnectionID := int64(100)
-	serviceID := primitive.NewObjectID()
+	serviceID := bson.NewObjectID()
 
 	tests := []struct {
 		name               string
 		cmd                Command
-		extraKeysAndValues []interface{}
+		extraKeysAndValues []any
 		want               KeyValues
 	}{
 		{
@@ -39,7 +39,7 @@ func TestSerializeCommand(t *testing.T) {
 			want: KeyValues{
 				KeyCommandName, "",
 				KeyDatabaseName, "",
-				KeyDriverConnectionID, uint64(0),
+				KeyDriverConnectionID, int64(0),
 				KeyMessage, "",
 				KeyOperationID, int32(0),
 				KeyRequestID, int64(0),
@@ -63,7 +63,7 @@ func TestSerializeCommand(t *testing.T) {
 			want: KeyValues{
 				KeyCommandName, "foo",
 				KeyDatabaseName, "db",
-				KeyDriverConnectionID, uint64(1),
+				KeyDriverConnectionID, int64(1),
 				KeyMessage, "bar",
 				KeyOperationID, int32(2),
 				KeyRequestID, int64(3),
@@ -93,7 +93,7 @@ func TestSerializeConnection(t *testing.T) {
 	tests := []struct {
 		name               string
 		conn               Connection
-		extraKeysAndValues []interface{}
+		extraKeysAndValues []any
 		want               KeyValues
 	}{
 		{
@@ -133,22 +133,22 @@ func TestSerializeConnection(t *testing.T) {
 func TestSerializeServer(t *testing.T) {
 	t.Parallel()
 
-	topologyID := primitive.NewObjectID()
+	topologyID := bson.NewObjectID()
 	serverConnectionID := int64(100)
 
 	tests := []struct {
 		name               string
 		srv                Server
-		extraKeysAndValues []interface{}
+		extraKeysAndValues []any
 		want               KeyValues
 	}{
 		{
 			name: "empty",
 			want: KeyValues{
-				KeyDriverConnectionID, uint64(0),
+				KeyDriverConnectionID, int64(0),
 				KeyMessage, "",
 				KeyServerHost, "",
-				KeyTopologyID, primitive.ObjectID{}.Hex(),
+				KeyTopologyID, bson.ObjectID{}.Hex(),
 			},
 		},
 		{
@@ -162,7 +162,7 @@ func TestSerializeServer(t *testing.T) {
 				ServerPort:         "27017",
 			},
 			want: KeyValues{
-				KeyDriverConnectionID, uint64(1),
+				KeyDriverConnectionID, int64(1),
 				KeyMessage, "foo",
 				KeyServerHost, "localhost",
 				KeyTopologyID, topologyID.Hex(),
@@ -188,18 +188,18 @@ func TestSerializeServer(t *testing.T) {
 func TestSerializeTopology(t *testing.T) {
 	t.Parallel()
 
-	topologyID := primitive.NewObjectID()
+	topologyID := bson.NewObjectID()
 
 	tests := []struct {
 		name               string
 		topo               Topology
-		extraKeysAndValues []interface{}
+		extraKeysAndValues []any
 		want               KeyValues
 	}{
 		{
 			name: "empty",
 			want: KeyValues{
-				KeyTopologyID, primitive.ObjectID{}.Hex(),
+				KeyTopologyID, bson.ObjectID{}.Hex(),
 			},
 		},
 		{

@@ -12,20 +12,19 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/pritunl/mongo-go-driver/bson/bsontype"
-	"github.com/pritunl/mongo-go-driver/event"
-	"github.com/pritunl/mongo-go-driver/internal/driverutil"
-	"github.com/pritunl/mongo-go-driver/mongo/description"
-	"github.com/pritunl/mongo-go-driver/mongo/readconcern"
-	"github.com/pritunl/mongo-go-driver/mongo/readpref"
-	"github.com/pritunl/mongo-go-driver/x/bsonx/bsoncore"
-	"github.com/pritunl/mongo-go-driver/x/mongo/driver"
-	"github.com/pritunl/mongo-go-driver/x/mongo/driver/session"
+	"github.com/pritunl/mongo-go-driver/v2/event"
+	"github.com/pritunl/mongo-go-driver/v2/internal/driverutil"
+	"github.com/pritunl/mongo-go-driver/v2/mongo/readconcern"
+	"github.com/pritunl/mongo-go-driver/v2/mongo/readpref"
+	"github.com/pritunl/mongo-go-driver/v2/x/bsonx/bsoncore"
+	"github.com/pritunl/mongo-go-driver/v2/x/mongo/driver"
+	"github.com/pritunl/mongo-go-driver/v2/x/mongo/driver/description"
+	"github.com/pritunl/mongo-go-driver/v2/x/mongo/driver/session"
 )
 
 // Count represents a count operation.
 type Count struct {
-	maxTime        *time.Duration
+	authenticator  driver.Authenticator
 	query          bsoncore.Document
 	session        *session.Client
 	clock          *session.ClusterClock
@@ -42,6 +41,7 @@ type Count struct {
 	result         CountResult
 	serverAPI      *driver.ServerAPIOptions
 	timeout        *time.Duration
+	rawData        *bool
 }
 
 // CountResult represents a count result returned by the server.
@@ -98,9 +98,9 @@ func NewCount() *Count {
 // Result returns the result of executing this operation.
 func (c *Count) Result() CountResult { return c.result }
 
-func (c *Count) processResponse(info driver.ResponseInfo) error {
+func (c *Count) processResponse(_ context.Context, resp bsoncore.Document, _ driver.ResponseInfo) error {
 	var err error
-	c.result, err = buildCountResult(info.ServerResponse)
+	c.result, err = buildCountResult(resp)
 	return err
 }
 
@@ -121,13 +121,13 @@ func (c *Count) Execute(ctx context.Context) error {
 		Crypt:             c.crypt,
 		Database:          c.database,
 		Deployment:        c.deployment,
-		MaxTime:           c.maxTime,
 		ReadConcern:       c.readConcern,
 		ReadPreference:    c.readPreference,
 		Selector:          c.selector,
 		ServerAPI:         c.serverAPI,
 		Timeout:           c.timeout,
 		Name:              driverutil.CountOp,
+		Authenticator:     c.authenticator,
 	}.Execute(ctx)
 
 	// Swallow error if NamespaceNotFound(26) is returned from aggregate on non-existent namespace
@@ -140,25 +140,19 @@ func (c *Count) Execute(ctx context.Context) error {
 	return err
 }
 
-func (c *Count) command(dst []byte, _ description.SelectedServer) ([]byte, error) {
+func (c *Count) command(dst []byte, desc description.SelectedServer) ([]byte, error) {
 	dst = bsoncore.AppendStringElement(dst, "count", c.collection)
 	if c.query != nil {
 		dst = bsoncore.AppendDocumentElement(dst, "query", c.query)
 	}
-	if c.comment.Type != bsontype.Type(0) {
+	if c.comment.Type != bsoncore.Type(0) {
 		dst = bsoncore.AppendValueElement(dst, "comment", c.comment)
 	}
-	return dst, nil
-}
-
-// MaxTime specifies the maximum amount of time to allow the query to run on the server.
-func (c *Count) MaxTime(maxTime *time.Duration) *Count {
-	if c == nil {
-		c = new(Count)
+	// Set rawData for 8.2+ servers.
+	if c.rawData != nil && desc.WireVersion != nil && driverutil.VersionRangeIncludes(*desc.WireVersion, 27) {
+		dst = bsoncore.AppendBooleanElement(dst, "rawData", *c.rawData)
 	}
-
-	c.maxTime = maxTime
-	return c
+	return dst, nil
 }
 
 // Query determines what results are returned from find.
@@ -309,5 +303,25 @@ func (c *Count) Timeout(timeout *time.Duration) *Count {
 	}
 
 	c.timeout = timeout
+	return c
+}
+
+// Authenticator sets the authenticator to use for this operation.
+func (c *Count) Authenticator(authenticator driver.Authenticator) *Count {
+	if c == nil {
+		c = new(Count)
+	}
+
+	c.authenticator = authenticator
+	return c
+}
+
+// RawData sets the rawData to access timeseries data in the compressed format.
+func (c *Count) RawData(rawData bool) *Count {
+	if c == nil {
+		c = new(Count)
+	}
+
+	c.rawData = &rawData
 	return c
 }

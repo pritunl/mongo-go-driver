@@ -8,7 +8,7 @@
 //
 // For more information about read preference tags, see
 // https://www.mongodb.com/docs/manual/core/read-preference-tags/
-package tag // import "github.com/pritunl/mongo-go-driver/tag"
+package tag
 
 import (
 	"bytes"

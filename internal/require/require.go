@@ -9,7 +9,7 @@ package require
 import (
 	time "time"
 
-	assert "github.com/pritunl/mongo-go-driver/internal/assert"
+	assert "github.com/pritunl/mongo-go-driver/v2/internal/assert"
 )
 
 // TestingT is an interface wrapper around *testing.T
@@ -813,6 +813,21 @@ func WithinDurationf(t TestingT, expected time.Time, actual time.Time, delta tim
 		h.Helper()
 	}
 	if assert.WithinDurationf(t, expected, actual, delta, msg, args...) {
+		return
+	}
+	t.FailNow()
+}
+
+// NotEmpty asserts that the specified object is NOT [Empty].
+//
+//	if require.NotEmpty(t, obj) {
+//	  require.Equal(t, "two", obj[1])
+//	}
+func NotEmpty(t TestingT, object interface{}, msgAndArgs ...interface{}) {
+	if h, ok := t.(tHelper); ok {
+		h.Helper()
+	}
+	if assert.NotEmpty(t, object, msgAndArgs...) {
 		return
 	}
 	t.FailNow()

@@ -6,14 +6,10 @@
 
 package bson
 
-import (
-	"github.com/pritunl/mongo-go-driver/bson/bsoncodec"
-)
-
 type marshalingTestCase struct {
 	name string
-	reg  *bsoncodec.Registry
-	val  interface{}
+	reg  *Registry
+	val  any
 	want []byte
 }
 

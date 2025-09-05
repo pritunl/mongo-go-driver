@@ -19,6 +19,8 @@ import (
 	"fmt"
 	"reflect"
 	"testing"
+
+	. "github.com/pritunl/mongo-go-driver/v2/internal/rand"
 )
 
 var printgolden = flag.Bool("printgolden", false, "print golden results for regression test")

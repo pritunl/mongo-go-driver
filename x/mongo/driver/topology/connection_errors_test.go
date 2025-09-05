@@ -15,9 +15,9 @@ import (
 	"net"
 	"testing"
 
-	"github.com/pritunl/mongo-go-driver/internal/assert"
-	"github.com/pritunl/mongo-go-driver/mongo/address"
-	"github.com/pritunl/mongo-go-driver/x/mongo/driver/auth"
+	"github.com/pritunl/mongo-go-driver/v2/internal/assert"
+	"github.com/pritunl/mongo-go-driver/v2/mongo/address"
+	"github.com/pritunl/mongo-go-driver/v2/x/mongo/driver/auth"
 )
 
 func TestConnectionErrors(t *testing.T) {

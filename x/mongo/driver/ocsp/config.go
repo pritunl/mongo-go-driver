@@ -12,7 +12,7 @@ import (
 	"fmt"
 	"net/http"
 
-	"github.com/pritunl/mongo-go-driver/internal/httputil"
+	"github.com/pritunl/mongo-go-driver/v2/internal/httputil"
 	"golang.org/x/crypto/ocsp"
 )
 

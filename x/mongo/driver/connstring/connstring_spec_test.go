@@ -16,9 +16,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/pritunl/mongo-go-driver/internal/require"
-	"github.com/pritunl/mongo-go-driver/internal/spectest"
-	"github.com/pritunl/mongo-go-driver/x/mongo/driver/connstring"
+	"github.com/pritunl/mongo-go-driver/v2/internal/require"
+	"github.com/pritunl/mongo-go-driver/v2/internal/spectest"
+	"github.com/pritunl/mongo-go-driver/v2/x/mongo/driver/connstring"
 )
 
 type host struct {
@@ -40,15 +40,15 @@ type testCase struct {
 	Warning     bool
 	Hosts       []host
 	Auth        *auth
-	Options     map[string]interface{}
+	Options     map[string]any
 }
 
 type testContainer struct {
 	Tests []testCase
 }
 
-const connstringTestsDir = "../../../../testdata/connection-string/"
-const urioptionsTestDir = "../../../../testdata/uri-options/"
+var connstringTestsDir = spectest.Path("connection-string/tests")
+var urioptionsTestDir = spectest.Path("uri-options/tests")
 
 func (h *host) toString() string {
 	switch h.Type {
@@ -89,83 +89,68 @@ func runTestsInFile(t *testing.T, dirname string, filename string, warningsError
 	var container testContainer
 	require.NoError(t, json.Unmarshal(content, &container))
 
-	// Remove ".json" from filename.
-	filename = filename[:len(filename)-5]
+	t.Run(filename, func(t *testing.T) {
+		for _, testCase := range container.Tests {
+			testCase := testCase // Capture range variable.
 
-	for _, testCase := range container.Tests {
-		runTest(t, filename, testCase, warningsError)
-	}
-}
+			t.Run(testCase.Description, func(t *testing.T) {
+				spectest.CheckSkip(t)
 
-var skipDescriptions = map[string]struct{}{
-	"Valid options specific to single-threaded drivers are parsed correctly": {},
-}
-
-var skipKeywords = []string{
-	"tlsAllowInvalidHostnames",
-	"tlsAllowInvalidCertificates",
-	"tlsDisableCertificateRevocationCheck",
-	"serverSelectionTryOnce",
-}
-
-func runTest(t *testing.T, filename string, test testCase, warningsError bool) {
-	t.Run(filename+"/"+test.Description, func(t *testing.T) {
-		if _, skip := skipDescriptions[test.Description]; skip {
-			t.Skip()
+				runTest(t, testCase, warningsError)
+			})
 		}
-		for _, keyword := range skipKeywords {
-			if strings.Contains(test.Description, keyword) {
-				t.Skipf("skipping because keyword %s", keyword)
-			}
-		}
-
-		cs, err := connstring.ParseAndValidate(test.URI)
-		// Since we don't have warnings in Go, we return warnings as errors.
-		//
-		// This is a bit unfortunate, but since we do raise warnings as errors with the newer
-		// URI options, but don't with some of the older things, we do a switch on the filename
-		// here. We are trying to not break existing user applications that have unrecognized
-		// options.
-		if test.Valid && !(test.Warning && warningsError) {
-			require.NoError(t, err)
-		} else {
-			require.Error(t, err)
-			return
-		}
-
-		require.Equal(t, test.URI, cs.Original)
-
-		if test.Hosts != nil {
-			require.Equal(t, hostsToStrings(test.Hosts), cs.Hosts)
-		}
-
-		if test.Auth != nil {
-			require.Equal(t, test.Auth.Username, cs.Username)
-
-			if test.Auth.Password == nil {
-				require.False(t, cs.PasswordSet)
-			} else {
-				require.True(t, cs.PasswordSet)
-				require.Equal(t, *test.Auth.Password, cs.Password)
-			}
-
-			if test.Auth.DB != cs.Database {
-				require.Equal(t, test.Auth.DB, cs.AuthSource)
-			} else {
-				require.Equal(t, test.Auth.DB, cs.Database)
-			}
-		}
-
-		// Check that all options are present.
-		verifyConnStringOptions(t, cs, test.Options)
-
-		// Check that non-present options are unset. This will be redundant with the above checks
-		// for options that are present.
-		var ok bool
-
-		_, ok = test.Options["maxpoolsize"]
-		require.Equal(t, ok, cs.MaxPoolSizeSet)
 	})
+}
+
+func runTest(t *testing.T, test testCase, warningsError bool) {
+	spectest.CheckSkip(t)
+
+	cs, err := connstring.ParseAndValidate(test.URI)
+	// Since we don't have warnings in Go, we return warnings as errors.
+	//
+	// This is a bit unfortunate, but since we do raise warnings as errors with the newer
+	// URI options, but don't with some of the older things, we do a switch on the filename
+	// here. We are trying to not break existing user applications that have unrecognized
+	// options.
+	if test.Valid && !(test.Warning && warningsError) {
+		require.NoError(t, err)
+	} else {
+		require.Error(t, err)
+		return
+	}
+
+	require.Equal(t, test.URI, cs.Original)
+
+	if test.Hosts != nil {
+		require.Equal(t, hostsToStrings(test.Hosts), cs.Hosts)
+	}
+
+	if test.Auth != nil {
+		require.Equal(t, test.Auth.Username, cs.Username)
+
+		if test.Auth.Password == nil {
+			require.False(t, cs.PasswordSet)
+		} else {
+			require.True(t, cs.PasswordSet)
+			require.Equal(t, *test.Auth.Password, cs.Password)
+		}
+
+		if test.Auth.DB != cs.Database {
+			require.Equal(t, test.Auth.DB, cs.AuthSource)
+		} else {
+			require.Equal(t, test.Auth.DB, cs.Database)
+		}
+	}
+
+	// Check that all options are present.
+	verifyConnStringOptions(t, cs, test.Options)
+
+	// Check that non-present options are unset. This will be redundant with the above checks
+	// for options that are present.
+	var ok bool
+
+	_, ok = test.Options["maxPoolSize"]
+	require.Equal(t, ok, cs.MaxPoolSizeSet)
 }
 
 // Test case for all connection string spec tests.
@@ -182,7 +167,7 @@ func TestURIOptionsSpec(t *testing.T) {
 }
 
 // verifyConnStringOptions verifies the options on the connection string.
-func verifyConnStringOptions(t *testing.T, cs *connstring.ConnString, options map[string]interface{}) {
+func verifyConnStringOptions(t *testing.T, cs *connstring.ConnString, options map[string]any) {
 	// Check that all options are present.
 	for key, value := range options {
 
@@ -195,7 +180,7 @@ func verifyConnStringOptions(t *testing.T, cs *connstring.ConnString, options ma
 		case "authmechanism":
 			require.Equal(t, value, cs.AuthMechanism)
 		case "authmechanismproperties":
-			convertedMap := value.(map[string]interface{})
+			convertedMap := value.(map[string]any)
 			require.Equal(t,
 				mapInterfaceToString(convertedMap),
 				cs.AuthMechanismProperties)
@@ -221,21 +206,21 @@ func verifyConnStringOptions(t *testing.T, cs *connstring.ConnString, options ma
 			require.Equal(t, value, float64(cs.MaxConnIdleTime/time.Millisecond))
 		case "maxpoolsize":
 			require.True(t, cs.MaxPoolSizeSet)
-			require.Equal(t, value, cs.MaxPoolSize)
+			require.Equal(t, value, float64(cs.MaxPoolSize))
 		case "maxstalenessseconds":
 			require.True(t, cs.MaxStalenessSet)
 			require.Equal(t, value, float64(cs.MaxStaleness/time.Second))
 		case "minpoolsize":
 			require.True(t, cs.MinPoolSizeSet)
-			require.Equal(t, value, int64(cs.MinPoolSize))
+			require.Equal(t, value, float64(cs.MinPoolSize))
 		case "readpreference":
 			require.Equal(t, value, cs.ReadPreference)
 		case "readpreferencetags":
-			sm, ok := value.([]interface{})
+			sm, ok := value.([]any)
 			require.True(t, ok)
 			tags := make([]map[string]string, 0, len(sm))
 			for _, i := range sm {
-				m, ok := i.(map[string]interface{})
+				m, ok := i.(map[string]any)
 				require.True(t, ok)
 				tags = append(tags, mapInterfaceToString(m))
 			}
@@ -277,8 +262,6 @@ func verifyConnStringOptions(t *testing.T, cs *connstring.ConnString, options ma
 			} else {
 				require.Equal(t, value, cs.WString)
 			}
-		case "wtimeoutms":
-			require.Equal(t, value, float64(cs.WTimeout/time.Millisecond))
 		case "waitqueuetimeoutms":
 		case "zlibcompressionlevel":
 			require.Equal(t, value, float64(cs.ZlibLevel))
@@ -288,6 +271,10 @@ func verifyConnStringOptions(t *testing.T, cs *connstring.ConnString, options ma
 			require.Equal(t, value, cs.SSLDisableOCSPEndpointCheck)
 		case "servermonitoringmode":
 			require.Equal(t, value, cs.ServerMonitoringMode)
+		case "timeoutms":
+			require.Equal(t, value, float64(cs.Timeout/time.Millisecond))
+		case "maxconnecting":
+			require.Equal(t, value, float64(cs.MaxConnecting))
 		default:
 			opt, ok := cs.UnknownOptions[key]
 			require.True(t, ok)
@@ -296,8 +283,8 @@ func verifyConnStringOptions(t *testing.T, cs *connstring.ConnString, options ma
 	}
 }
 
-// Convert each interface{} value in the map to a string.
-func mapInterfaceToString(m map[string]interface{}) map[string]string {
+// Convert each any value in the map to a string.
+func mapInterfaceToString(m map[string]any) map[string]string {
 	out := make(map[string]string)
 
 	for key, value := range m {
@@ -310,7 +297,7 @@ func mapInterfaceToString(m map[string]interface{}) map[string]string {
 // getIntFromInterface attempts to convert an empty interface value to an integer.
 //
 // Returns nil if it is not possible.
-func getIntFromInterface(i interface{}) *int64 {
+func getIntFromInterface(i any) *int64 {
 	var out int64
 
 	switch v := i.(type) {
@@ -341,8 +328,8 @@ func getIntFromInterface(i interface{}) *int64 {
 	return &out
 }
 
-func convertToStringSlice(i interface{}) []string {
-	s, ok := i.([]interface{})
+func convertToStringSlice(i any) []string {
+	s, ok := i.([]any)
 	if !ok {
 		return nil
 	}

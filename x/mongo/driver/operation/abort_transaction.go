@@ -10,17 +10,18 @@ import (
 	"context"
 	"errors"
 
-	"github.com/pritunl/mongo-go-driver/event"
-	"github.com/pritunl/mongo-go-driver/internal/driverutil"
-	"github.com/pritunl/mongo-go-driver/mongo/description"
-	"github.com/pritunl/mongo-go-driver/mongo/writeconcern"
-	"github.com/pritunl/mongo-go-driver/x/bsonx/bsoncore"
-	"github.com/pritunl/mongo-go-driver/x/mongo/driver"
-	"github.com/pritunl/mongo-go-driver/x/mongo/driver/session"
+	"github.com/pritunl/mongo-go-driver/v2/event"
+	"github.com/pritunl/mongo-go-driver/v2/internal/driverutil"
+	"github.com/pritunl/mongo-go-driver/v2/mongo/writeconcern"
+	"github.com/pritunl/mongo-go-driver/v2/x/bsonx/bsoncore"
+	"github.com/pritunl/mongo-go-driver/v2/x/mongo/driver"
+	"github.com/pritunl/mongo-go-driver/v2/x/mongo/driver/description"
+	"github.com/pritunl/mongo-go-driver/v2/x/mongo/driver/session"
 )
 
 // AbortTransaction performs an abortTransaction operation.
 type AbortTransaction struct {
+	authenticator driver.Authenticator
 	recoveryToken bsoncore.Document
 	session       *session.Client
 	clock         *session.ClusterClock
@@ -40,9 +41,8 @@ func NewAbortTransaction() *AbortTransaction {
 	return &AbortTransaction{}
 }
 
-func (at *AbortTransaction) processResponse(driver.ResponseInfo) error {
-	var err error
-	return err
+func (at *AbortTransaction) processResponse(context.Context, bsoncore.Document, driver.ResponseInfo) error {
+	return nil
 }
 
 // Execute runs this operations and returns an error if the operation did not execute successfully.
@@ -66,6 +66,7 @@ func (at *AbortTransaction) Execute(ctx context.Context) error {
 		WriteConcern:      at.writeConcern,
 		ServerAPI:         at.serverAPI,
 		Name:              driverutil.AbortTransactionOp,
+		Authenticator:     at.authenticator,
 	}.Execute(ctx)
 
 }
@@ -197,5 +198,15 @@ func (at *AbortTransaction) ServerAPI(serverAPI *driver.ServerAPIOptions) *Abort
 	}
 
 	at.serverAPI = serverAPI
+	return at
+}
+
+// Authenticator sets the authenticator to use for this operation.
+func (at *AbortTransaction) Authenticator(authenticator driver.Authenticator) *AbortTransaction {
+	if at == nil {
+		at = new(AbortTransaction)
+	}
+
+	at.authenticator = authenticator
 	return at
 }

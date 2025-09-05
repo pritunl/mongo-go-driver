@@ -10,16 +10,16 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/pritunl/mongo-go-driver/bson"
-	"github.com/pritunl/mongo-go-driver/x/bsonx/bsoncore"
-	"github.com/pritunl/mongo-go-driver/x/mongo/driver"
-	"github.com/pritunl/mongo-go-driver/x/mongo/driver/operation"
+	"github.com/pritunl/mongo-go-driver/v2/bson"
+	"github.com/pritunl/mongo-go-driver/v2/x/bsonx/bsoncore"
+	"github.com/pritunl/mongo-go-driver/v2/x/mongo/driver"
+	"github.com/pritunl/mongo-go-driver/v2/x/mongo/driver/operation"
 )
 
 // SaslClient is the client piece of a sasl conversation.
 type SaslClient interface {
 	Start() (string, []byte, error)
-	Next(challenge []byte) ([]byte, error)
+	Next(ctx context.Context, challenge []byte) ([]byte, error)
 	Completed() bool
 }
 
@@ -94,7 +94,7 @@ type saslResponse struct {
 }
 
 // Finish completes the conversation based on the first server response to authenticate the given connection.
-func (sc *saslConversation) Finish(ctx context.Context, cfg *Config, firstResponse bsoncore.Document) error {
+func (sc *saslConversation) Finish(ctx context.Context, cfg *driver.AuthConfig, firstResponse bsoncore.Document) error {
 	if closer, ok := sc.client.(SaslClientCloser); ok {
 		defer closer.Close()
 	}
@@ -118,7 +118,7 @@ func (sc *saslConversation) Finish(ctx context.Context, cfg *Config, firstRespon
 			return nil
 		}
 
-		payload, err = sc.client.Next(saslResp.Payload)
+		payload, err = sc.client.Next(ctx, saslResp.Payload)
 		if err != nil {
 			return newError(err, sc.mechanism)
 		}
@@ -153,10 +153,9 @@ func (sc *saslConversation) Finish(ctx context.Context, cfg *Config, firstRespon
 }
 
 // ConductSaslConversation runs a full SASL conversation to authenticate the given connection.
-func ConductSaslConversation(ctx context.Context, cfg *Config, authSource string, client SaslClient) error {
+func ConductSaslConversation(ctx context.Context, cfg *driver.AuthConfig, authSource string, client SaslClient) error {
 	// Create a non-speculative SASL conversation.
 	conversation := newSaslConversation(client, authSource, false)
-
 	saslStartDoc, err := conversation.FirstMessage()
 	if err != nil {
 		return newError(err, conversation.mechanism)

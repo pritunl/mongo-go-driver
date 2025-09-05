@@ -10,32 +10,32 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"os"
 
-	"github.com/pritunl/mongo-go-driver/bson"
-	"github.com/pritunl/mongo-go-driver/mongo"
-	"github.com/pritunl/mongo-go-driver/mongo/options"
-	"github.com/pritunl/mongo-go-driver/mongo/readpref"
+	"github.com/pritunl/mongo-go-driver/v2/bson"
+	"github.com/pritunl/mongo-go-driver/v2/mongo"
+	"github.com/pritunl/mongo-go-driver/v2/mongo/options"
+	"github.com/pritunl/mongo-go-driver/v2/mongo/readpref"
 )
 
 func ExampleClient() {
 	// Create a Client and execute a ListDatabases operation.
 
 	client, err := mongo.Connect(
-		context.TODO(),
 		options.Client().ApplyURI("mongodb://localhost:27017"))
 	if err != nil {
-		log.Fatal(err)
+		log.Panic(err)
 	}
 	defer func() {
 		if err = client.Disconnect(context.TODO()); err != nil {
-			log.Fatal(err)
+			log.Panic(err)
 		}
 	}()
 
 	collection := client.Database("db").Collection("coll")
 	result, err := collection.InsertOne(context.TODO(), bson.D{{"x", 1}})
 	if err != nil {
-		log.Fatal(err)
+		log.Panic(err)
 	}
 	fmt.Printf("inserted ID: %v\n", result.InsertedID)
 }
@@ -45,13 +45,13 @@ func ExampleConnect_ping() {
 	// server is running.
 
 	clientOpts := options.Client().ApplyURI("mongodb://localhost:27017")
-	client, err := mongo.Connect(context.TODO(), clientOpts)
+	client, err := mongo.Connect(clientOpts)
 	if err != nil {
-		log.Fatal(err)
+		log.Panic(err)
 	}
 	defer func() {
 		if err = client.Disconnect(context.TODO()); err != nil {
-			log.Fatal(err)
+			log.Panic(err)
 		}
 	}()
 
@@ -60,7 +60,7 @@ func ExampleConnect_ping() {
 	// reduces application resiliency as the server may be temporarily
 	// unavailable when Ping is called.
 	if err = client.Ping(context.TODO(), readpref.Primary()); err != nil {
-		log.Fatal(err)
+		log.Panic(err)
 	}
 }
 
@@ -74,9 +74,9 @@ func ExampleConnect_replicaSet() {
 
 	clientOpts := options.Client().ApplyURI(
 		"mongodb://localhost:27017,localhost:27018/?replicaSet=replset")
-	client, err := mongo.Connect(context.TODO(), clientOpts)
+	client, err := mongo.Connect(clientOpts)
 	if err != nil {
-		log.Fatal(err)
+		log.Panic(err)
 	}
 	_ = client
 }
@@ -88,9 +88,9 @@ func ExampleConnect_sharded() {
 
 	clientOpts := options.Client().ApplyURI(
 		"mongodb://localhost:27017,localhost:27018")
-	client, err := mongo.Connect(context.TODO(), clientOpts)
+	client, err := mongo.Connect(clientOpts)
 	if err != nil {
-		log.Fatal(err)
+		log.Panic(err)
 	}
 	_ = client
 }
@@ -106,9 +106,9 @@ func ExampleConnect_sRV() {
 	// requires driver version 1.1.0 or higher.
 
 	clientOpts := options.Client().ApplyURI("mongodb+srv://mongodb.example.com")
-	client, err := mongo.Connect(context.TODO(), clientOpts)
+	client, err := mongo.Connect(clientOpts)
 	if err != nil {
-		log.Fatal(err)
+		log.Panic(err)
 	}
 	_ = client
 }
@@ -120,9 +120,9 @@ func ExampleConnect_direct() {
 
 	clientOpts := options.Client().ApplyURI(
 		"mongodb://localhost:27017/?connect=direct")
-	client, err := mongo.Connect(context.TODO(), clientOpts)
+	client, err := mongo.Connect(clientOpts)
 	if err != nil {
-		log.Fatal(err)
+		log.Panic(err)
 	}
 	_ = client
 }
@@ -143,9 +143,9 @@ func ExampleConnect_sCRAM() {
 	}
 	clientOpts := options.Client().ApplyURI("mongodb://localhost:27017").
 		SetAuth(credential)
-	client, err := mongo.Connect(context.TODO(), clientOpts)
+	client, err := mongo.Connect(clientOpts)
 	if err != nil {
-		log.Fatal(err)
+		log.Panic(err)
 	}
 	_ = client
 }
@@ -179,9 +179,9 @@ func ExampleConnect_x509() {
 	}
 	clientOpts := options.Client().ApplyURI(uri).SetAuth(credential)
 
-	client, err := mongo.Connect(context.TODO(), clientOpts)
+	client, err := mongo.Connect(clientOpts)
 	if err != nil {
-		log.Fatal(err)
+		log.Panic(err)
 	}
 	_ = client
 }
@@ -204,9 +204,9 @@ func ExampleConnect_pLAIN() {
 	clientOpts := options.Client().ApplyURI("mongodb://localhost:27017").
 		SetAuth(credential)
 
-	client, err := mongo.Connect(context.TODO(), clientOpts)
+	client, err := mongo.Connect(clientOpts)
 	if err != nil {
-		log.Fatal(err)
+		log.Panic(err)
 	}
 	_ = client
 }
@@ -239,9 +239,9 @@ func ExampleConnect_kerberos() {
 	uri := "mongo-server.example.com:27017"
 	clientOpts := options.Client().ApplyURI(uri).SetAuth(credential)
 
-	client, err := mongo.Connect(context.TODO(), clientOpts)
+	client, err := mongo.Connect(clientOpts)
 	if err != nil {
-		log.Fatal(err)
+		log.Panic(err)
 	}
 	_ = client
 }
@@ -289,7 +289,6 @@ func ExampleConnect_aWS() {
 		Password:      secretAccessKey,
 	}
 	awsIAMClient, err := mongo.Connect(
-		context.TODO(),
 		options.Client().SetAuth(awsCredential))
 	if err != nil {
 		panic(err)
@@ -311,7 +310,6 @@ func ExampleConnect_aWS() {
 		},
 	}
 	assumeRoleClient, err := mongo.Connect(
-		context.TODO(),
 		options.Client().SetAuth(assumeRoleCredential))
 	if err != nil {
 		panic(err)
@@ -333,7 +331,6 @@ func ExampleConnect_aWS() {
 		AuthMechanism: "MONGODB-AWS",
 	}
 	envVariablesClient, err := mongo.Connect(
-		context.TODO(),
 		options.Client().SetAuth(envVariablesCredential))
 	if err != nil {
 		panic(err)
@@ -350,9 +347,7 @@ func ExampleConnect_aWS() {
 	ecCredential := options.Credential{
 		AuthMechanism: "MONGODB-AWS",
 	}
-	ecClient, err := mongo.Connect(
-		context.TODO(),
-		options.Client().SetAuth(ecCredential))
+	ecClient, err := mongo.Connect(options.Client().SetAuth(ecCredential))
 	if err != nil {
 		panic(err)
 	}
@@ -382,7 +377,6 @@ func ExampleConnect_stableAPI() {
 	// is a constant equal to "1".
 	serverAPI := options.ServerAPI(options.ServerAPIVersion1)
 	serverAPIClient, err := mongo.Connect(
-		context.TODO(),
 		options.Client().SetServerAPIOptions(serverAPI))
 	if err != nil {
 		panic(err)
@@ -397,7 +391,6 @@ func ExampleConnect_stableAPI() {
 	serverAPIStrict := options.ServerAPI(options.ServerAPIVersion1).
 		SetStrict(true)
 	serverAPIStrictClient, err := mongo.Connect(
-		context.TODO(),
 		options.Client().SetServerAPIOptions(serverAPIStrict))
 	if err != nil {
 		panic(err)
@@ -406,7 +399,7 @@ func ExampleConnect_stableAPI() {
 	coll := serverAPIStrictClient.Database("db").Collection("coll")
 	// Fails with error: (APIStrictError) Provided apiStrict:true, but the
 	// command distinct is not in API Version 1
-	_, err = coll.Distinct(context.TODO(), "distinct", bson.D{})
+	err = coll.Distinct(context.TODO(), "distinct", bson.D{}).Err()
 	log.Println(err)
 
 	// ServerAPIOptions can be declared with a DeprecationErrors option.
@@ -416,7 +409,6 @@ func ExampleConnect_stableAPI() {
 	serverAPIDeprecation := options.ServerAPI(options.ServerAPIVersion1).
 		SetDeprecationErrors(true)
 	serverAPIDeprecationClient, err := mongo.Connect(
-		context.TODO(),
 		options.Client().SetServerAPIOptions(serverAPIDeprecation))
 	if err != nil {
 		panic(err)
@@ -442,7 +434,7 @@ func ExampleConnect_bSONOptions() {
 		ApplyURI("mongodb://localhost:27017").
 		SetBSONOptions(bsonOpts)
 
-	client, err := mongo.Connect(context.TODO(), clientOpts)
+	client, err := mongo.Connect(clientOpts)
 	if err != nil {
 		panic(err)
 	}
@@ -457,8 +449,8 @@ func ExampleConnect_bSONOptions() {
 	// Define a struct that contains a map and a slice and uses "json" struct
 	// tags to specify field names.
 	type myDocument struct {
-		MyMap   map[string]interface{} `json:"a"`
-		MySlice []string               `json:"b"`
+		MyMap   map[string]any `json:"a"`
+		MySlice []string       `json:"b"`
 	}
 
 	// Insert an instance of the struct with all empty fields. Expect the
@@ -467,4 +459,263 @@ func ExampleConnect_bSONOptions() {
 	if err != nil {
 		panic(err)
 	}
+}
+
+func ExampleConnect_oIDC() {
+	// The `MONGODB-OIDC authentication mechanism` is available in MongoDB 7.0+
+	// on Linux platforms.
+	//
+	// The MONGODB-OIDC mechanism authenticates using an OpenID Connect (OIDC)
+	// access token. The driver supports OIDC for workload identity, defined as
+	// an identity you assign to a software workload (such as an application,
+	// service, script, or container) to authenticate and access other services
+	// and resources.
+	//
+	// The driver also supports OIDC for workforce identity for a more secure
+	// flow with a human in the loop.
+
+	// Credentials can be configured through the MongoDB URI or as arguments in
+	// the options.ClientOptions struct that is passed into the mongo.Connect
+	// function.
+
+	// Built-in Support
+	// The driver has built-in support for Azure IMDS and GCP
+	// IMDS environments.  Other environments are supported with `Custom
+	// Callbacks`.
+
+	// Azure IMDS
+	// For an application running on an Azure VM or otherwise using the `Azure
+	// Internal Metadata Service`, you can use the built-in support for Azure,
+	// where "<client_id>" below is the client id of the Azure managed identity,
+	// and ``<audience>`` is the url-encoded ``audience`` `configured on your
+	// MongoDB deployment`.
+	{
+		uri := os.Getenv("MONGODB_URI")
+		props := map[string]string{
+			"ENVIRONMENT":    "azure",
+			"TOKEN_RESOURCE": "<audience>",
+		}
+		opts := options.Client().ApplyURI(uri)
+		opts.SetAuth(
+			options.Credential{
+				Username:                "<client_id>",
+				AuthMechanism:           "MONGODB-OIDC",
+				AuthMechanismProperties: props,
+			},
+		)
+		c, err := mongo.Connect(opts)
+		if err != nil {
+			panic(err)
+		}
+		defer func() { _ = c.Disconnect(context.TODO()) }()
+		_, err = c.Database("test").
+			Collection("test").
+			InsertOne(context.TODO(), bson.D{})
+		if err != nil {
+			panic(err)
+		}
+	}
+
+	// If the application is running on an Azure VM and only one managed
+	// identity is associated with the VM, "username" can be omitted.
+
+	// GCP IMDS
+
+	// For an application running on an GCP VM or otherwise using the `GCP
+	// Internal Metadata Service`_, you can use the built-in support for GCP,
+	// where "<audience>" below is the url-encoded "audience" `configured on
+	// your MongoDB deployment`.
+	{
+		uri := os.Getenv("MONGODB_URI")
+		props := map[string]string{
+			"ENVIRONMENT":    "gcp",
+			"TOKEN_RESOURCE": "<audience>",
+		}
+		opts := options.Client().ApplyURI(uri)
+		opts.SetAuth(
+			options.Credential{
+				AuthMechanism:           "MONGODB-OIDC",
+				AuthMechanismProperties: props,
+			},
+		)
+		c, err := mongo.Connect(opts)
+		if err != nil {
+			panic(err)
+		}
+		defer func() { _ = c.Disconnect(context.TODO()) }()
+		_, err = c.Database("test").
+			Collection("test").
+			InsertOne(context.TODO(), bson.D{})
+		if err != nil {
+			panic(err)
+		}
+	}
+
+	// Custom Callbacks
+
+	// For environments that are not directly supported by the driver, you can
+	// use options.OIDCCallback. Some examples are given below.
+
+	// AWS EKS
+
+	// For an EKS Cluster with a configured `IAM OIDC provider`, the token can
+	// be read from a path given by the "AWS_WEB_IDENTITY_TOKEN_FILE"
+	// environment variable.
+	{
+		eksCallback := func(_ context.Context,
+			_ *options.OIDCArgs) (*options.OIDCCredential, error) {
+			accessToken, err := os.ReadFile(
+				os.Getenv("AWS_WEB_IDENTITY_TOKEN_FILE"))
+			if err != nil {
+				return nil, err
+			}
+			return &options.OIDCCredential{
+				AccessToken: string(accessToken),
+			}, nil
+		}
+		uri := os.Getenv("MONGODB_URI")
+		opts := options.Client().ApplyURI(uri)
+		opts.SetAuth(
+			options.Credential{
+				AuthMechanism:       "MONGODB-OIDC",
+				OIDCMachineCallback: eksCallback,
+			},
+		)
+		c, err := mongo.Connect(opts)
+		if err != nil {
+			panic(err)
+		}
+		defer func() { _ = c.Disconnect(context.TODO()) }()
+		_, err = c.Database("test").
+			Collection("test").
+			InsertOne(context.TODO(), bson.D{})
+		if err != nil {
+			panic(err)
+		}
+	}
+
+	// Other Azure Environments
+
+	// For applications running on Azure Functions, App Service Environment
+	// (ASE), or Azure Kubernetes Service (AKS), you can use the `azidentity
+	// package`
+	// (https://pkg.go.dev/github.com/Azure/azure-sdk-for-go/sdk/azidentity) to
+	// fetch the credentials. In each case, the OIDCCallback function should
+	// return the AccessToken from the azidentity package.
+
+	// GCP GKE
+
+	// For a Google Kubernetes Engine cluster with a `configured service
+	// account`, the token can be read from the standard service account token
+	// file location.
+	{
+		gkeCallback := func(_ context.Context,
+			_ *options.OIDCArgs) (*options.OIDCCredential, error) {
+			accessToken, err := os.ReadFile(
+				"/var/run/secrets/kubernetes.io/serviceaccount/token")
+			if err != nil {
+				return nil, err
+			}
+			return &options.OIDCCredential{
+				AccessToken: string(accessToken),
+			}, nil
+		}
+		uri := os.Getenv("MONGODB_URI")
+		props := map[string]string{
+			"ENVIRONMENT":    "gcp",
+			"TOKEN_RESOURCE": "<audience>",
+		}
+		opts := options.Client().ApplyURI(uri)
+		opts.SetAuth(
+			options.Credential{
+				AuthMechanism:           "MONGODB-OIDC",
+				AuthMechanismProperties: props,
+				OIDCMachineCallback:     gkeCallback,
+			},
+		)
+		c, err := mongo.Connect(opts)
+		if err != nil {
+			panic(err)
+		}
+		defer func() { _ = c.Disconnect(context.TODO()) }()
+		_, err = c.Database("test").
+			Collection("test").
+			InsertOne(context.TODO(), bson.D{})
+		if err != nil {
+			panic(err)
+		}
+	}
+
+	// For workforce identity, the Client must be configured with the
+	// OIDCHumanCallback rather than the OIDCMachineCallback. The
+	// OIDCHumanCallback is used by the driver in a process that is two step. In
+	// the first step, the driver retrieves the Identity Provider (IDP)
+	// Information (IDPInfo) for the passed username. The OIDCHumanCallback then
+	// needs to negotiate with the IDP in order to obtain an AccessToken,
+	// possible RefreshToken, any timeouts, and return them, similar to the
+	// OIDCMachineCallbacks seen above. See
+	// https://docs.hidglobal.com/dev/auth-service/integration/openid-authentication-flows.html
+	// for more information on various OIDC authentication flows.
+	{
+		humanCallback := func(ctx context.Context,
+			opts *options.OIDCArgs) (*options.OIDCCredential, error) {
+			// idpInfo passed from the driver by asking the MongoDB server for
+			// the info configured for the username
+			idpInfo := opts.IDPInfo
+			// negotiateWithIDP must work with the IdP to obtain an access
+			// token. In many cases this will involve opening a webbrowser or
+			// providing a URL on the command line to a human-in-the-loop who
+			// can give permissions to the IdP.
+			accessToken, err := negotiateWithIDP(ctx, idpInfo.Issuer)
+			if err != nil {
+				return nil, err
+			}
+			return &options.OIDCCredential{
+				AccessToken: accessToken,
+			}, nil
+		}
+		uri := os.Getenv("MONGODB_URI")
+		props := map[string]string{
+			"ENVIRONMENT":    "gcp",
+			"TOKEN_RESOURCE": "<audience>",
+		}
+		opts := options.Client().ApplyURI(uri)
+		opts.SetAuth(
+			options.Credential{
+				AuthMechanism:           "MONGODB-OIDC",
+				AuthMechanismProperties: props,
+				OIDCHumanCallback:       humanCallback,
+			},
+		)
+		c, err := mongo.Connect(opts)
+		if err != nil {
+			panic(err)
+		}
+		defer func() { _ = c.Disconnect(context.TODO()) }()
+		_, err = c.Database("test").
+			Collection("test").
+			InsertOne(context.TODO(), bson.D{})
+		if err != nil {
+			panic(err)
+		}
+	}
+
+	// * MONGODB-OIDC authentication mechanism:
+	// https://www.mongodb.com/docs/manual/core/security-oidc/
+	// * OIDC Identity Provider Configuration:
+	// https://www.mongodb.com/docs/manual/reference/parameters/#mongodb-parameter-param.oidcIdentityProviders
+	// * Azure Internal Metadata Service:
+	// https://learn.microsoft.com/en-us/azure/virtual-machines/instance-metadata-service
+	// * GCP Internal Metadata Service:
+	// https://cloud.google.com/compute/docs/metadata/querying-metadata
+	// * IAM OIDC provider:
+	// https://docs.aws.amazon.com/eks/latest/userguide/enable-iam-roles-for-service-accounts.html
+	// * azure-identity package:
+	// https://pkg.go.dev/github.com/Azure/azure-sdk-for-go/sdk/azidentity
+	// * configured service account:
+	// https://cloud.google.com/kubernetes-engine/docs/how-to/service-accounts
+}
+
+func negotiateWithIDP(_ context.Context, _ string) (string, error) {
+	return "", nil
 }

@@ -8,12 +8,15 @@ package auth
 
 import (
 	"context"
+	"net/http"
 	"testing"
 
-	"github.com/pritunl/mongo-go-driver/internal/assert"
-	"github.com/pritunl/mongo-go-driver/mongo/description"
-	"github.com/pritunl/mongo-go-driver/x/bsonx/bsoncore"
-	"github.com/pritunl/mongo-go-driver/x/mongo/driver/drivertest"
+	"github.com/pritunl/mongo-go-driver/v2/internal/assert"
+	"github.com/pritunl/mongo-go-driver/v2/x/bsonx/bsoncore"
+	"github.com/pritunl/mongo-go-driver/v2/x/mongo/driver"
+	"github.com/pritunl/mongo-go-driver/v2/x/mongo/driver/description"
+	"github.com/pritunl/mongo-go-driver/v2/x/mongo/driver/drivertest"
+	"github.com/pritunl/mongo-go-driver/v2/x/mongo/driver/mnet"
 )
 
 const (
@@ -38,7 +41,7 @@ func TestSCRAM(t *testing.T) {
 	t.Run("conversation", func(t *testing.T) {
 		testCases := []struct {
 			name                  string
-			createAuthenticatorFn func(*Cred) (Authenticator, error)
+			createAuthenticatorFn func(*Cred, *http.Client) (Authenticator, error)
 			payloads              [][]byte
 			nonce                 string
 		}{
@@ -49,11 +52,13 @@ func TestSCRAM(t *testing.T) {
 		}
 		for _, tc := range testCases {
 			t.Run(tc.name, func(t *testing.T) {
-				authenticator, err := tc.createAuthenticatorFn(&Cred{
-					Username: "user",
-					Password: "pencil",
-					Source:   "admin",
-				})
+				authenticator, err := tc.createAuthenticatorFn(
+					&Cred{
+						Username: "user",
+						Password: "pencil",
+						Source:   "admin",
+					},
+					&http.Client{})
 				assert.Nil(t, err, "error creating authenticator: %v", err)
 				sa, _ := authenticator.(*ScramAuthenticator)
 				sa.client = sa.client.WithNonceGenerator(func() string {
@@ -68,18 +73,20 @@ func TestSCRAM(t *testing.T) {
 						Max: 21,
 					},
 				}
-				conn := &drivertest.ChannelConn{
+				chanconn := &drivertest.ChannelConn{
 					Written:  make(chan []byte, len(tc.payloads)),
 					ReadResp: responses,
 					Desc:     desc,
 				}
 
-				err = authenticator.Auth(context.Background(), &Config{Description: desc, Connection: conn})
+				conn := mnet.NewConnection(chanconn)
+
+				err = authenticator.Auth(context.Background(), &driver.AuthConfig{Connection: conn})
 				assert.Nil(t, err, "Auth error: %v\n", err)
 
 				// Verify that the first command sent is saslStart.
-				assert.True(t, len(conn.Written) > 1, "wire messages were written to the connection")
-				startCmd, err := drivertest.GetCommandFromMsgWireMessage(<-conn.Written)
+				assert.True(t, len(chanconn.Written) > 1, "wire messages were written to the connection")
+				startCmd, err := drivertest.GetCommandFromMsgWireMessage(<-chanconn.Written)
 				assert.Nil(t, err, "error parsing wire message: %v", err)
 				cmdName := startCmd.Index(0).Key()
 				assert.Equal(t, cmdName, "saslStart", "cmd name mismatch; expected 'saslStart', got %v", cmdName)

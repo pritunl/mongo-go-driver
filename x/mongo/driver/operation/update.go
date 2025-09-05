@@ -12,20 +12,20 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/pritunl/mongo-go-driver/bson"
-	"github.com/pritunl/mongo-go-driver/bson/bsontype"
-	"github.com/pritunl/mongo-go-driver/event"
-	"github.com/pritunl/mongo-go-driver/internal/driverutil"
-	"github.com/pritunl/mongo-go-driver/internal/logger"
-	"github.com/pritunl/mongo-go-driver/mongo/description"
-	"github.com/pritunl/mongo-go-driver/mongo/writeconcern"
-	"github.com/pritunl/mongo-go-driver/x/bsonx/bsoncore"
-	"github.com/pritunl/mongo-go-driver/x/mongo/driver"
-	"github.com/pritunl/mongo-go-driver/x/mongo/driver/session"
+	"github.com/pritunl/mongo-go-driver/v2/bson"
+	"github.com/pritunl/mongo-go-driver/v2/event"
+	"github.com/pritunl/mongo-go-driver/v2/internal/driverutil"
+	"github.com/pritunl/mongo-go-driver/v2/internal/logger"
+	"github.com/pritunl/mongo-go-driver/v2/mongo/writeconcern"
+	"github.com/pritunl/mongo-go-driver/v2/x/bsonx/bsoncore"
+	"github.com/pritunl/mongo-go-driver/v2/x/mongo/driver"
+	"github.com/pritunl/mongo-go-driver/v2/x/mongo/driver/description"
+	"github.com/pritunl/mongo-go-driver/v2/x/mongo/driver/session"
 )
 
 // Update performs an update operation.
 type Update struct {
+	authenticator            driver.Authenticator
 	bypassDocumentValidation *bool
 	comment                  bsoncore.Value
 	ordered                  *bool
@@ -46,13 +46,14 @@ type Update struct {
 	serverAPI                *driver.ServerAPIOptions
 	let                      bsoncore.Document
 	timeout                  *time.Duration
+	rawData                  *bool
 	logger                   *logger.Logger
 }
 
 // Upsert contains the information for an upsert in an Update operation.
 type Upsert struct {
 	Index int64
-	ID    interface{} `bson:"_id"`
+	ID    any `bson:"_id"`
 }
 
 // UpdateResult contains information for the result of an Update operation.
@@ -123,8 +124,8 @@ func NewUpdate(updates ...bsoncore.Document) *Update {
 // Result returns the result of executing this operation.
 func (u *Update) Result() UpdateResult { return u.result }
 
-func (u *Update) processResponse(info driver.ResponseInfo) error {
-	ur, err := buildUpdateResult(info.ServerResponse)
+func (u *Update) processResponse(_ context.Context, resp bsoncore.Document, info driver.ResponseInfo) error {
+	ur, err := buildUpdateResult(resp)
 
 	u.result.N += ur.N
 	u.result.NModified += ur.NModified
@@ -167,6 +168,7 @@ func (u *Update) Execute(ctx context.Context) error {
 		Timeout:           u.timeout,
 		Logger:            u.logger,
 		Name:              driverutil.UpdateOp,
+		Authenticator:     u.authenticator,
 	}.Execute(ctx)
 
 }
@@ -174,11 +176,11 @@ func (u *Update) Execute(ctx context.Context) error {
 func (u *Update) command(dst []byte, desc description.SelectedServer) ([]byte, error) {
 	dst = bsoncore.AppendStringElement(dst, "update", u.collection)
 	if u.bypassDocumentValidation != nil &&
-		(desc.WireVersion != nil && desc.WireVersion.Includes(4)) {
+		(desc.WireVersion != nil && driverutil.VersionRangeIncludes(*desc.WireVersion, 4)) {
 
 		dst = bsoncore.AppendBooleanElement(dst, "bypassDocumentValidation", *u.bypassDocumentValidation)
 	}
-	if u.comment.Type != bsontype.Type(0) {
+	if u.comment.Type != bsoncore.Type(0) {
 		dst = bsoncore.AppendValueElement(dst, "comment", u.comment)
 	}
 	if u.ordered != nil {
@@ -187,7 +189,7 @@ func (u *Update) command(dst []byte, desc description.SelectedServer) ([]byte, e
 	}
 	if u.hint != nil && *u.hint {
 
-		if desc.WireVersion == nil || !desc.WireVersion.Includes(5) {
+		if desc.WireVersion == nil || !driverutil.VersionRangeIncludes(*desc.WireVersion, 5) {
 			return nil, errors.New("the 'hint' command parameter requires a minimum server wire version of 5")
 		}
 		if !u.writeConcern.Acknowledged() {
@@ -195,19 +197,22 @@ func (u *Update) command(dst []byte, desc description.SelectedServer) ([]byte, e
 		}
 	}
 	if u.arrayFilters != nil && *u.arrayFilters {
-		if desc.WireVersion == nil || !desc.WireVersion.Includes(6) {
+		if desc.WireVersion == nil || !driverutil.VersionRangeIncludes(*desc.WireVersion, 6) {
 			return nil, errors.New("the 'arrayFilters' command parameter requires a minimum server wire version of 6")
 		}
 	}
 	if u.let != nil {
 		dst = bsoncore.AppendDocumentElement(dst, "let", u.let)
 	}
+	// Set rawData for 8.2+ servers.
+	if u.rawData != nil && desc.WireVersion != nil && driverutil.VersionRangeIncludes(*desc.WireVersion, 27) {
+		dst = bsoncore.AppendBooleanElement(dst, "rawData", *u.rawData)
+	}
 
 	return dst, nil
 }
 
-// BypassDocumentValidation allows the operation to opt-out of document level validation. Valid
-// for server versions >= 3.2. For servers < 3.2, this setting is ignored.
+// BypassDocumentValidation allows the operation to opt-out of document level validation.
 func (u *Update) BypassDocumentValidation(bypassDocumentValidation bool) *Update {
 	if u == nil {
 		u = new(Update)
@@ -218,8 +223,7 @@ func (u *Update) BypassDocumentValidation(bypassDocumentValidation bool) *Update
 }
 
 // Hint is a flag to indicate that the update document contains a hint. Hint is only supported by
-// servers >= 4.2. Older servers >= 3.4 will report an error for using the hint option. For servers <
-// 3.4, the driver will return an error if the hint option is used.
+// servers >= 4.2. Older servers will report an error for using the hint option.
 func (u *Update) Hint(hint bool) *Update {
 	if u == nil {
 		u = new(Update)
@@ -229,8 +233,7 @@ func (u *Update) Hint(hint bool) *Update {
 	return u
 }
 
-// ArrayFilters is a flag to indicate that the update document contains an arrayFilters field. This option is only
-// supported on server versions 3.6 and higher. For servers < 3.6, the driver will return an error.
+// ArrayFilters is a flag to indicate that the update document contains an arrayFilters field.
 func (u *Update) ArrayFilters(arrayFilters bool) *Update {
 	if u == nil {
 		u = new(Update)
@@ -412,5 +415,25 @@ func (u *Update) Logger(logger *logger.Logger) *Update {
 	}
 
 	u.logger = logger
+	return u
+}
+
+// Authenticator sets the authenticator to use for this operation.
+func (u *Update) Authenticator(authenticator driver.Authenticator) *Update {
+	if u == nil {
+		u = new(Update)
+	}
+
+	u.authenticator = authenticator
+	return u
+}
+
+// RawData sets the rawData to access timeseries data in the compressed format.
+func (u *Update) RawData(rawData bool) *Update {
+	if u == nil {
+		u = new(Update)
+	}
+
+	u.rawData = &rawData
 	return u
 }

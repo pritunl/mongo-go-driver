@@ -11,17 +11,18 @@ import (
 	"errors"
 	"time"
 
-	"github.com/pritunl/mongo-go-driver/event"
-	"github.com/pritunl/mongo-go-driver/internal/logger"
-	"github.com/pritunl/mongo-go-driver/mongo/description"
-	"github.com/pritunl/mongo-go-driver/mongo/readpref"
-	"github.com/pritunl/mongo-go-driver/x/bsonx/bsoncore"
-	"github.com/pritunl/mongo-go-driver/x/mongo/driver"
-	"github.com/pritunl/mongo-go-driver/x/mongo/driver/session"
+	"github.com/pritunl/mongo-go-driver/v2/event"
+	"github.com/pritunl/mongo-go-driver/v2/internal/logger"
+	"github.com/pritunl/mongo-go-driver/v2/mongo/readpref"
+	"github.com/pritunl/mongo-go-driver/v2/x/bsonx/bsoncore"
+	"github.com/pritunl/mongo-go-driver/v2/x/mongo/driver"
+	"github.com/pritunl/mongo-go-driver/v2/x/mongo/driver/description"
+	"github.com/pritunl/mongo-go-driver/v2/x/mongo/driver/session"
 )
 
 // Command is used to run a generic operation.
 type Command struct {
+	authenticator  driver.Authenticator
 	command        bsoncore.Document
 	database       string
 	deployment     driver.Deployment
@@ -78,14 +79,18 @@ func (c *Command) Execute(ctx context.Context) error {
 	}
 
 	return driver.Operation{
-		CommandFn: func(dst []byte, desc description.SelectedServer) ([]byte, error) {
+		CommandFn: func(dst []byte, _ description.SelectedServer) ([]byte, error) {
 			return append(dst, c.command[4:len(c.command)-1]...), nil
 		},
-		ProcessResponseFn: func(info driver.ResponseInfo) error {
-			c.resultResponse = info.ServerResponse
+		ProcessResponseFn: func(_ context.Context, resp bsoncore.Document, info driver.ResponseInfo) error {
+			c.resultResponse = resp
 
 			if c.createCursor {
-				cursorRes, err := driver.NewCursorResponse(info)
+				curDoc, err := driver.ExtractCursorDocument(resp)
+				if err != nil {
+					return err
+				}
+				cursorRes, err := driver.NewCursorResponse(curDoc, info)
 				if err != nil {
 					return err
 				}
@@ -107,6 +112,7 @@ func (c *Command) Execute(ctx context.Context) error {
 		ServerAPI:      c.serverAPI,
 		Timeout:        c.timeout,
 		Logger:         c.logger,
+		Authenticator:  c.authenticator,
 	}.Execute(ctx)
 }
 
@@ -217,5 +223,15 @@ func (c *Command) Logger(logger *logger.Logger) *Command {
 	}
 
 	c.logger = logger
+	return c
+}
+
+// Authenticator sets the authenticator to use for this operation.
+func (c *Command) Authenticator(authenticator driver.Authenticator) *Command {
+	if c == nil {
+		c = new(Command)
+	}
+
+	c.authenticator = authenticator
 	return c
 }

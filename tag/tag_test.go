@@ -9,8 +9,8 @@ package tag
 import (
 	"testing"
 
-	"github.com/pritunl/mongo-go-driver/internal/assert"
-	"github.com/pritunl/mongo-go-driver/internal/require"
+	"github.com/pritunl/mongo-go-driver/v2/internal/assert"
+	"github.com/pritunl/mongo-go-driver/v2/internal/require"
 )
 
 func TestTag_String(t *testing.T) {

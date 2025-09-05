@@ -8,16 +8,20 @@ package auth
 
 import (
 	"context"
+	"net/http"
 
-	"github.com/pritunl/mongo-go-driver/x/bsonx/bsoncore"
-	"github.com/pritunl/mongo-go-driver/x/mongo/driver"
-	"github.com/pritunl/mongo-go-driver/x/mongo/driver/operation"
+	"github.com/pritunl/mongo-go-driver/v2/x/bsonx/bsoncore"
+	"github.com/pritunl/mongo-go-driver/v2/x/mongo/driver"
+	"github.com/pritunl/mongo-go-driver/v2/x/mongo/driver/operation"
 )
 
 // MongoDBX509 is the mechanism name for MongoDBX509.
 const MongoDBX509 = "MONGODB-X509"
 
-func newMongoDBX509Authenticator(cred *Cred) (Authenticator, error) {
+func newMongoDBX509Authenticator(cred *Cred, _ *http.Client) (Authenticator, error) {
+	// TODO(GODRIVER-3309): Validate that cred.Source is either empty or
+	// "$external" to make validation uniform with other auth mechanisms that
+	// require Source to be "$external" (e.g. MONGODB-AWS, MONGODB-OIDC, etc).
 	return &MongoDBX509Authenticator{User: cred.Username}, nil
 }
 
@@ -51,7 +55,7 @@ func createFirstX509Message() bsoncore.Document {
 
 // Finish implements the SpeculativeConversation interface and is a no-op because an X509 conversation only has one
 // step.
-func (c *x509Conversation) Finish(context.Context, *Config, bsoncore.Document) error {
+func (c *x509Conversation) Finish(context.Context, *driver.AuthConfig, bsoncore.Document) error {
 	return nil
 }
 
@@ -61,11 +65,11 @@ func (a *MongoDBX509Authenticator) CreateSpeculativeConversation() (SpeculativeC
 }
 
 // Auth authenticates the provided connection by conducting an X509 authentication conversation.
-func (a *MongoDBX509Authenticator) Auth(ctx context.Context, cfg *Config) error {
+func (a *MongoDBX509Authenticator) Auth(ctx context.Context, cfg *driver.AuthConfig) error {
 	requestDoc := createFirstX509Message()
 	authCmd := operation.
 		NewCommand(requestDoc).
-		Database("$external").
+		Database(sourceExternal).
 		Deployment(driver.SingleConnectionDeployment{cfg.Connection}).
 		ClusterClock(cfg.ClusterClock).
 		ServerAPI(cfg.ServerAPI)
@@ -75,4 +79,9 @@ func (a *MongoDBX509Authenticator) Auth(ctx context.Context, cfg *Config) error 
 	}
 
 	return nil
+}
+
+// Reauth reauthenticates the connection.
+func (a *MongoDBX509Authenticator) Reauth(_ context.Context, _ *driver.AuthConfig) error {
+	return newAuthError("X509 does not support reauthentication", nil)
 }

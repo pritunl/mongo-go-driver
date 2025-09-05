@@ -6,11 +6,9 @@
 
 package auth
 
-// Cred is a user's credential.
-type Cred struct {
-	Source      string
-	Username    string
-	Password    string
-	PasswordSet bool
-	Props       map[string]string
-}
+import (
+	"github.com/pritunl/mongo-go-driver/v2/x/mongo/driver"
+)
+
+// Cred is the type of user credential
+type Cred = driver.Cred

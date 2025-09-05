@@ -10,8 +10,8 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/pritunl/mongo-go-driver/internal/israce"
-	"github.com/pritunl/mongo-go-driver/internal/require"
+	"github.com/pritunl/mongo-go-driver/v2/internal/israce"
+	"github.com/pritunl/mongo-go-driver/v2/internal/require"
 )
 
 // GODRIVER-2349

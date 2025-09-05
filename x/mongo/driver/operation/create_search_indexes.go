@@ -12,28 +12,29 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/pritunl/mongo-go-driver/bson"
-	"github.com/pritunl/mongo-go-driver/event"
-	"github.com/pritunl/mongo-go-driver/mongo/description"
-	"github.com/pritunl/mongo-go-driver/x/bsonx/bsoncore"
-	"github.com/pritunl/mongo-go-driver/x/mongo/driver"
-	"github.com/pritunl/mongo-go-driver/x/mongo/driver/session"
+	"github.com/pritunl/mongo-go-driver/v2/bson"
+	"github.com/pritunl/mongo-go-driver/v2/event"
+	"github.com/pritunl/mongo-go-driver/v2/x/bsonx/bsoncore"
+	"github.com/pritunl/mongo-go-driver/v2/x/mongo/driver"
+	"github.com/pritunl/mongo-go-driver/v2/x/mongo/driver/description"
+	"github.com/pritunl/mongo-go-driver/v2/x/mongo/driver/session"
 )
 
 // CreateSearchIndexes performs a createSearchIndexes operation.
 type CreateSearchIndexes struct {
-	indexes    bsoncore.Document
-	session    *session.Client
-	clock      *session.ClusterClock
-	collection string
-	monitor    *event.CommandMonitor
-	crypt      driver.Crypt
-	database   string
-	deployment driver.Deployment
-	selector   description.ServerSelector
-	result     CreateSearchIndexesResult
-	serverAPI  *driver.ServerAPIOptions
-	timeout    *time.Duration
+	authenticator driver.Authenticator
+	indexes       bsoncore.Document
+	session       *session.Client
+	clock         *session.ClusterClock
+	collection    string
+	monitor       *event.CommandMonitor
+	crypt         driver.Crypt
+	database      string
+	deployment    driver.Deployment
+	selector      description.ServerSelector
+	result        CreateSearchIndexesResult
+	serverAPI     *driver.ServerAPIOptions
+	timeout       *time.Duration
 }
 
 // CreateSearchIndexResult represents a single search index result in CreateSearchIndexesResult.
@@ -92,9 +93,9 @@ func NewCreateSearchIndexes(indexes bsoncore.Document) *CreateSearchIndexes {
 // Result returns the result of executing this operation.
 func (csi *CreateSearchIndexes) Result() CreateSearchIndexesResult { return csi.result }
 
-func (csi *CreateSearchIndexes) processResponse(info driver.ResponseInfo) error {
+func (csi *CreateSearchIndexes) processResponse(_ context.Context, resp bsoncore.Document, _ driver.ResponseInfo) error {
 	var err error
-	csi.result, err = buildCreateSearchIndexesResult(info.ServerResponse)
+	csi.result, err = buildCreateSearchIndexesResult(resp)
 	return err
 }
 
@@ -116,6 +117,7 @@ func (csi *CreateSearchIndexes) Execute(ctx context.Context) error {
 		Selector:          csi.selector,
 		ServerAPI:         csi.serverAPI,
 		Timeout:           csi.timeout,
+		Authenticator:     csi.authenticator,
 	}.Execute(ctx)
 
 }
@@ -235,5 +237,15 @@ func (csi *CreateSearchIndexes) Timeout(timeout *time.Duration) *CreateSearchInd
 	}
 
 	csi.timeout = timeout
+	return csi
+}
+
+// Authenticator sets the authenticator to use for this operation.
+func (csi *CreateSearchIndexes) Authenticator(authenticator driver.Authenticator) *CreateSearchIndexes {
+	if csi == nil {
+		csi = new(CreateSearchIndexes)
+	}
+
+	csi.authenticator = authenticator
 	return csi
 }

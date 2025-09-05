@@ -13,8 +13,8 @@ import (
 	"io"
 	"reflect"
 
-	"github.com/pritunl/mongo-go-driver/bson"
-	"github.com/pritunl/mongo-go-driver/x/bsonx/bsoncore"
+	"github.com/pritunl/mongo-go-driver/v2/bson"
+	"github.com/pritunl/mongo-go-driver/v2/x/bsonx/bsoncore"
 )
 
 var ErrNilValue = errors.New("value is nil")
@@ -22,22 +22,24 @@ var ErrNilValue = errors.New("value is nil")
 // MarshalError is returned when attempting to transform a value into a document
 // results in an error.
 type MarshalError struct {
-	Value interface{}
+	Value any
 	Err   error
 }
 
 // Error implements the error interface.
 func (e MarshalError) Error() string {
-	return fmt.Sprintf("cannot transform type %s to a BSON Document: %v",
+	return fmt.Sprintf("cannot marshal type %q to a BSON Document: %v",
 		reflect.TypeOf(e.Value), e.Err)
 }
 
+func (e MarshalError) Unwrap() error { return e.Err }
+
 // EncoderFn is used to functionally construct an encoder for marshaling values.
-type EncoderFn func(io.Writer) (*bson.Encoder, error)
+type EncoderFn func(io.Writer) *bson.Encoder
 
 // MarshalValue will attempt to encode the value with the encoder returned by
 // the encoder function.
-func MarshalValue(val interface{}, encFn EncoderFn) (bsoncore.Value, error) {
+func MarshalValue(val any, encFn EncoderFn) (bsoncore.Value, error) {
 	// If the val is already a bsoncore.Value, then do nothing.
 	if bval, ok := val.(bsoncore.Value); ok {
 		return bval, nil
@@ -49,14 +51,11 @@ func MarshalValue(val interface{}, encFn EncoderFn) (bsoncore.Value, error) {
 
 	buf := new(bytes.Buffer)
 
-	enc, err := encFn(buf)
-	if err != nil {
-		return bsoncore.Value{}, err
-	}
+	enc := encFn(buf)
 
 	// Encode the value in a single-element document with an empty key. Use
 	// bsoncore to extract the first element and return the BSON value.
-	err = enc.Encode(bson.D{{Key: "", Value: val}})
+	err := enc.Encode(bson.D{{Key: "", Value: val}})
 	if err != nil {
 		return bsoncore.Value{}, MarshalError{Value: val, Err: err}
 	}

@@ -18,20 +18,22 @@ import (
 	"time"
 
 	"github.com/google/go-cmp/cmp"
-	"github.com/pritunl/mongo-go-driver/internal/assert"
-	"github.com/pritunl/mongo-go-driver/mongo/address"
-	"github.com/pritunl/mongo-go-driver/mongo/description"
-	"github.com/pritunl/mongo-go-driver/x/mongo/driver"
-	"github.com/pritunl/mongo-go-driver/x/mongo/driver/wiremessage"
+	"github.com/pritunl/mongo-go-driver/v2/internal/assert"
+	"github.com/pritunl/mongo-go-driver/v2/internal/require"
+	"github.com/pritunl/mongo-go-driver/v2/mongo/address"
+	"github.com/pritunl/mongo-go-driver/v2/x/mongo/driver"
+	"github.com/pritunl/mongo-go-driver/v2/x/mongo/driver/description"
+	"github.com/pritunl/mongo-go-driver/v2/x/mongo/driver/mnet"
+	"github.com/pritunl/mongo-go-driver/v2/x/mongo/driver/wiremessage"
 )
 
 type testHandshaker struct {
-	getHandshakeInformation func(context.Context, address.Address, driver.Connection) (driver.HandshakeInformation, error)
-	finishHandshake         func(context.Context, driver.Connection) error
+	getHandshakeInformation func(context.Context, address.Address, *mnet.Connection) (driver.HandshakeInformation, error)
+	finishHandshake         func(context.Context, *mnet.Connection) error
 }
 
 // GetHandshakeInformation implements the Handshaker interface.
-func (th *testHandshaker) GetHandshakeInformation(ctx context.Context, addr address.Address, conn driver.Connection) (driver.HandshakeInformation, error) {
+func (th *testHandshaker) GetHandshakeInformation(ctx context.Context, addr address.Address, conn *mnet.Connection) (driver.HandshakeInformation, error) {
 	if th.getHandshakeInformation != nil {
 		return th.getHandshakeInformation(ctx, addr, conn)
 	}
@@ -39,7 +41,7 @@ func (th *testHandshaker) GetHandshakeInformation(ctx context.Context, addr addr
 }
 
 // FinishHandshake implements the Handshaker interface.
-func (th *testHandshaker) FinishHandshake(ctx context.Context, conn driver.Connection) error {
+func (th *testHandshaker) FinishHandshake(ctx context.Context, conn *mnet.Connection) error {
 	if th.finishHandshake != nil {
 		return th.finishHandshake(ctx, conn)
 	}
@@ -61,8 +63,8 @@ func TestConnection(t *testing.T) {
 		t.Run("connect", func(t *testing.T) {
 			t.Run("dialer error", func(t *testing.T) {
 				err := errors.New("dialer error")
-				var want error = ConnectionError{Wrapped: err, init: true}
-				conn := newConnection(address.Address(""), WithDialer(func(Dialer) Dialer {
+				var want error = ConnectionError{Wrapped: err, init: true, message: "failed to connect to testaddr:27017"}
+				conn := newConnection(address.Address("testaddr"), WithDialer(func(Dialer) Dialer {
 					return DialerFunc(func(context.Context, string, string) (net.Conn, error) { return nil, err })
 				}))
 				got := conn.connect(context.Background())
@@ -78,7 +80,7 @@ func TestConnection(t *testing.T) {
 				conn := newConnection(address.Address(""),
 					WithHandshaker(func(Handshaker) Handshaker {
 						return &testHandshaker{
-							finishHandshake: func(context.Context, driver.Connection) error {
+							finishHandshake: func(context.Context, *mnet.Connection) error {
 								return err
 							},
 						}
@@ -117,7 +119,6 @@ func TestConnection(t *testing.T) {
 
 					err := conn.connect(context.Background())
 					assert.Nil(t, err, "error establishing connection: %v", err)
-					assert.Nil(t, conn.cancelConnectContext, "cancellation function was not cleared")
 				})
 				t.Run("connect cancelled", func(t *testing.T) {
 					// In the case where connection establishment is cancelled, the closeConnectContext function
@@ -139,18 +140,21 @@ func TestConnection(t *testing.T) {
 					)
 
 					// Call connect in a goroutine because it will block.
-					var wg sync.WaitGroup
-					wg.Add(1)
+					var done atomic.Value
 					go func() {
-						defer wg.Done()
+						defer done.Store(true)
 						_ = conn.connect(context.Background())
 					}()
 
 					// Simulate cancelling connection establishment and assert that this clears the CancelFunc.
 					conn.closeConnectContext()
-					assert.Nil(t, conn.cancelConnectContext, "cancellation function was not cleared")
 					close(doneChan)
-					wg.Wait()
+
+					assert.Eventually(t,
+						func() bool { return done.Load() != nil && done.Load().(bool) },
+						100*time.Millisecond,
+						1*time.Millisecond,
+						"TODO")
 				})
 			})
 			t.Run("tls", func(t *testing.T) {
@@ -202,154 +206,6 @@ func TestConnection(t *testing.T) {
 					}
 				})
 			})
-			t.Run("connectTimeout is applied correctly", func(t *testing.T) {
-				testCases := []struct {
-					name           string
-					contextTimeout time.Duration
-					connectTimeout time.Duration
-					maxConnectTime time.Duration
-				}{
-					// The timeout to dial a connection should be min(context timeout, connectTimeoutMS), so 1ms for
-					// both of the tests declared below. Both tests also specify a 50ms max connect time to provide
-					// a large buffer for lag and avoid test flakiness.
-
-					{"context timeout is lower", 1 * time.Millisecond, 100 * time.Millisecond, 50 * time.Millisecond},
-					{"connect timeout is lower", 100 * time.Millisecond, 1 * time.Millisecond, 50 * time.Millisecond},
-				}
-
-				for _, tc := range testCases {
-					t.Run("timeout applied to socket establishment: "+tc.name, func(t *testing.T) {
-						// Ensure the initial connection dial can be timed out and the connection propagates the error
-						// from the dialer in this case.
-
-						connOpts := []ConnectionOption{
-							WithDialer(func(Dialer) Dialer {
-								return DialerFunc(func(ctx context.Context, _, _ string) (net.Conn, error) {
-									<-ctx.Done()
-									return nil, ctx.Err()
-								})
-							}),
-							WithConnectTimeout(func(time.Duration) time.Duration {
-								return tc.connectTimeout
-							}),
-						}
-						conn := newConnection("", connOpts...)
-
-						var connectErr error
-						callback := func() bool {
-							connectCtx, cancel := context.WithTimeout(context.Background(), tc.contextTimeout)
-							defer cancel()
-
-							connectErr = conn.connect(connectCtx)
-							return true
-						}
-						assert.Eventually(t,
-							callback,
-							tc.maxConnectTime,
-							time.Millisecond,
-							"expected timeout to apply to socket establishment after maximum connect time")
-
-						ce, ok := connectErr.(ConnectionError)
-						assert.True(t, ok, "expected error %v to be of type %T", connectErr, ConnectionError{})
-						assert.Equal(t, context.DeadlineExceeded, ce.Unwrap(), "expected wrapped error to be %v, got %v",
-							context.DeadlineExceeded, ce.Unwrap())
-					})
-					t.Run("timeout applied to TLS handshake: "+tc.name, func(t *testing.T) {
-						// Ensure the TLS handshake can be timed out and the connection propagates the error from the
-						// tlsConn in this case.
-
-						// Start a TCP listener on a random port and use the listener address as the
-						// target for connections. The listener will act as a source of connections
-						// that never respond, allowing the timeout logic to always trigger.
-						l, err := net.Listen("tcp", "localhost:0")
-						assert.Nil(t, err, "net.Listen() error: %q", err)
-						defer l.Close()
-
-						connOpts := []ConnectionOption{
-							WithConnectTimeout(func(time.Duration) time.Duration {
-								return tc.connectTimeout
-							}),
-							WithTLSConfig(func(*tls.Config) *tls.Config {
-								return &tls.Config{ServerName: "test"}
-							}),
-						}
-						conn := newConnection(address.Address(l.Addr().String()), connOpts...)
-
-						var connectErr error
-						callback := func() bool {
-							connectCtx, cancel := context.WithTimeout(context.Background(), tc.contextTimeout)
-							defer cancel()
-
-							connectErr = conn.connect(connectCtx)
-							return true
-						}
-						assert.Eventually(t,
-							callback,
-							tc.maxConnectTime,
-							time.Millisecond,
-							"expected timeout to apply to TLS handshake after maximum connect time")
-
-						ce, ok := connectErr.(ConnectionError)
-						assert.True(t, ok, "expected error %v to be of type %T", connectErr, ConnectionError{})
-
-						isTimeout := func(err error) bool {
-							if errors.Is(err, context.DeadlineExceeded) {
-								return true
-							}
-							if ne, ok := err.(net.Error); ok {
-								return ne.Timeout()
-							}
-							return false
-						}
-						assert.True(t,
-							isTimeout(ce.Unwrap()),
-							"expected wrapped error to be a timeout error, but got %q",
-							ce.Unwrap())
-					})
-					t.Run("timeout is not applied to handshaker: "+tc.name, func(t *testing.T) {
-						// Ensure that no additional timeout is applied to the handshake after the connection has been
-						// established.
-
-						var getInfoCtx, finishCtx context.Context
-						handshaker := &testHandshaker{
-							getHandshakeInformation: func(ctx context.Context, _ address.Address, _ driver.Connection) (driver.HandshakeInformation, error) {
-								getInfoCtx = ctx
-								return driver.HandshakeInformation{}, nil
-							},
-							finishHandshake: func(ctx context.Context, _ driver.Connection) error {
-								finishCtx = ctx
-								return nil
-							},
-						}
-
-						connOpts := []ConnectionOption{
-							WithConnectTimeout(func(time.Duration) time.Duration {
-								return tc.connectTimeout
-							}),
-							WithDialer(func(Dialer) Dialer {
-								return DialerFunc(func(context.Context, string, string) (net.Conn, error) {
-									return &net.TCPConn{}, nil
-								})
-							}),
-							WithHandshaker(func(Handshaker) Handshaker {
-								return handshaker
-							}),
-						}
-						conn := newConnection("", connOpts...)
-
-						err := conn.connect(context.Background())
-						assert.Nil(t, err, "connect error: %v", err)
-
-						assertNoContextTimeout := func(t *testing.T, ctx context.Context) {
-							t.Helper()
-							dl, ok := ctx.Deadline()
-							assert.False(t, ok, "expected context to have no deadline, but got deadline %v", dl)
-						}
-						assertNoContextTimeout(t, getInfoCtx)
-						assertNoContextTimeout(t, finishCtx)
-					})
-				}
-			})
 		})
 		t.Run("writeWireMessage", func(t *testing.T) {
 			t.Run("closed connection", func(t *testing.T) {
@@ -364,14 +220,10 @@ func TestConnection(t *testing.T) {
 				testCases := []struct {
 					name        string
 					ctxDeadline time.Duration
-					timeout     time.Duration
 					deadline    time.Time
 				}{
-					{"no deadline", 0, 0, time.Now().Add(1 * time.Second)},
-					{"ctx deadline", 5 * time.Second, 0, time.Now().Add(6 * time.Second)},
-					{"timeout", 0, 10 * time.Second, time.Now().Add(11 * time.Second)},
-					{"both (ctx wins)", 15 * time.Second, 20 * time.Second, time.Now().Add(16 * time.Second)},
-					{"both (timeout wins)", 30 * time.Second, 25 * time.Second, time.Now().Add(26 * time.Second)},
+					{"no deadline", 0, time.Now().Add(1 * time.Second)},
+					{"ctx deadline", 5 * time.Second, time.Now().Add(6 * time.Second)},
 				}
 
 				for _, tc := range testCases {
@@ -388,7 +240,7 @@ func TestConnection(t *testing.T) {
 							message:      "failed to set write deadline",
 						}
 						tnc := &testNetConn{deadlineerr: errors.New("set writeDeadline error")}
-						conn := &connection{id: "foobar", nc: tnc, writeTimeout: tc.timeout, state: connConnected}
+						conn := &connection{id: "foobar", nc: tnc, state: connConnected}
 						got := conn.writeWireMessage(ctx, []byte{})
 						if !cmp.Equal(got, want, cmp.Comparer(compareErrors)) {
 							t.Errorf("errors do not match. got %v; want %v", got, want)
@@ -427,7 +279,7 @@ func TestConnection(t *testing.T) {
 
 					want := []byte{0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0A}
 					err := conn.writeWireMessage(context.Background(), want)
-					noerr(t, err)
+					require.NoError(t, err)
 					got := tnc.buf
 					if !cmp.Equal(got, want) {
 						t.Errorf("writeWireMessage did not write the proper bytes. got %v; want %v", got, want)
@@ -493,14 +345,10 @@ func TestConnection(t *testing.T) {
 				testCases := []struct {
 					name        string
 					ctxDeadline time.Duration
-					timeout     time.Duration
 					deadline    time.Time
 				}{
-					{"no deadline", 0, 0, time.Now().Add(1 * time.Second)},
-					{"ctx deadline", 5 * time.Second, 0, time.Now().Add(6 * time.Second)},
-					{"timeout", 0, 10 * time.Second, time.Now().Add(11 * time.Second)},
-					{"both (ctx wins)", 15 * time.Second, 20 * time.Second, time.Now().Add(16 * time.Second)},
-					{"both (timeout wins)", 30 * time.Second, 25 * time.Second, time.Now().Add(26 * time.Second)},
+					{"no deadline", 0, time.Now().Add(1 * time.Second)},
+					{"ctx deadline", 5 * time.Second, time.Now().Add(6 * time.Second)},
 				}
 
 				for _, tc := range testCases {
@@ -517,7 +365,7 @@ func TestConnection(t *testing.T) {
 							message:      "failed to set read deadline",
 						}
 						tnc := &testNetConn{deadlineerr: errors.New("set readDeadline error")}
-						conn := &connection{id: "foobar", nc: tnc, readTimeout: tc.timeout, state: connConnected}
+						conn := &connection{id: "foobar", nc: tnc, state: connConnected}
 						_, got := conn.readWireMessage(ctx)
 						if !cmp.Equal(got, want, cmp.Comparer(compareErrors)) {
 							t.Errorf("errors do not match. got %v; want %v", got, want)
@@ -537,6 +385,23 @@ func TestConnection(t *testing.T) {
 					conn.cancellationListener = listener
 
 					want := ConnectionError{ConnectionID: "foobar", Wrapped: err, message: "incomplete read of message header"}
+					_, got := conn.readWireMessage(context.Background())
+					if !cmp.Equal(got, want, cmp.Comparer(compareErrors)) {
+						t.Errorf("errors do not match. got %v; want %v", got, want)
+					}
+					if !tnc.closed {
+						t.Errorf("failed to closeConnection net.Conn after error writing bytes.")
+					}
+					listener.assertCalledOnce(t)
+				})
+				t.Run("size too small errors", func(t *testing.T) {
+					err := errors.New("malformed message length: 3")
+					tnc := &testNetConn{readerr: err, buf: []byte{0x03, 0x00, 0x00, 0x00}}
+					conn := &connection{id: "foobar", nc: tnc, state: connConnected}
+					listener := newTestCancellationListener(false)
+					conn.cancellationListener = listener
+
+					want := ConnectionError{ConnectionID: "foobar", Wrapped: err, message: err.Error()}
 					_, got := conn.readWireMessage(context.Background())
 					if !cmp.Equal(got, want, cmp.Comparer(compareErrors)) {
 						t.Errorf("errors do not match. got %v; want %v", got, want)
@@ -607,7 +472,7 @@ func TestConnection(t *testing.T) {
 					conn.cancellationListener = listener
 
 					got, err := conn.readWireMessage(context.Background())
-					noerr(t, err)
+					require.NoError(t, err)
 					if !cmp.Equal(got, want) {
 						t.Errorf("did not read full wire message. got %v; want %v", got, want)
 					}
@@ -677,7 +542,7 @@ func TestConnection(t *testing.T) {
 				conn := newConnection(address.Address(""),
 					WithHandshaker(func(Handshaker) Handshaker {
 						return &testHandshaker{
-							finishHandshake: func(context.Context, driver.Connection) error {
+							finishHandshake: func(context.Context, *mnet.Connection) error {
 								return errors.New("handshake err")
 							},
 						}
@@ -719,14 +584,14 @@ func TestConnection(t *testing.T) {
 				}
 			}()
 
-			var want, got interface{}
+			var want, got any
 
 			want = ErrConnectionClosed
-			got = conn.WriteWireMessage(context.Background(), nil)
+			got = conn.Write(context.Background(), nil)
 			if !cmp.Equal(got, want, cmp.Comparer(compareErrors)) {
 				t.Errorf("errors do not match. got %v; want %v", got, want)
 			}
-			_, got = conn.ReadWireMessage(context.Background())
+			_, got = conn.Read(context.Background())
 			if !cmp.Equal(got, want, cmp.Comparer(compareErrors)) {
 				t.Errorf("errors do not match. got %v; want %v", got, want)
 			}
@@ -783,9 +648,10 @@ func TestConnection(t *testing.T) {
 			makeMultipleConnections := func(t *testing.T, numConns int) (*pool, []*Connection, func()) {
 				t.Helper()
 
-				addr := bootstrapConnections(t, numConns, func(nc net.Conn) {})
+				addr := bootstrapConnections(t, numConns, func(net.Conn) {})
 				pool := newPool(poolConfig{
-					Address: address.Address(addr.String()),
+					Address:        address.Address(addr.String()),
+					ConnectTimeout: defaultConnectionTimeout,
 				})
 				err := pool.ready()
 				assert.Nil(t, err, "pool.connect() error: %v", err)
@@ -1204,7 +1070,7 @@ func (d *dialer) lenclosed() int {
 }
 
 type testCancellationListener struct {
-	listener         *cancellListener
+	listener         *contextDoneListener
 	numListen        int
 	numStopListening int
 	aborted          bool
@@ -1214,7 +1080,7 @@ type testCancellationListener struct {
 // returned by the StopListening method.
 func newTestCancellationListener(aborted bool) *testCancellationListener {
 	return &testCancellationListener{
-		listener: newCancellListener(),
+		listener: newContextDoneListener(),
 		aborted:  aborted,
 	}
 }
@@ -1233,4 +1099,65 @@ func (tcl *testCancellationListener) StopListening() bool {
 func (tcl *testCancellationListener) assertCalledOnce(t *testing.T) {
 	assert.Equal(t, 1, tcl.numListen, "expected Listen to be called once, got %d", tcl.numListen)
 	assert.Equal(t, 1, tcl.numStopListening, "expected StopListening to be called once, got %d", tcl.numListen)
+}
+
+type testContext struct {
+	context.Context
+	deadline time.Time
+}
+
+func (tc *testContext) Deadline() (time.Time, bool) {
+	return tc.deadline, false
+}
+
+func TestConnectionError(t *testing.T) {
+	t.Parallel()
+
+	t.Run("EOF", func(t *testing.T) {
+		t.Parallel()
+
+		addr := bootstrapConnections(t, 1, func(nc net.Conn) {
+			_ = nc.Close()
+		})
+
+		p := newPool(
+			poolConfig{Address: address.Address(addr.String())},
+		)
+		defer p.close(context.Background())
+		err := p.ready()
+		require.NoError(t, err, "unexpected close error")
+
+		conn, err := p.checkOut(context.Background())
+		require.NoError(t, err, "unexpected checkOut error")
+
+		_, err = conn.readWireMessage(context.Background())
+		assert.ErrorContains(t, err, "connection closed unexpectedly by the other side: EOF")
+	})
+	t.Run("timeout", func(t *testing.T) {
+		t.Parallel()
+
+		timeout := 10 * time.Millisecond
+
+		addr := bootstrapConnections(t, 1, func(nc net.Conn) {
+			time.Sleep(timeout * 2)
+			_ = nc.Close()
+		})
+
+		p := newPool(
+			poolConfig{Address: address.Address(addr.String())},
+		)
+		defer p.close(context.Background())
+		err := p.ready()
+		require.NoError(t, err)
+
+		conn, err := p.checkOut(context.Background())
+		require.NoError(t, err)
+
+		ctx := &testContext{
+			Context:  context.Background(),
+			deadline: time.Now().Add(timeout),
+		}
+		_, err = conn.readWireMessage(ctx)
+		assert.ErrorContains(t, err, "client timed out waiting for server response")
+	})
 }

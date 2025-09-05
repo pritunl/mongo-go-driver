@@ -10,7 +10,7 @@ import (
 	"encoding/hex"
 	"io"
 
-	"github.com/pritunl/mongo-go-driver/internal/randutil"
+	"github.com/pritunl/mongo-go-driver/v2/internal/randutil"
 )
 
 // UUID represents a UUID.

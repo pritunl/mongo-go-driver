@@ -9,7 +9,7 @@ package randutil
 import (
 	"testing"
 
-	"github.com/pritunl/mongo-go-driver/internal/require"
+	"github.com/pritunl/mongo-go-driver/v2/internal/require"
 )
 
 func TestCryptoSeed(t *testing.T) {
